@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/cybergodev/dd/internal/caller"
+	"github.com/cybergodev/dd/internal"
 )
 
 // ===== Direct Output Functions (no return value) =====
@@ -16,27 +16,24 @@ import (
 // This is equivalent to fmt.Printf but uses dd's Text formatting for consistency.
 func Printf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Print formats using the default formats for its operands and writes to standard output.
 // Spaces are added between operands when neither is a string.
-// It returns the number of bytes written and any write error encountered.
-// This maintains consistency with dd.Text method behavior but without newline.
+// It returns the number of bytes written.
 func Print(args ...any) int {
 	n, err := fmt.Fprint(os.Stdout, args...)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, "dd.Print error:", err)
 	}
 	return n
 }
 
 // Println formats using the default formats for its operands and writes to standard output.
 // Spaces are always added between operands and a newline is appended.
-// It returns the number of bytes written and any write error encountered.
-// This maintains consistency with dd.Text method behavior.
 func Println(args ...any) {
-	outputText(caller.GetCaller(DebugVisualizationDepth, false), args...)
+	outputText(internal.GetCaller(DebugVisualizationDepth, false), args...)
 }
 
 // ===== String Return Functions (no output) =====
@@ -61,33 +58,42 @@ func Sprintln(args ...any) string {
 // ===== Writer Output Functions =====
 
 // Fprintf formats according to a format specifier and writes to w.
-// It returns the number of bytes written and any write error encountered.
+// It returns the number of bytes written.
 func Fprintf(w io.Writer, format string, args ...any) int {
+	if w == nil {
+		return 0
+	}
 	n, err := fmt.Fprintf(w, format, args...)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, "dd.Fprintf error:", err)
 	}
 	return n
 }
 
 // Fprint formats using the default formats for its operands and writes to w.
 // Spaces are added between operands when neither is a string.
-// It returns the number of bytes written and any write error encountered.
+// It returns the number of bytes written.
 func Fprint(w io.Writer, args ...any) int {
+	if w == nil {
+		return 0
+	}
 	n, err := fmt.Fprint(w, args...)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, "dd.Fprint error:", err)
 	}
 	return n
 }
 
 // Fprintln formats using the default formats for its operands and writes to w.
 // Spaces are always added between operands and a newline is appended.
-// It returns the number of bytes written and any write error encountered.
+// It returns the number of bytes written.
 func Fprintln(w io.Writer, args ...any) int {
+	if w == nil {
+		return 0
+	}
 	n, err := fmt.Fprintln(w, args...)
 	if err != nil {
-		fmt.Println(err)
+		fmt.Fprintln(os.Stderr, "dd.Fprintln error:", err)
 	}
 	return n
 }
@@ -95,35 +101,32 @@ func Fprintln(w io.Writer, args ...any) int {
 // ===== Input Scanning Functions =====
 
 // Scan scans text read from standard input, storing successive space-separated
-// values into successive arguments. Newlines count as space. It returns the
-// number of items successfully scanned. If that is less than the number of
-// arguments, err will report why.
+// values into successive arguments. Newlines count as space.
+// It returns the number of items successfully scanned.
 func Scan(a ...any) int {
 	n, err := fmt.Scan(a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Scan error:", err)
 	}
 	return n
 }
 
 // Scanf scans text read from standard input, storing successive space-separated
-// values into successive arguments as determined by the format. It returns the
-// number of items successfully scanned. If that is less than the number of
-// arguments, err will report why.
+// values into successive arguments as determined by the format.
+// It returns the number of items successfully scanned.
 func Scanf(format string, a ...any) int {
 	n, err := fmt.Scanf(format, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Scanf error:", err)
 	}
 	return n
 }
 
-// Scanln is similar to Scan, but stops scanning at a newline and after the final
-// item there must be a newline or EOF.
+// Scanln is similar to Scan, but stops scanning at a newline.
 func Scanln(a ...any) int {
 	n, err := fmt.Scanln(a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Scanln error:", err)
 	}
 	return n
 }
@@ -131,35 +134,40 @@ func Scanln(a ...any) int {
 // ===== Reader Input Functions =====
 
 // Fscan scans text read from r, storing successive space-separated values into
-// successive arguments. Newlines count as space. It returns the number of items
-// successfully scanned. If that is less than the number of arguments, err will
-// report why.
+// successive arguments. It returns the number of items successfully scanned.
 func Fscan(r io.Reader, a ...any) int {
+	if r == nil {
+		return 0
+	}
 	n, err := fmt.Fscan(r, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Fscan error:", err)
 	}
 	return n
 }
 
 // Fscanf scans text read from r, storing successive space-separated values into
-// successive arguments as determined by the format. It returns the number of
-// items successfully scanned. If that is less than the number of arguments,
-// err will report why.
+// successive arguments as determined by the format.
+// It returns the number of items successfully scanned.
 func Fscanf(r io.Reader, format string, a ...any) int {
+	if r == nil {
+		return 0
+	}
 	n, err := fmt.Fscanf(r, format, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Fscanf error:", err)
 	}
 	return n
 }
 
-// Fscanln is similar to Fscan, but stops scanning at a newline and after the
-// final item there must be a newline or EOF.
+// Fscanln is similar to Fscan, but stops scanning at a newline.
 func Fscanln(r io.Reader, a ...any) int {
+	if r == nil {
+		return 0
+	}
 	n, err := fmt.Fscanln(r, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Fscanln error:", err)
 	}
 	return n
 }
@@ -167,47 +175,39 @@ func Fscanln(r io.Reader, a ...any) int {
 // ===== String Input Functions =====
 
 // Sscan scans the argument string, storing successive space-separated values
-// into successive arguments. Newlines count as space. It returns the number
-// of items successfully scanned. If that is less than the number of arguments,
-// err will report why.
+// into successive arguments. It returns the number of items successfully scanned.
 func Sscan(str string, a ...any) int {
 	n, err := fmt.Sscan(str, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Sscan error:", err)
 	}
 	return n
 }
 
 // Sscanf scans the argument string, storing successive space-separated values
-// into successive arguments as determined by the format. It returns the number
-// of items successfully scanned. If that is less than the number of arguments,
-// err will report why.
+// into successive arguments as determined by the format.
+// It returns the number of items successfully scanned.
 func Sscanf(str string, format string, a ...any) int {
 	n, err := fmt.Sscanf(str, format, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Sscanf error:", err)
 	}
 	return n
 }
 
-// Sscanln is similar to Sscan, but stops scanning at a newline and after the
-// final item there must be a newline or EOF.
+// Sscanln is similar to Sscan, but stops scanning at a newline.
 func Sscanln(str string, a ...any) int {
 	n, err := fmt.Sscanln(str, a...)
-	if err != nil {
-		fmt.Println(err)
+	if err != nil && err != io.EOF {
+		fmt.Fprintln(os.Stderr, "dd.Sscanln error:", err)
 	}
 	return n
 }
 
 // ===== Error Formatting Function =====
 
-// NewError formats according to a format specifier and returns the string as a
-// value that satisfies error. If the format specifier includes a %w verb with
-// an error operand, the returned error will implement an Unwrap method
-// returning the operand. It is invalid to include more than one %w verb or to
-// supply it with an operand that does not implement the error interface. The
-// %w verb is otherwise a synonym for %v.
+// NewError formats according to a format specifier and returns the string as an error.
+// Supports %w verb for error wrapping (implements Unwrap method).
 // This is equivalent to fmt.Errorf but with a different name to avoid conflict
 // with the existing logging Errorf function.
 func NewError(format string, args ...any) error {

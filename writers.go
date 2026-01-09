@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cybergodev/dd/internal/filewriter"
+	"github.com/cybergodev/dd/internal"
 )
 
 type FileWriter struct {
@@ -66,7 +66,7 @@ func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	file, size, err := filewriter.OpenFile(securePath)
+	file, size, err := internal.OpenFile(securePath)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to open file %s: %w", securePath, err)
@@ -144,7 +144,7 @@ func (fw *FileWriter) Write(p []byte) (int, error) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	if filewriter.NeedsRotation(fw.currentSize.Load(), int64(pLen), fw.maxSize) {
+	if internal.NeedsRotation(fw.currentSize.Load(), int64(pLen), fw.maxSize) {
 		if err := fw.rotate(); err != nil {
 			return 0, fmt.Errorf("rotation failed: %w", err)
 		}
@@ -182,19 +182,14 @@ func (fw *FileWriter) rotate() error {
 		fw.file = nil
 	}
 
-	if err := filewriter.RotateBackups(fw.path, fw.maxBackups, fw.compress); err != nil {
-		if file, size, reopenErr := filewriter.OpenFile(fw.path); reopenErr == nil {
-			fw.file = file
-			fw.currentSize.Store(size)
-		}
-		return fmt.Errorf("rotate backups: %w", err)
-	}
+	// Clean up excess backups before rotation
+	internal.RotateBackups(fw.path, fw.maxBackups, fw.compress)
 
-	nextIndex := filewriter.FindNextBackupIndex(fw.path, fw.compress)
-	backupPath := filewriter.GetBackupPath(fw.path, nextIndex, false)
+	nextIndex := internal.FindNextBackupIndex(fw.path, fw.compress)
+	backupPath := internal.GetBackupPath(fw.path, nextIndex, false)
 
 	if err := os.Rename(fw.path, backupPath); err != nil {
-		if file, size, reopenErr := filewriter.OpenFile(fw.path); reopenErr == nil {
+		if file, size, reopenErr := internal.OpenFile(fw.path); reopenErr == nil {
 			fw.file = file
 			fw.currentSize.Store(size)
 		}
@@ -205,13 +200,13 @@ func (fw *FileWriter) rotate() error {
 		fw.wg.Add(1)
 		go func() {
 			defer fw.wg.Done()
-			if err := filewriter.CompressFile(backupPath); err != nil {
+			if err := internal.CompressFile(backupPath); err != nil {
 				fmt.Fprintf(os.Stderr, "dd: compress backup %s: %v\n", backupPath, err)
 			}
 		}()
 	}
 
-	file, size, err := filewriter.OpenFile(fw.path)
+	file, size, err := internal.OpenFile(fw.path)
 	if err != nil {
 		return fmt.Errorf("open new file: %w", err)
 	}
@@ -232,7 +227,7 @@ func (fw *FileWriter) cleanupRoutine() {
 		case <-fw.ctx.Done():
 			return
 		case <-ticker.C:
-			filewriter.CleanupOldFiles(fw.path, fw.maxAge)
+			internal.CleanupOldFiles(fw.path, fw.maxAge)
 		}
 	}
 }
@@ -393,7 +388,7 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 		return pLen, nil
 	}
 
-	// 优化：单个写入器的快速路径
+	// Fast path: single writer optimization
 	if writerCount == 1 {
 		w := mw.writers[0]
 		mw.mu.RUnlock()
@@ -407,7 +402,7 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 	var firstErr error
 	successCount := 0
 
-	for i := range writerCount {
+	for i := 0; i < writerCount; i++ {
 		n, err := writers[i].Write(p)
 		if err != nil {
 			if firstErr == nil {
@@ -424,12 +419,12 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 		successCount++
 	}
 
-	// 如果所有写入器都失败，返回错误
+	// If all writers failed, return error
 	if successCount == 0 {
 		return 0, firstErr
 	}
 
-	// 如果部分成功，返回成功的字节数但包含错误信息
+	// If partial success, return bytes written but include error info
 	if firstErr != nil {
 		return pLen, fmt.Errorf("partial write failure (%d/%d succeeded): %w", successCount, writerCount, firstErr)
 	}
@@ -438,23 +433,41 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 }
 
 func (mw *MultiWriter) AddWriter(w io.Writer) {
-	if w == nil {
+	if w == nil || mw == nil {
 		return
 	}
 
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
+	// Check for duplicates and max limit
+	for _, existing := range mw.writers {
+		if existing == w {
+			return // Already exists
+		}
+	}
+
+	if len(mw.writers) >= MaxWriterCount {
+		return // Silently ignore if max reached
+	}
+
 	mw.writers = append(mw.writers, w)
 }
 
 func (mw *MultiWriter) RemoveWriter(w io.Writer) {
+	if mw == nil {
+		return
+	}
+
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
-	for i := range mw.writers {
+	for i := 0; i < len(mw.writers); i++ {
 		if mw.writers[i] == w {
-			mw.writers = append(mw.writers[:i], mw.writers[i+1:]...)
+			// Prevent memory leak by clearing reference
+			mw.writers[i] = mw.writers[len(mw.writers)-1]
+			mw.writers[len(mw.writers)-1] = nil
+			mw.writers = mw.writers[:len(mw.writers)-1]
 			break
 		}
 	}

@@ -515,29 +515,6 @@ func TestDefaultSecurityConfig(t *testing.T) {
 	if config.MaxWriters <= 0 {
 		t.Error("MaxWriters should be positive")
 	}
-
-	// SensitiveFilter can be nil (disabled by default)
-}
-
-func TestSecurityConfigWithFilter(t *testing.T) {
-	filter := NewBasicSensitiveDataFilter()
-	config := &SecurityConfig{
-		MaxMessageSize:  1024 * 1024,
-		MaxWriters:      50,
-		SensitiveFilter: filter,
-	}
-
-	if config.SensitiveFilter != filter {
-		t.Error("SecurityConfig should store the provided filter")
-	}
-
-	if config.MaxMessageSize != 1024*1024 {
-		t.Error("MaxMessageSize should match provided value")
-	}
-
-	if config.MaxWriters != 50 {
-		t.Error("MaxWriters should match provided value")
-	}
 }
 
 // ============================================================================

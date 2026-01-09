@@ -9,11 +9,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cybergodev/dd/internal/types"
+	"github.com/cybergodev/dd/internal"
 )
 
 var (
-	// Simplified message buffer pool - over-engineering removed
 	messagePool = sync.Pool{
 		New: func() any {
 			buf := make([]byte, 0, DefaultBufferSize)
@@ -23,15 +22,15 @@ var (
 )
 
 // LogLevel is an alias for the shared type
-type LogLevel = types.LogLevel
+type LogLevel = internal.LogLevel
 
 // Log level constants
 const (
-	LevelDebug = types.LevelDebug
-	LevelInfo  = types.LevelInfo
-	LevelWarn  = types.LevelWarn
-	LevelError = types.LevelError
-	LevelFatal = types.LevelFatal
+	LevelDebug = internal.LevelDebug
+	LevelInfo  = internal.LevelInfo
+	LevelWarn  = internal.LevelWarn
+	LevelError = internal.LevelError
+	LevelFatal = internal.LevelFatal
 )
 
 type FatalHandler func()
@@ -177,11 +176,13 @@ func (l *Logger) RemoveWriter(writer io.Writer) error {
 		return ErrLoggerClosed
 	}
 
-	for i, w := range l.writers {
-		if w == writer {
+	writerCount := len(l.writers)
+	for i := 0; i < writerCount; i++ {
+		if l.writers[i] == writer {
 			// Remove writer by swapping with last element and truncating
-			l.writers[i] = l.writers[len(l.writers)-1]
-			l.writers = l.writers[:len(l.writers)-1]
+			l.writers[i] = l.writers[writerCount-1]
+			l.writers[writerCount-1] = nil // Prevent memory leak
+			l.writers = l.writers[:writerCount-1]
 			return nil
 		}
 	}
@@ -326,38 +327,36 @@ func (l *Logger) applySecurity(message string) string {
 
 // sanitizeControlChars removes control characters from the message
 func sanitizeControlChars(message string) string {
-	if len(message) == 0 {
+	msgLen := len(message)
+	if msgLen == 0 {
 		return message
 	}
 
-	// Fast path: check if sanitization is needed
-	hasControlChars := false
-	for i := 0; i < len(message); i++ {
-		if isControlChar(message[i]) {
-			hasControlChars = true
+	// Fast path: check if sanitization is needed using range loop
+	needsSanitization := false
+	for i := 0; i < msgLen; i++ {
+		c := message[i]
+		if c == '\x00' || (c < 32 && c != '\n' && c != '\r' && c != '\t') || c == 127 {
+			needsSanitization = true
 			break
 		}
 	}
 
-	if !hasControlChars {
+	if !needsSanitization {
 		return message
 	}
 
-	// Slow path: remove control characters
-	result := make([]byte, 0, len(message))
-	for i := 0; i < len(message); i++ {
+	// Slow path: remove control characters with pre-allocated buffer
+	result := make([]byte, 0, msgLen)
+	for i := 0; i < msgLen; i++ {
 		c := message[i]
-		if !isControlChar(c) {
+		// Inline control char check for better performance
+		if c != '\x00' && (c >= 32 || c == '\n' || c == '\r' || c == '\t') && c != 127 {
 			result = append(result, c)
 		}
 	}
 
 	return string(result)
-}
-
-// isControlChar checks if a byte is a control character
-func isControlChar(c byte) bool {
-	return c == '\x00' || (c < 32 && c != '\n' && c != '\r' && c != '\t') || c == 127
 }
 
 // handleFatal handles fatal log messages

@@ -6,14 +6,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/cybergodev/dd/internal/types"
+	"github.com/cybergodev/dd/internal"
 )
 
 // JSONOptions is an alias for the shared type
-type JSONOptions = types.JSONOptions
+type JSONOptions = internal.JSONOptions
 
 // JSONFieldNames is an alias for the shared type
-type JSONFieldNames = types.JSONFieldNames
+type JSONFieldNames = internal.JSONFieldNames
 
 func DefaultJSONOptions() *JSONOptions {
 	return &JSONOptions{
@@ -50,16 +50,16 @@ type LoggerConfig struct {
 
 func DefaultConfig() *LoggerConfig {
 	return &LoggerConfig{
-		Level:          LevelInfo, // Production-friendly default
+		Level:          LevelInfo,
 		Format:         FormatText,
 		TimeFormat:     DefaultTimeFormat,
-		IncludeCaller:  false, // Performance-friendly default
+		IncludeCaller:  false,
 		IncludeTime:    true,
 		IncludeLevel:   true,
-		FullPath:       false, // Cleaner output
-		DynamicCaller:  false, // Performance-friendly default
+		FullPath:       false,
+		DynamicCaller:  false,
 		Writers:        nil,
-		SecurityConfig: DefaultSecurityConfig(), // Always include security config
+		SecurityConfig: DefaultSecurityConfig(),
 		FatalHandler:   nil,
 	}
 }
@@ -184,19 +184,39 @@ func (c *LoggerConfig) Validate() error {
 }
 
 func (c *LoggerConfig) WithFile(filename string, config FileWriterConfig) (*LoggerConfig, error) {
+	if c == nil {
+		return nil, ErrNilConfig
+	}
+	if filename == "" {
+		return c, ErrEmptyFilePath
+	}
+
 	fileWriter, err := NewFileWriter(filename, config)
 	if err != nil {
 		return c, fmt.Errorf("failed to create file writer: %w", err)
 	}
 
 	if c.Writers == nil {
-		c.Writers = []io.Writer{os.Stdout}
+		c.Writers = []io.Writer{}
 	}
+
+	// Check writer limit
+	if len(c.Writers) >= MaxWriterCount {
+		return c, ErrMaxWritersExceeded
+	}
+
 	c.Writers = append(c.Writers, fileWriter)
 	return c, nil
 }
 
 func (c *LoggerConfig) WithFileOnly(filename string, config FileWriterConfig) (*LoggerConfig, error) {
+	if c == nil {
+		return nil, ErrNilConfig
+	}
+	if filename == "" {
+		return c, ErrEmptyFilePath
+	}
+
 	fileWriter, err := NewFileWriter(filename, config)
 	if err != nil {
 		return c, fmt.Errorf("failed to create file writer: %w", err)
@@ -207,64 +227,110 @@ func (c *LoggerConfig) WithFileOnly(filename string, config FileWriterConfig) (*
 }
 
 func (c *LoggerConfig) WithWriter(writer io.Writer) *LoggerConfig {
-	if writer == nil {
+	if c == nil || writer == nil {
 		return c
 	}
 
 	if c.Writers == nil {
-		c.Writers = []io.Writer{os.Stdout}
+		c.Writers = []io.Writer{}
 	}
+
+	// Prevent duplicate writers and enforce max limit
+	if len(c.Writers) >= MaxWriterCount {
+		return c
+	}
+
 	c.Writers = append(c.Writers, writer)
 	return c
 }
 
 func (c *LoggerConfig) WithLevel(level LogLevel) *LoggerConfig {
-	c.Level = level
+	if c == nil {
+		return nil
+	}
+	if level >= LevelDebug && level <= LevelFatal {
+		c.Level = level
+	}
 	return c
 }
 
 func (c *LoggerConfig) WithFormat(format LogFormat) *LoggerConfig {
-	c.Format = format
+	if c == nil {
+		return nil
+	}
+	if format == FormatText || format == FormatJSON {
+		c.Format = format
+	}
 	return c
 }
 
 func (c *LoggerConfig) WithCaller(enabled bool) *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	c.IncludeCaller = enabled
 	return c
 }
 
 func (c *LoggerConfig) WithDynamicCaller(enabled bool) *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	c.DynamicCaller = enabled
 	return c
 }
 
 func (c *LoggerConfig) DisableFiltering() *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	if c.SecurityConfig == nil {
-		c.SecurityConfig = &SecurityConfig{}
+		c.SecurityConfig = &SecurityConfig{
+			MaxMessageSize: MaxMessageSize,
+			MaxWriters:     MaxWriterCount,
+		}
 	}
 	c.SecurityConfig.SensitiveFilter = nil
 	return c
 }
 
 func (c *LoggerConfig) EnableBasicFiltering() *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	if c.SecurityConfig == nil {
-		c.SecurityConfig = &SecurityConfig{}
+		c.SecurityConfig = &SecurityConfig{
+			MaxMessageSize: MaxMessageSize,
+			MaxWriters:     MaxWriterCount,
+		}
 	}
 	c.SecurityConfig.SensitiveFilter = NewBasicSensitiveDataFilter()
 	return c
 }
 
 func (c *LoggerConfig) EnableFullFiltering() *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	if c.SecurityConfig == nil {
-		c.SecurityConfig = &SecurityConfig{}
+		c.SecurityConfig = &SecurityConfig{
+			MaxMessageSize: MaxMessageSize,
+			MaxWriters:     MaxWriterCount,
+		}
 	}
 	c.SecurityConfig.SensitiveFilter = NewSensitiveDataFilter()
 	return c
 }
 
 func (c *LoggerConfig) WithFilter(filter *SensitiveDataFilter) *LoggerConfig {
+	if c == nil {
+		return nil
+	}
 	if c.SecurityConfig == nil {
-		c.SecurityConfig = &SecurityConfig{}
+		c.SecurityConfig = &SecurityConfig{
+			MaxMessageSize: MaxMessageSize,
+			MaxWriters:     MaxWriterCount,
+		}
 	}
 	c.SecurityConfig.SensitiveFilter = filter
 	return c

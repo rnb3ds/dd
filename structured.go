@@ -43,7 +43,6 @@ func Err(err error) Field {
 }
 
 var (
-	// Simplified field builder pool
 	fieldPool = sync.Pool{
 		New: func() any {
 			sb := &strings.Builder{}
@@ -66,14 +65,24 @@ func formatFields(fields []Field) string {
 	// Pre-allocate capacity to reduce reallocations
 	estimatedSize := fieldCount * EstimatedFieldSize
 	if sb.Cap() < estimatedSize {
-		sb.Grow(estimatedSize)
+		sb.Grow(estimatedSize - sb.Cap())
 	}
 
+	// Track if we've written any fields (for spacing)
+	written := false
+
 	// Optimized field formatting with type switch
-	for i, field := range fields {
-		if i > 0 {
+	for _, field := range fields {
+		// Skip empty keys
+		if field.Key == "" {
+			continue
+		}
+
+		if written {
 			sb.WriteByte(' ')
 		}
+		written = true
+
 		sb.WriteString(field.Key)
 		sb.WriteByte('=')
 
@@ -83,11 +92,13 @@ func formatFields(fields []Field) string {
 			if needsQuoting(v) {
 				sb.WriteByte('"')
 				// Simple escaping to avoid fmt.Fprintf overhead
-				for _, r := range v {
-					if r == '"' || r == '\\' {
+				vLen := len(v)
+				for j := 0; j < vLen; j++ {
+					c := v[j]
+					if c == '"' || c == '\\' {
 						sb.WriteByte('\\')
 					}
-					sb.WriteRune(r)
+					sb.WriteByte(c)
 				}
 				sb.WriteByte('"')
 			} else {

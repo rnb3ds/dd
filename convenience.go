@@ -28,7 +28,7 @@ type Options struct {
 func NewWithOptions(opts Options) (*Logger, error) {
 	// Validate and normalize options
 	if opts.Level < LevelDebug || opts.Level > LevelFatal {
-		opts.Level = LevelDebug
+		opts.Level = LevelInfo // Use production-friendly default
 	}
 	if opts.Format != FormatText && opts.Format != FormatJSON {
 		opts.Format = FormatText
@@ -37,7 +37,7 @@ func NewWithOptions(opts Options) (*Logger, error) {
 		opts.TimeFormat = DefaultTimeFormat
 	}
 
-	// Pre-allocate writers slice capacity
+	// Pre-allocate writers slice capacity with bounds checking
 	writerCap := 0
 	if opts.Console {
 		writerCap++
@@ -45,8 +45,14 @@ func NewWithOptions(opts Options) (*Logger, error) {
 	if opts.File != "" {
 		writerCap++
 	}
-	if len(opts.AdditionalWriters) > 0 {
-		writerCap += len(opts.AdditionalWriters)
+	additionalCount := len(opts.AdditionalWriters)
+	if additionalCount > 0 {
+		// Enforce max writer limit
+		if writerCap+additionalCount > MaxWriterCount {
+			return nil, fmt.Errorf("%w: requested %d writers (max %d)",
+				ErrMaxWritersExceeded, writerCap+additionalCount, MaxWriterCount)
+		}
+		writerCap += additionalCount
 	}
 	if writerCap == 0 {
 		writerCap = 1 // At least one default writer
@@ -78,9 +84,13 @@ func NewWithOptions(opts Options) (*Logger, error) {
 		config.Writers = append(config.Writers, fileWriter)
 	}
 
-	// Add additional writers
+	// Add additional writers with validation
 	if len(opts.AdditionalWriters) > 0 {
-		config.Writers = append(config.Writers, opts.AdditionalWriters...)
+		for _, w := range opts.AdditionalWriters {
+			if w != nil {
+				config.Writers = append(config.Writers, w)
+			}
+		}
 	}
 
 	// Ensure at least one writer
@@ -127,7 +137,7 @@ func getFilename(filename []string) string {
 }
 
 func fallbackLogger() *Logger {
-	// Create simplest fallback logger that always succeeds
+	// Create simplest fallback logger with minimal configuration
 	config := &LoggerConfig{
 		Level:          LevelInfo,
 		Format:         FormatText,
@@ -137,22 +147,15 @@ func fallbackLogger() *Logger {
 		IncludeLevel:   true,
 		FullPath:       false,
 		DynamicCaller:  false,
-		Writers:        []io.Writer{os.Stdout},
+		Writers:        []io.Writer{os.Stderr}, // Use stderr for fallback
 		SecurityConfig: DefaultSecurityConfig(),
 		FatalHandler:   nil,
 	}
 
 	logger, err := New(config)
 	if err != nil {
-		// If basic configuration fails, create a minimal logger
-		fallbackConfig := DefaultConfig()
-		fallbackConfig.Writers = []io.Writer{os.Stderr}
-		fallback, fallbackErr := New(fallbackConfig)
-		if fallbackErr != nil {
-			// Last resort: return nil and let caller handle
-			return nil
-		}
-		return fallback
+		// If even basic config fails, return nil - caller must handle
+		return nil
 	}
 	return logger
 }

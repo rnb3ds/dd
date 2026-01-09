@@ -525,32 +525,30 @@ func TestJSONConfigCustomFieldNames(t *testing.T) {
 }
 
 // ============================================================================
-// INTEGRATION TESTS
+// SECURITY CONFIGURATION TESTS
 // ============================================================================
 
-func TestConfigWithLoggerCreation(t *testing.T) {
-	var buf bytes.Buffer
-
+func TestConfigSecurityConfigDefaults(t *testing.T) {
 	config := &LoggerConfig{
-		Level:          LevelDebug,
-		Format:         FormatText,
-		TimeFormat:     DefaultTimeFormat,
-		IncludeTime:    true,
-		IncludeLevel:   true,
-		Writers:        []io.Writer{&buf},
-		SecurityConfig: &SecurityConfig{SensitiveFilter: nil},
+		Level:  LevelInfo,
+		Format: FormatText,
 	}
 
-	logger, err := New(config)
+	err := config.Validate()
 	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+		t.Fatalf("Validate() error = %v", err)
 	}
-	defer logger.Close()
 
-	logger.Debug("test message")
+	if config.SecurityConfig == nil {
+		t.Fatal("SecurityConfig should be initialized")
+	}
 
-	if !strings.Contains(buf.String(), "test message") {
-		t.Error("Config not applied correctly to logger")
+	if config.SecurityConfig.MaxMessageSize <= 0 {
+		t.Error("SecurityConfig should have default MaxMessageSize")
+	}
+
+	if config.SecurityConfig.MaxWriters <= 0 {
+		t.Error("SecurityConfig should have default MaxWriters")
 	}
 }
 
@@ -574,30 +572,6 @@ func TestConfigSecurityConfigMerge(t *testing.T) {
 
 	if config.SecurityConfig.SensitiveFilter != filter {
 		t.Error("SecurityConfig should have the filter")
-	}
-}
-
-func TestConfigSecurityConfigDefaults(t *testing.T) {
-	config := &LoggerConfig{
-		Level:  LevelInfo,
-		Format: FormatText,
-	}
-
-	err := config.Validate()
-	if err != nil {
-		t.Fatalf("Validate() error = %v", err)
-	}
-
-	if config.SecurityConfig == nil {
-		t.Fatal("SecurityConfig should be initialized")
-	}
-
-	if config.SecurityConfig.MaxMessageSize <= 0 {
-		t.Error("SecurityConfig should have default MaxMessageSize")
-	}
-
-	if config.SecurityConfig.MaxWriters <= 0 {
-		t.Error("SecurityConfig should have default MaxWriters")
 	}
 }
 

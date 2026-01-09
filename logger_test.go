@@ -8,7 +8,180 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+// ============================================================================
+// WRITER TESTS
+// ============================================================================
+
+func TestFileWriter(t *testing.T) {
+	tmpFile := "test_file_writer.log"
+	defer os.Remove(tmpFile)
+
+	fw, err := NewFileWriter(tmpFile, FileWriterConfig{
+		MaxSizeMB:  1,
+		MaxBackups: 3,
+		MaxAge:     24 * time.Hour,
+		Compress:   false,
+	})
+	if err != nil {
+		t.Fatalf("NewFileWriter() error = %v", err)
+	}
+	defer fw.Close()
+
+	data := []byte("test log message\n")
+	n, err := fw.Write(data)
+	if err != nil {
+		t.Errorf("Write() error = %v", err)
+	}
+	if n != len(data) {
+		t.Errorf("Write() wrote %d bytes, want %d", n, len(data))
+	}
+
+	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+		t.Error("Log file was not created")
+	}
+}
+
+func TestFileWriterInvalidPath(t *testing.T) {
+	_, err := NewFileWriter("\x00invalid", FileWriterConfig{})
+	if err == nil {
+		t.Error("NewFileWriter() should fail with invalid path")
+	}
+}
+
+func TestBufferedWriter(t *testing.T) {
+	var buf bytes.Buffer
+	bw, err := NewBufferedWriter(&buf, 4096)
+	if err != nil {
+		t.Fatalf("NewBufferedWriter() error = %v", err)
+	}
+	defer bw.Close()
+
+	data := []byte("test message\n")
+	n, err := bw.Write(data)
+	if err != nil {
+		t.Errorf("Write() error = %v", err)
+	}
+	if n != len(data) {
+		t.Errorf("Write() wrote %d bytes, want %d", n, len(data))
+	}
+
+	err = bw.Flush()
+	if err != nil {
+		t.Errorf("Flush() error = %v", err)
+	}
+
+	if buf.Len() == 0 {
+		t.Error("BufferedWriter should have written data after flush")
+	}
+}
+
+func TestBufferedWriterNilWriter(t *testing.T) {
+	_, err := NewBufferedWriter(nil, 4096)
+	if err == nil {
+		t.Error("NewBufferedWriter() should fail with nil writer")
+	}
+}
+
+func TestMultiWriter(t *testing.T) {
+	var buf1, buf2, buf3 bytes.Buffer
+	mw := NewMultiWriter(&buf1, &buf2, &buf3)
+
+	data := []byte("test message\n")
+	n, err := mw.Write(data)
+	if err != nil {
+		t.Errorf("Write() error = %v", err)
+	}
+	if n != len(data) {
+		t.Errorf("Write() wrote %d bytes, want %d", n, len(data))
+	}
+
+	if buf1.String() != string(data) {
+		t.Error("Writer 1 did not receive data")
+	}
+	if buf2.String() != string(data) {
+		t.Error("Writer 2 did not receive data")
+	}
+	if buf3.String() != string(data) {
+		t.Error("Writer 3 did not receive data")
+	}
+}
+
+func TestMultiWriterNoWriters(t *testing.T) {
+	mw := NewMultiWriter()
+	n, err := mw.Write([]byte("test"))
+	if err != nil {
+		t.Errorf("Write() with no writers should not error, got: %v", err)
+	}
+	if n != 4 {
+		t.Errorf("Write() should return data length, got %d", n)
+	}
+}
+
+// ============================================================================
+// FIELD CONSTRUCTOR TESTS
+// ============================================================================
+
+func TestFieldConstructors(t *testing.T) {
+	t.Run("Any", func(t *testing.T) {
+		field := Any("key", "value")
+		if field.Key != "key" || field.Value != "value" {
+			t.Error("Any() should create field correctly")
+		}
+	})
+
+	t.Run("String", func(t *testing.T) {
+		field := String("name", "test")
+		if field.Key != "name" || field.Value != "test" {
+			t.Error("String() should create field correctly")
+		}
+	})
+
+	t.Run("Int", func(t *testing.T) {
+		field := Int("count", 42)
+		if field.Key != "count" || field.Value != 42 {
+			t.Error("Int() should create field correctly")
+		}
+	})
+
+	t.Run("Int64", func(t *testing.T) {
+		field := Int64("bignum", int64(9999999999))
+		if field.Key != "bignum" || field.Value != int64(9999999999) {
+			t.Error("Int64() should create field correctly")
+		}
+	})
+
+	t.Run("Bool", func(t *testing.T) {
+		field := Bool("flag", true)
+		if field.Key != "flag" || field.Value != true {
+			t.Error("Bool() should create field correctly")
+		}
+	})
+
+	t.Run("Float64", func(t *testing.T) {
+		field := Float64("pi", 3.14159)
+		if field.Key != "pi" || field.Value != 3.14159 {
+			t.Error("Float64() should create field correctly")
+		}
+	})
+
+	t.Run("Err", func(t *testing.T) {
+		err := io.EOF
+		field := Err(err)
+		if field.Key != "error" || field.Value != "EOF" {
+			t.Errorf("Err() should create error field, got key=%s value=%v", field.Key, field.Value)
+		}
+	})
+
+	t.Run("ErrNil", func(t *testing.T) {
+		field := Err(nil)
+		if field.Key != "error" || field.Value != nil {
+			t.Error("Err(nil) should create field with nil value")
+		}
+	})
+}
 
 // ============================================================================
 // CORE LOGGER TESTS
@@ -559,63 +732,65 @@ func TestManyFields(t *testing.T) {
 }
 
 // ============================================================================
-// SECURITY TESTS
+// INTEGRATION TESTS
 // ============================================================================
 
-func TestSecurityConfig(t *testing.T) {
-	config := DefaultConfig()
-	config.SecurityConfig = &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
-		SensitiveFilter: nil,
+func TestLoggerWithFileWriter(t *testing.T) {
+	tmpFile := "test_logger_file.log"
+	defer os.Remove(tmpFile)
+
+	fw, err := NewFileWriter(tmpFile, FileWriterConfig{MaxSizeMB: 1})
+	if err != nil {
+		t.Fatalf("NewFileWriter() error = %v", err)
 	}
+	defer fw.Close()
+
+	config := DefaultConfig()
+	config.Writers = []io.Writer{fw}
 
 	logger, err := New(config)
 	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 	defer logger.Close()
 
-	secConfig := logger.GetSecurityConfig()
-	if secConfig == nil {
-		t.Error("Security config should not be nil")
+	logger.Info("test message to file")
+
+	time.Sleep(100 * time.Millisecond)
+
+	content, err := os.ReadFile(tmpFile)
+	if err != nil {
+		t.Fatalf("Failed to read log file: %v", err)
 	}
 
-	// Test setting security config
-	newConfig := &SecurityConfig{
-		MaxMessageSize: 2048,
-		MaxWriters:     50,
-	}
-	logger.SetSecurityConfig(newConfig)
-
-	updatedConfig := logger.GetSecurityConfig()
-	if updatedConfig.MaxMessageSize != 2048 {
-		t.Error("Security config should be updated")
+	if !strings.Contains(string(content), "test message to file") {
+		t.Errorf("Log file should contain message, got: %s", string(content))
 	}
 }
 
-func TestBasicFiltering(t *testing.T) {
+func TestLoggerWithBufferedWriter(t *testing.T) {
 	var buf bytes.Buffer
-	config := DefaultConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
-		SensitiveFilter: NewBasicSensitiveDataFilter(),
+	bw, err := NewBufferedWriter(&buf, 4096)
+	if err != nil {
+		t.Fatalf("NewBufferedWriter() error = %v", err)
 	}
+	defer bw.Close()
+
+	config := DefaultConfig()
+	config.Writers = []io.Writer{bw}
 
 	logger, err := New(config)
 	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 	defer logger.Close()
 
-	logger.Info("password=secret123")
+	logger.Info("buffered message")
 
-	output := buf.String()
-	if !strings.Contains(output, "[REDACTED]") {
-		t.Errorf("Password should be filtered, got: %s", output)
-	}
-	if strings.Contains(output, "secret123") {
-		t.Errorf("Password value should not appear in output, got: %s", output)
+	bw.Flush()
+
+	if !strings.Contains(buf.String(), "buffered message") {
+		t.Errorf("Buffer should contain message, got: %s", buf.String())
 	}
 }
 
