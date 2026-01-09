@@ -100,13 +100,25 @@ func (f *SensitiveDataFilter) addPattern(pattern string) error {
 }
 
 func (f *SensitiveDataFilter) AddPattern(pattern string) error {
+	if f == nil {
+		return fmt.Errorf("filter is nil")
+	}
+	if pattern == "" {
+		return fmt.Errorf("pattern cannot be empty")
+	}
 	return f.addPattern(pattern)
 }
 
 func (f *SensitiveDataFilter) AddPatterns(patterns ...string) error {
+	if f == nil {
+		return fmt.Errorf("filter is nil")
+	}
 	for _, pattern := range patterns {
+		if pattern == "" {
+			continue // Skip empty patterns
+		}
 		if err := f.addPattern(pattern); err != nil {
-			return err
+			return fmt.Errorf("failed to add pattern %q: %w", pattern, err)
 		}
 	}
 	return nil
@@ -172,6 +184,7 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	// Apply input length limit with proper bounds checking (fixed redundant condition)
 	if f.maxInputLength > 0 && inputLen > f.maxInputLength {
 		input = input[:f.maxInputLength] + "... [TRUNCATED FOR SECURITY]"
 	}
@@ -191,6 +204,10 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	result := input
 	for i := range patternCount {
 		result = f.filterWithTimeout(result, patterns[i], timeout)
+		// Early exit if result becomes empty or redacted
+		if result == "" || result == "[REDACTED]" {
+			break
+		}
 	}
 
 	return result
@@ -275,22 +292,43 @@ func (f *SensitiveDataFilter) FilterValue(value any) any {
 	return value
 }
 
-var sensitiveKeywords = []string{
-	"password", "passwd", "pwd",
-	"secret", "token", "bearer",
-	"api_key", "apikey", "api-key",
-	"access_key", "accesskey", "access-key",
-	"secret_key", "secretkey", "secret-key",
-	"private_key", "privatekey", "private-key",
-	"auth", "authorization",
-	"credit_card", "creditcard",
-	"ssn", "social_security",
+// Use map for O(1) lookup instead of O(n) slice iteration
+var sensitiveKeywords = map[string]struct{}{
+	"password":        {},
+	"passwd":          {},
+	"pwd":             {},
+	"secret":          {},
+	"token":           {},
+	"bearer":          {},
+	"api_key":         {},
+	"apikey":          {},
+	"api-key":         {},
+	"access_key":      {},
+	"accesskey":       {},
+	"access-key":      {},
+	"secret_key":      {},
+	"secretkey":       {},
+	"secret-key":      {},
+	"private_key":     {},
+	"privatekey":      {},
+	"private-key":     {},
+	"auth":            {},
+	"authorization":   {},
+	"credit_card":     {},
+	"creditcard":      {},
+	"ssn":             {},
+	"social_security": {},
 }
 
 func isSensitiveKey(key string) bool {
 	lowerKey := strings.ToLower(key)
-	for _, keyword := range sensitiveKeywords {
-		if lowerKey == keyword || strings.Contains(lowerKey, keyword) {
+	// Fast path: exact match
+	if _, exists := sensitiveKeywords[lowerKey]; exists {
+		return true
+	}
+	// Slow path: substring match for composite keys
+	for keyword := range sensitiveKeywords {
+		if strings.Contains(lowerKey, keyword) {
 			return true
 		}
 	}

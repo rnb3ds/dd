@@ -1,4 +1,4 @@
-package filewriter
+package internal
 
 import (
 	"os"
@@ -165,10 +165,7 @@ func TestRotateBackups(t *testing.T) {
 	}
 
 	// Rotate with max 3 backups (should not remove anything yet)
-	err = RotateBackups(basePath, 3, false)
-	if err != nil {
-		t.Fatalf("RotateBackups() error = %v", err)
-	}
+	RotateBackups(basePath, 3, false)
 
 	// Check that existing files still exist
 	if _, err := os.Stat(backup1); err != nil {
@@ -194,10 +191,7 @@ func TestRotateBackups(t *testing.T) {
 	}
 
 	// Rotate with max 3 backups (should remove oldest)
-	err = RotateBackups(basePath, 3, false)
-	if err != nil {
-		t.Fatalf("RotateBackups() error = %v", err)
-	}
+	RotateBackups(basePath, 3, false)
 
 	// Check that oldest backup was removed
 	if _, err := os.Stat(backup1); !os.IsNotExist(err) {
@@ -273,10 +267,10 @@ func TestCleanupOldFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 	basePath := filepath.Join(tmpDir, "test.log")
 
-	// Create some old files
-	oldFile1 := basePath + ".1"
-	oldFile2 := basePath + ".2"
-	newFile := basePath + ".3"
+	// Create some old backup files using proper naming pattern
+	oldFile1 := GetBackupPath(basePath, 1, false)
+	oldFile2 := GetBackupPath(basePath, 2, false)
+	newFile := GetBackupPath(basePath, 3, false)
 
 	// Create files with different ages
 	err := os.WriteFile(oldFile1, []byte("old1"), 0644)
@@ -412,5 +406,158 @@ func TestFindNextBackupIndex(t *testing.T) {
 	index = FindNextBackupIndex(basePath, true)
 	if index != 2 {
 		t.Errorf("FindNextBackupIndex() with compressed backup 1 = %d, want 2", index)
+	}
+}
+
+// ============================================================================
+// ROTATION CLEANUP TESTS (Consolidated from rotation_cleanup_test.go)
+// ============================================================================
+
+func TestRotateBackupsCleanupExcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.log")
+
+	// Create 5 backup files
+	for i := 1; i <= 5; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		err := os.WriteFile(backupPath, []byte("backup"), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create backup file %d: %v", i, err)
+		}
+	}
+
+	// Rotate with maxBackups=3 (should remove oldest 2 files)
+	RotateBackups(basePath, 3, false)
+
+	// Files 1 and 2 should be deleted (oldest)
+	for i := 1; i <= 2; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+			t.Errorf("Backup file %d should be deleted (oldest, beyond maxBackups)", i)
+		}
+	}
+
+	// Files 3, 4, and 5 should still exist (newest 3)
+	for i := 3; i <= 5; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		if _, err := os.Stat(backupPath); err != nil {
+			t.Errorf("Backup file %d should exist after rotation", i)
+		}
+	}
+}
+
+func TestRotateBackupsCleanupExcessCompressed(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.log")
+
+	// Create 7 compressed backup files
+	for i := 1; i <= 7; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		err := os.WriteFile(backupPath, []byte("backup"), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create backup file %d: %v", i, err)
+		}
+	}
+
+	// Rotate with maxBackups=3 (should keep newest 3)
+	RotateBackups(basePath, 3, true)
+
+	// Files 1-4 should be deleted (oldest)
+	for i := 1; i <= 4; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+			t.Errorf("Compressed backup file %d should be deleted (oldest, beyond maxBackups)", i)
+		}
+	}
+
+	// Files 5, 6, and 7 should exist (newest 3)
+	for i := 5; i <= 7; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		if _, err := os.Stat(backupPath); err != nil {
+			t.Errorf("Compressed backup file %d should exist after rotation", i)
+		}
+	}
+}
+
+func TestRotateBackupsReducedMaxBackups(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.log")
+
+	// Simulate previous run with maxBackups=10
+	for i := 1; i <= 10; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		err := os.WriteFile(backupPath, []byte("backup"), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create backup file %d: %v", i, err)
+		}
+	}
+
+	// Now rotate with reduced maxBackups=5 (should keep newest 5)
+	RotateBackups(basePath, 5, true)
+
+	// Files 1-5 should be deleted (oldest)
+	for i := 1; i <= 5; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+			t.Errorf("Backup file %d should be deleted after reducing maxBackups (oldest)", i)
+		}
+	}
+
+	// Files 6-10 should exist (newest 5)
+	for i := 6; i <= 10; i++ {
+		backupPath := GetBackupPath(basePath, i, true)
+		if _, err := os.Stat(backupPath); err != nil {
+			t.Errorf("Backup file %d should exist after rotation", i)
+		}
+	}
+}
+
+func TestRotateBackupsNoExcessFiles(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.log")
+
+	// Create only 2 backup files (less than maxBackups)
+	for i := 1; i <= 2; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		err := os.WriteFile(backupPath, []byte("backup"), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create backup file %d: %v", i, err)
+		}
+	}
+
+	// Rotate with maxBackups=5 (no cleanup needed)
+	RotateBackups(basePath, 5, false)
+
+	// Both files should still exist (no cleanup needed)
+	for i := 1; i <= 2; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		if _, err := os.Stat(backupPath); err != nil {
+			t.Errorf("Backup file %d should exist after rotation", i)
+		}
+	}
+}
+
+func TestRotateBackupsMaxBackupsZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "test.log")
+
+	// Create some backup files
+	for i := 1; i <= 3; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		err := os.WriteFile(backupPath, []byte("backup"), 0644)
+		if err != nil {
+			t.Fatalf("Failed to create backup file %d: %v", i, err)
+		}
+	}
+
+	// Rotate with maxBackups=0 (unlimited)
+	RotateBackups(basePath, 0, false)
+
+	// All files should still exist (no cleanup when maxBackups=0)
+	for i := 1; i <= 3; i++ {
+		backupPath := GetBackupPath(basePath, i, false)
+		if _, err := os.Stat(backupPath); err != nil {
+			t.Errorf("Backup file %d should still exist with maxBackups=0", i)
+		}
 	}
 }

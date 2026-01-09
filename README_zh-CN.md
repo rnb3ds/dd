@@ -1,9 +1,10 @@
 # DD - High-Performance Go Logging Library
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
+[![pkg.go.dev](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue.svg)](SECURITY.md)
+[![Thread Safe](https://img.shields.io/badge/thread%20safe-yes-brightgreen.svg)](https://github.com/cybergodev/json)
 
 一个生产级高性能 Go 日志库，零外部依赖，专为现代应用设计。
 
@@ -147,7 +148,7 @@ logger, _ := dd.New(dd.DefaultConfig())
 // 开发环境 - DEBUG级别 + 调用者信息
 logger, _ := dd.New(dd.DevelopmentConfig())
 
-// 云原生 - JSON格式，适配 ELK/Splunk/CloudWatch 等日志格式
+// 云原生 - JSON格式，DEBUG级别，适配 ELK/Splunk/CloudWatch 等日志格式
 logger, _ := dd.New(dd.JSONConfig())
 ```
 
@@ -188,10 +189,10 @@ logger, _ := dd.NewWithOptions(dd.Options{
 ```
 
 **基础过滤**（6种模式）:
-- 信用卡号、密码、API密钥、私钥、SSN
+- 信用卡号、SSN、密码、API密钥、OpenAI密钥、私钥
 
 **完整过滤**（12种模式）:
-- 基础模式 + 邮箱、IP、JWT、AWS密钥、比特币地址、数据库连接串、UUID
+- 信用卡号、SSN、密码、API密钥、JWT、私钥、AWS密钥、Google API密钥、OpenAI密钥、邮箱、IP、数据库连接串
 
 **自定义过滤**:
 ```go
@@ -326,27 +327,27 @@ dd.NewWithOptions(opts Options) (*Logger, error)     // 使用 Options 模式
 // 预设配置
 dd.DefaultConfig() *LoggerConfig      // 生产配置（Info级别，文本格式）
 dd.DevelopmentConfig() *LoggerConfig  // 开发配置（Debug级别，带调用者信息）
-dd.JSONConfig() *LoggerConfig         // JSON配置（适配云日志系统）
+dd.JSONConfig() *LoggerConfig         // JSON配置（Debug级别，适配云日志系统）
 ```
 
 ### fmt包 平替方法
 
-DD 为 Go 语言的标准 `fmt` 包提供了一个完全替代方案，该方案具有与之相同的 API，并且还增强了日志集成功能：
+DD 为 Go 语言的标准 `fmt` 包提供了一个类似的替代方案，该方案具有相似的 API，并且还增强了日志集成功能：
 ```go
-// 直接输出（标准输出） - 与 fmt 相同
-dd.Printf(format, args...)     // 将输出格式化后显示在标准输出端口上
-dd.Print(args...)              // 默认格式输出至标准输出流
-dd.Println(args...)            // 默认格式输出，并带有换行符
+// 直接输出（标准输出） - 带调用者信息
+dd.Printf(format, args...)     // 将输出格式化后显示在标准输出端口上（带调用者信息）
+dd.Print(args...)              // 默认格式输出至标准输出流（与 fmt 相同）
+dd.Println(args...)            // 默认格式输出，并带有换行符和调用者信息
 
 // 字符串 返回值 - 与 fmt 相同
 dd.Sprintf(format, args...)    // 返回格式化后的字符串
 dd.Sprint(args...)             // 返回默认格式字符串
 dd.Sprintln(args...)           // 返回带有换行符的默认格式字符串
 
-// 作者输出 - 与 fmt 完全相同
-dd.Fprintf(w, format, args...) // 向写作者输出格式化内容
-dd.Fprint(w, args...)          // 默认格式输出给写入器
-dd.Fprintln(w, args...)        // 以换行的方式将默认格式输出至写入器中
+// Writer 输出 - 与 fmt 完全相同
+dd.Fprintf(w, format, args...) // 向 Writer 输出格式化内容
+dd.Fprint(w, args...)          // 默认格式输出给 Writer
+dd.Fprintln(w, args...)        // 以换行的方式将默认格式输出至 Writer 中
 
 // 输入扫描 - 与 fmt 相同
 dd.Scan(a...)                  // 从标准输入获取以空格分隔的输入

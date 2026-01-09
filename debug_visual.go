@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cybergodev/dd/internal/caller"
+	"github.com/cybergodev/dd/internal"
 )
 
 // Json outputs data as compact JSON to console for debugging.
@@ -20,7 +20,7 @@ import (
 // Multiple arguments are printed on the same line separated by spaces with a newline at the end.
 // The output is prefixed with the caller's file path and line number.
 func Json(data ...any) {
-	outputJSON(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
 // Jsonf outputs formatted data as compact JSON to console for debugging.
@@ -29,7 +29,7 @@ func Json(data ...any) {
 // The output is prefixed with the caller's file path and line number.
 func Jsonf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	outputJSON(caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Text outputs data as pretty-printed format to console for debugging.
@@ -39,7 +39,7 @@ func Jsonf(format string, args ...any) {
 // Multiple arguments are printed on the same line separated by spaces with a newline at the end.
 // The output is prefixed with the caller's file path and line number.
 func Text(data ...any) {
-	outputText(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
 // Textf outputs formatted data as pretty-printed format to console for debugging.
@@ -48,7 +48,7 @@ func Text(data ...any) {
 // The output is prefixed with the caller's file path and line number.
 func Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Exit outputs data as pretty-printed format to console for debugging and then exits the program.
@@ -59,7 +59,7 @@ func Textf(format string, args ...any) {
 // The output is prefixed with the caller's file path and line number.
 // After printing, calls os.Exit(0) to terminate the program.
 func Exit(data ...any) {
-	outputText(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
 	os.Exit(0)
 }
 
@@ -70,42 +70,42 @@ func Exit(data ...any) {
 // After printing, calls os.Exit(0) to terminate the program.
 func Exitf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
 	os.Exit(0)
 }
 
 // Json outputs data as compact JSON to console for debugging.
 func (l *Logger) Json(data ...any) {
-	outputJSON(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
 // Jsonf outputs formatted data as compact JSON to console for debugging.
 func (l *Logger) Jsonf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	outputJSON(caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Text outputs data as pretty-printed format to console for debugging.
 func (l *Logger) Text(data ...any) {
-	outputText(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
 // Textf outputs formatted data as pretty-printed format to console for debugging.
 func (l *Logger) Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Exit outputs data as pretty-printed format to console for debugging and then exits the program.
 func (l *Logger) Exit(data ...any) {
-	outputText(caller.GetCaller(DebugVisualizationDepth, false), data...)
+	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
 	os.Exit(0)
 }
 
 // Exitf outputs formatted data as pretty-printed format to console for debugging and then exits the program.
 func (l *Logger) Exitf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
 	os.Exit(0)
 }
 
@@ -170,7 +170,6 @@ func formatSimpleValue(v any) string {
 	return fmt.Sprintf("%v", val.Interface())
 }
 
-// Simplified shared output implementation
 var (
 	debugBufPool = sync.Pool{
 		New: func() any {

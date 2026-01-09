@@ -5,10 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cybergodev/dd/internal/caller"
-	"github.com/cybergodev/dd/internal/jsonformat"
-	"github.com/cybergodev/dd/internal/logformat"
-	"github.com/cybergodev/dd/internal/types"
+	"github.com/cybergodev/dd/internal"
 )
 
 // MessageFormatter handles the formatting of log messages with optimized, unified logic.
@@ -71,8 +68,8 @@ func (f *MessageFormatter) formatWithMessage(level LogLevel, callerDepth int, me
 
 // formatText handles text formatting with unified logic
 func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message string, fields []Field) string {
-	baseMsg := logformat.FormatMessage(
-		types.LogLevel(level),
+	baseMsg, _ := internal.FormatMessage(
+		internal.LogLevel(level),
 		f.includeTime,
 		f.timeFormat,
 		f.includeLevel,
@@ -125,7 +122,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 
 	// Add caller if enabled
 	if f.includeCaller {
-		if callerInfo := caller.GetCaller(callerDepth, f.fullPath); callerInfo != "" {
+		if callerInfo := internal.GetCaller(callerDepth, f.fullPath); callerInfo != "" {
 			entry[fieldNames.Caller] = callerInfo
 		}
 	}
@@ -142,7 +139,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 		entry[fieldNames.Fields] = fieldsMap
 	}
 
-	return jsonformat.FormatJSON(entry, f.getJSONOptions())
+	return internal.FormatJSON(entry, f.getJSONOptions())
 }
 
 // getJSONFieldNames returns the JSON field names configuration (thread-safe)
@@ -154,15 +151,15 @@ func (f *MessageFormatter) getJSONFieldNames() *JSONFieldNames {
 }
 
 // getJSONOptions returns the JSON formatting options (thread-safe)
-func (f *MessageFormatter) getJSONOptions() *types.JSONOptions {
+func (f *MessageFormatter) getJSONOptions() *internal.JSONOptions {
 	if f.jsonConfig == nil {
-		return &types.JSONOptions{
+		return &internal.JSONOptions{
 			PrettyPrint: false,
 			Indent:      DefaultJSONIndent,
 		}
 	}
 
-	return &types.JSONOptions{
+	return &internal.JSONOptions{
 		PrettyPrint: f.jsonConfig.PrettyPrint,
 		Indent:      f.jsonConfig.Indent,
 	}
@@ -171,12 +168,21 @@ func (f *MessageFormatter) getJSONOptions() *types.JSONOptions {
 // adjustCallerDepth adjusts the caller depth based on dynamic caller detection.
 // This method looks for the first non-dd package in the call stack.
 func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
+	// Validate base depth
+	if baseDepth < 0 {
+		baseDepth = 0
+	}
+
 	// Simple dynamic caller detection - look for first non-dd package
-	for depth := baseDepth; depth < baseDepth+5; depth++ {
-		if callerInfo := caller.GetCaller(depth, true); callerInfo != "" {
-			if !strings.Contains(callerInfo, "github.com/cybergodev/dd") {
-				return depth
-			}
+	// Limit search depth to prevent excessive stack walking
+	maxDepth := baseDepth + 5
+	for depth := baseDepth; depth < maxDepth; depth++ {
+		callerInfo := internal.GetCaller(depth, true)
+		if callerInfo == "" {
+			break // No more stack frames
+		}
+		if !strings.Contains(callerInfo, "github.com/cybergodev/dd") {
+			return depth
 		}
 	}
 

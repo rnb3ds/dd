@@ -1,19 +1,16 @@
-package jsonformat
+package internal
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/cybergodev/dd/internal/caller"
-	"github.com/cybergodev/dd/internal/types"
 )
 
 func TestFormatMessage(t *testing.T) {
 	tests := []struct {
 		name            string
-		level           types.LogLevel
+		level           LogLevel
 		includeTime     bool
 		timeFormat      string
 		includeLevel    bool
@@ -27,7 +24,7 @@ func TestFormatMessage(t *testing.T) {
 	}{
 		{
 			name:          "basic message",
-			level:         types.LevelInfo,
+			level:         LevelInfo,
 			includeTime:   false,
 			includeLevel:  true,
 			includeCaller: false,
@@ -37,7 +34,7 @@ func TestFormatMessage(t *testing.T) {
 		},
 		{
 			name:          "with time",
-			level:         types.LevelError,
+			level:         LevelError,
 			includeTime:   true,
 			timeFormat:    time.RFC3339,
 			includeLevel:  true,
@@ -48,7 +45,7 @@ func TestFormatMessage(t *testing.T) {
 		},
 		{
 			name:          "with fields",
-			level:         types.LevelWarn,
+			level:         LevelWarn,
 			includeTime:   false,
 			includeLevel:  true,
 			includeCaller: false,
@@ -58,7 +55,7 @@ func TestFormatMessage(t *testing.T) {
 		},
 		{
 			name:          "with caller",
-			level:         types.LevelDebug,
+			level:         LevelDebug,
 			includeTime:   false,
 			includeLevel:  true,
 			includeCaller: true,
@@ -70,7 +67,7 @@ func TestFormatMessage(t *testing.T) {
 		},
 		{
 			name:            "minimal config",
-			level:           types.LevelInfo,
+			level:           LevelInfo,
 			includeTime:     false,
 			includeLevel:    false,
 			includeCaller:   false,
@@ -83,7 +80,7 @@ func TestFormatMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := FormatMessage(
+			result, err := FormatMessageWithOptions(
 				tt.level,
 				tt.includeTime,
 				tt.timeFormat,
@@ -93,6 +90,7 @@ func TestFormatMessage(t *testing.T) {
 				tt.fullPath,
 				tt.message,
 				tt.fields,
+				nil,
 			)
 
 			if err != nil {
@@ -125,12 +123,12 @@ func TestFormatMessage(t *testing.T) {
 func TestFormatMessageWithOptions(t *testing.T) {
 	tests := []struct {
 		name    string
-		opts    *types.JSONOptions
+		opts    *JSONOptions
 		wantErr bool
 	}{
 		{
 			name: "pretty print",
-			opts: &types.JSONOptions{
+			opts: &JSONOptions{
 				PrettyPrint: true,
 				Indent:      "  ",
 				FieldNames:  DefaultJSONFieldNames(),
@@ -139,9 +137,9 @@ func TestFormatMessageWithOptions(t *testing.T) {
 		},
 		{
 			name: "custom field names",
-			opts: &types.JSONOptions{
+			opts: &JSONOptions{
 				PrettyPrint: false,
-				FieldNames: &types.JSONFieldNames{
+				FieldNames: &JSONFieldNames{
 					Timestamp: "ts",
 					Level:     "severity",
 					Caller:    "source",
@@ -161,7 +159,7 @@ func TestFormatMessageWithOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := FormatMessageWithOptions(
-				types.LevelInfo,
+				LevelInfo,
 				true,
 				time.RFC3339,
 				true,
@@ -212,15 +210,15 @@ func TestFormatMessageWithOptions(t *testing.T) {
 
 func TestLevelToString(t *testing.T) {
 	tests := []struct {
-		level types.LogLevel
+		level LogLevel
 		want  string
 	}{
-		{types.LevelDebug, "DEBUG"},
-		{types.LevelInfo, "INFO"},
-		{types.LevelWarn, "WARN"},
-		{types.LevelError, "ERROR"},
-		{types.LevelFatal, "FATAL"},
-		{types.LogLevel(99), "UNKNOWN"},
+		{LevelDebug, "DEBUG"},
+		{LevelInfo, "INFO"},
+		{LevelWarn, "WARN"},
+		{LevelError, "ERROR"},
+		{LevelFatal, "FATAL"},
+		{LogLevel(99), "UNKNOWN"},
 	}
 
 	for _, tt := range tests {
@@ -235,7 +233,7 @@ func TestLevelToString(t *testing.T) {
 
 func TestGetCaller(t *testing.T) {
 	// Test with full path (depth 1 to get this test function)
-	callerInfo := caller.GetCaller(1, true)
+	callerInfo := GetCaller(1, true)
 	if !strings.Contains(callerInfo, "json_test.go") {
 		t.Errorf("GetCaller(true) should contain file name, got: %s", callerInfo)
 	}
@@ -244,7 +242,7 @@ func TestGetCaller(t *testing.T) {
 	}
 
 	// Test without full path
-	callerInfo = caller.GetCaller(1, false)
+	callerInfo = GetCaller(1, false)
 	if !strings.Contains(callerInfo, "json_test.go") {
 		t.Errorf("GetCaller(false) should contain file name, got: %s", callerInfo)
 	}
@@ -254,7 +252,7 @@ func TestGetCaller(t *testing.T) {
 	}
 
 	// Test with invalid depth
-	callerInfo = caller.GetCaller(100, false)
+	callerInfo = GetCaller(100, false)
 	if callerInfo != "" {
 		t.Errorf("GetCaller(100) should return empty string, got: %s", callerInfo)
 	}
@@ -283,13 +281,13 @@ func TestDefaultJSONFieldNames(t *testing.T) {
 func TestJSONFieldNamesMergeWithDefaults(t *testing.T) {
 	tests := []struct {
 		name   string
-		input  *types.JSONFieldNames
-		verify func(*testing.T, *types.JSONFieldNames)
+		input  *JSONFieldNames
+		verify func(*testing.T, *JSONFieldNames)
 	}{
 		{
 			name:  "nil input",
 			input: nil,
-			verify: func(t *testing.T, result *types.JSONFieldNames) {
+			verify: func(t *testing.T, result *JSONFieldNames) {
 				defaults := DefaultJSONFieldNames()
 				if result.Timestamp != defaults.Timestamp {
 					t.Error("Should use default timestamp")
@@ -298,12 +296,12 @@ func TestJSONFieldNamesMergeWithDefaults(t *testing.T) {
 		},
 		{
 			name: "partial custom",
-			input: &types.JSONFieldNames{
+			input: &JSONFieldNames{
 				Level:   "severity",
 				Message: "msg",
 				// Others empty - should use defaults
 			},
-			verify: func(t *testing.T, result *types.JSONFieldNames) {
+			verify: func(t *testing.T, result *JSONFieldNames) {
 				if result.Level != "severity" {
 					t.Error("Should use custom level")
 				}
@@ -323,14 +321,14 @@ func TestJSONFieldNamesMergeWithDefaults(t *testing.T) {
 		},
 		{
 			name: "all custom",
-			input: &types.JSONFieldNames{
+			input: &JSONFieldNames{
 				Timestamp: "ts",
 				Level:     "lvl",
 				Caller:    "src",
 				Message:   "msg",
 				Fields:    "data",
 			},
-			verify: func(t *testing.T, result *types.JSONFieldNames) {
+			verify: func(t *testing.T, result *JSONFieldNames) {
 				if result.Timestamp != "ts" {
 					t.Error("Should use custom timestamp")
 				}
@@ -369,8 +367,8 @@ func TestFormatMessageComplexFields(t *testing.T) {
 		"object": map[string]string{"nested": "value"},
 	}
 
-	result, err := FormatMessage(
-		types.LevelInfo,
+	result, err := FormatMessageWithOptions(
+		LevelInfo,
 		false,
 		"",
 		true,
@@ -379,6 +377,7 @@ func TestFormatMessageComplexFields(t *testing.T) {
 		false,
 		"complex message",
 		complexFields,
+		nil,
 	)
 
 	if err != nil {
@@ -410,7 +409,7 @@ func TestFormatMessageComplexFields(t *testing.T) {
 
 func TestFormatMessageEmptyFields(t *testing.T) {
 	result, err := FormatMessage(
-		types.LevelInfo,
+		LevelInfo,
 		false,
 		"",
 		true,
@@ -418,7 +417,6 @@ func TestFormatMessageEmptyFields(t *testing.T) {
 		0,
 		false,
 		"message without fields",
-		nil,
 	)
 
 	if err != nil {
@@ -436,7 +434,7 @@ func TestFormatMessageSpecialCharacters(t *testing.T) {
 newlines`
 
 	result, err := FormatMessage(
-		types.LevelInfo,
+		LevelInfo,
 		false,
 		"",
 		true,
@@ -444,7 +442,6 @@ newlines`
 		0,
 		false,
 		message,
-		nil,
 	)
 
 	if err != nil {

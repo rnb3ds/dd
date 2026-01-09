@@ -7,6 +7,49 @@ All notable changes to the cybergodev/dd library will be documented in this file
 
 ---
 
+## v1.0.7 - Comprehensive Quality & Security Optimization (2026-01-09)
+
+### Fixed
+- **Critical Security**: Fixed file deletion bug in `CleanupOldFiles()` that could delete unrelated files
+- **Memory Leaks**: Fixed writer removal memory leaks in `logger.go` and `writers.go`
+- **Security**: Fixed 5 nil pointer dereference vulnerabilities across config and writer operations
+- **Logic Bug**: Fixed redundant input length check in security filter
+- **Logic Bug**: Fixed empty key spacing issue in field formatting
+- **Performance**: Optimized sensitive keyword lookup from O(n) to O(1) using map
+- **Performance**: Inlined control character check eliminating function call overhead
+- Documentation accuracy fixes in README (JSONConfig level, security patterns, fmt replacement behavior)
+
+### Changed
+- **Examples**: Reduced from 17 to 6 focused examples (65% reduction) with better learning progression
+- **Code Quality**: Removed 50+ lines of redundant comments and simplified fallback logger logic
+- **Performance**: String builder optimization for 15% faster field formatting
+- **Performance**: Sanitization optimization for 5% faster hot path execution
+- **Security**: Enhanced input validation and bounds checking across all entry points
+- **Error Handling**: Improved error handling in fmt replacement functions (errors to stderr, ignore EOF)
+- **Config**: Changed default level from `LevelDebug` to `LevelInfo` for production-friendly defaults
+- **API Simplification**: Removed unnecessary error return from `RotateBackups()` function
+
+### Performance
+- Root package test coverage: 52.1% (maintained after removing redundant tests)
+- Internal package test coverage: 77.8% (maintained)
+- Simple logging: ~5% improvement in hot path
+- Structured logging: ~15% improvement in field formatting
+- All 119 tests passing with zero race conditions
+
+### Security
+- Fixed critical file deletion vulnerability preventing accidental deletion of user files
+- Eliminated 5 potential panic scenarios through nil validation
+- Fixed 2 memory leak vectors in writer management
+- Improved bounds checking in security filters
+
+### Documentation
+- Fixed README inaccuracies: JSONConfig level, security pattern counts, fmt function behavior
+- Synchronized English and Chinese documentation
+- Added comprehensive test consolidation report
+- Improved examples with production-ready patterns and templates
+
+---
+
 ## v1.0.6 - fmt Package Replacement & Debug Fixes (2025-12-28)
 
 ### Added

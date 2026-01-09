@@ -1,9 +1,10 @@
 # DD - High-Performance Go Logging Library
 
 [![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
+[![pkg.go.dev](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue.svg)](SECURITY.md)
+[![Thread Safe](https://img.shields.io/badge/thread%20safe-yes-brightgreen.svg)](https://github.com/cybergodev/json)
 
 A production-grade high-performance Go logging library with zero external dependencies, designed for modern applications.
 
@@ -146,7 +147,7 @@ logger, _ := dd.New(dd.DefaultConfig())
 // Development - DEBUG level + caller information
 logger, _ := dd.New(dd.DevelopmentConfig())
 
-// Cloud-Native - JSON format, compatible with ELK/Splunk/CloudWatch
+// Cloud-Native - JSON format, DEBUG level, compatible with ELK/Splunk/CloudWatch
 logger, _ := dd.New(dd.JSONConfig())
 ```
 
@@ -187,10 +188,10 @@ logger, _ := dd.NewWithOptions(dd.Options{
 ```
 
 **Basic Filtering** (6 patterns):
-- Credit cards, passwords, API keys, private keys, SSN
+- Credit cards, SSN, passwords, API keys, OpenAI keys, private keys
 
 **Full Filtering** (12 patterns):
-- Basic patterns + email, IP, JWT, AWS keys, Bitcoin addresses, database connection strings, UUID
+- Credit cards, SSN, passwords, API keys, JWT, private keys, AWS keys, Google API keys, OpenAI keys, email, IP, database connection strings
 
 **Custom Filtering**:
 ```go
@@ -325,18 +326,18 @@ dd.NewWithOptions(opts Options) (*Logger, error)     // Use Options pattern
 // Preset configurations
 dd.DefaultConfig() *LoggerConfig      // Production config (Info level, text format)
 dd.DevelopmentConfig() *LoggerConfig  // Development config (Debug level, with caller info)
-dd.JSONConfig() *LoggerConfig         // JSON config (cloud log system compatible)
+dd.JSONConfig() *LoggerConfig         // JSON config (Debug level, cloud log system compatible)
 ```
 
 ### fmt Package alternative method
 
-DD provides a complete replacement for Go's standard `fmt` package with identical APIs plus enhanced logging integration:
+DD provides a complete replacement for Go's standard `fmt` package with similar APIs plus enhanced logging integration:
 
 ```go
-// Direct Output (stdout) - identical to fmt
-dd.Printf(format, args...)     // Formatted output to stdout
-dd.Print(args...)              // Default format output to stdout  
-dd.Println(args...)            // Default format output with newline
+// Direct Output (stdout) - with caller info
+dd.Printf(format, args...)     // Formatted output to stdout with caller info
+dd.Print(args...)              // Default format output to stdout (identical to fmt)
+dd.Println(args...)            // Default format output with newline and caller info
 
 // String Return - identical to fmt
 dd.Sprintf(format, args...)    // Return formatted string
