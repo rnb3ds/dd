@@ -1,0 +1,173 @@
+//go:build examples
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/cybergodev/dd"
+)
+
+// Structured Logging - Production-Ready Patterns
+//
+// This example demonstrates:
+// 1. Core field types (String, Int, Float64, Bool, Err, Any)
+// 2. Production-ready templates for common scenarios
+// 3. Best practices for structured logging
+func main() {
+	fmt.Println("=== DD Structured Logging ===\n ")
+
+	example1CoreFieldTypes()
+	example2HTTPRequestLogging()
+	example3DatabaseOperations()
+	example4BusinessEvents()
+	example5ErrorLogging()
+
+	fmt.Println("\n✅ Structured logging examples completed!")
+	fmt.Println("\nBest Practices:")
+	fmt.Println("  • Use type-safe fields (String, Int, Bool) over Any for better performance")
+	fmt.Println("  • Keep 5-10 fields per log entry")
+	fmt.Println("  • Use consistent field names across your application")
+	fmt.Println("  • Json format for production, Text format for development")
+}
+
+// Example 1: Core field types
+func example1CoreFieldTypes() {
+	fmt.Println("1. Core Field Types")
+	fmt.Println("-------------------")
+
+	logger := dd.ToJSONFile("logs/structured.log")
+	defer logger.Close()
+
+	logger.InfoWith("All field types",
+		// Type-safe fields (recommended - best performance)
+		dd.String("name", "John Doe"),
+		dd.Int("age", 30),
+		dd.Int64("user_id", 9876543210),
+		dd.Float64("score", 98.5),
+		dd.Bool("active", true),
+		dd.Err(errors.New("example error")),
+
+		// Complex types (use Any)
+		dd.Any("tags", []string{"vip", "premium"}),
+		dd.Any("metadata", map[string]int{"count": 100}),
+		dd.Any("timestamp", time.Now()),
+	)
+
+	fmt.Println("✓ Logged with all field types\n ")
+}
+
+// Example 2: HTTP request logging template
+func example2HTTPRequestLogging() {
+	fmt.Println("2. HTTP Request Logging")
+	fmt.Println("-----------------------")
+
+	logger := dd.ToJSONFile("logs/http.log")
+	defer logger.Close()
+
+	// Request received
+	logger.InfoWith("HTTP request",
+		dd.String("request_id", "req-abc-123"),
+		dd.String("method", "POST"),
+		dd.String("path", "/api/v1/users"),
+		dd.String("client_ip", "192.168.1.100"),
+		dd.Int("user_id", 12345),
+	)
+
+	// Response sent
+	logger.InfoWith("HTTP response",
+		dd.String("request_id", "req-abc-123"),
+		dd.Int("status", 201),
+		dd.Float64("duration_ms", 125.7),
+		dd.Int("response_size", 512),
+	)
+
+	fmt.Println("✓ HTTP request/response logged\n ")
+}
+
+// Example 3: Database operations template
+func example3DatabaseOperations() {
+	fmt.Println("3. Database Operations")
+	fmt.Println("----------------------")
+
+	logger := dd.ToJSONFile("logs/database.log")
+	defer logger.Close()
+
+	// Query execution
+	logger.InfoWith("Database query",
+		dd.String("operation", "SELECT"),
+		dd.String("table", "users"),
+		dd.Float64("duration_ms", 12.5),
+		dd.Int("rows", 150),
+		dd.Bool("cache_hit", true),
+	)
+
+	// Insert operation
+	logger.InfoWith("Database insert",
+		dd.String("operation", "INSERT"),
+		dd.String("table", "orders"),
+		dd.String("order_id", "ORD-2024-001"),
+		dd.Float64("duration_ms", 8.3),
+	)
+
+	fmt.Println("✓ Database operations logged\n ")
+}
+
+// Example 4: Business events template
+func example4BusinessEvents() {
+	fmt.Println("4. Business Events")
+	fmt.Println("------------------")
+
+	logger := dd.ToJSONFile("logs/events.log")
+	defer logger.Close()
+
+	// Order created
+	logger.InfoWith("Order created",
+		dd.String("event", "order_created"),
+		dd.String("order_id", "ORD-2024-001"),
+		dd.String("user_id", "user-12345"),
+		dd.Float64("amount", 1459.97),
+		dd.String("currency", "USD"),
+		dd.Int("item_count", 3),
+	)
+
+	// Payment processed
+	logger.InfoWith("Payment processed",
+		dd.String("event", "payment_processed"),
+		dd.String("order_id", "ORD-2024-001"),
+		dd.String("payment_method", "credit_card"),
+		dd.Bool("success", true),
+	)
+
+	fmt.Println("✓ Business events logged\n ")
+}
+
+// Example 5: Error logging template
+func example5ErrorLogging() {
+	fmt.Println("5. Error Logging")
+	fmt.Println("----------------")
+
+	logger := dd.ToJSONFile("logs/errors.log")
+	defer logger.Close()
+
+	// Application error
+	err := errors.New("connection timeout")
+	logger.ErrorWith("Operation failed",
+		dd.Err(err),
+		dd.String("operation", "user_query"),
+		dd.String("host", "db.example.com"),
+		dd.Int("retry_count", 3),
+	)
+
+	// Resource alert
+	logger.WarnWith("Resource alert",
+		dd.String("alert_type", "high_memory"),
+		dd.Float64("memory_percent", 85.5),
+		dd.Float64("threshold", 80.0),
+		dd.String("host", "app-server-01"),
+	)
+
+	fmt.Println("✓ Errors and alerts logged\n ")
+}
