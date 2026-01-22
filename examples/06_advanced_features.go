@@ -175,14 +175,14 @@ func example4DebugUtilities() {
 	dd.Text("Simple:", "hello", 42, 3.14, true)
 	dd.Text("Complex:", map[string]any{"name": "Alice", "age": 30})
 
-	// Json() - Json format output
+	// JSON() - JSON format output
 	fmt.Println("\nJson() output:")
-	dd.Json("user", 123, map[string]string{"status": "active"})
+	dd.JSON("user", 123, map[string]string{"status": "active"})
 
-	// Textf() and Jsonf() - Formatted output
+	// Textf() and JSONF() - Formatted output
 	fmt.Println("\nFormatted output:")
 	dd.Textf("User: %s, Age: %d", "Bob", 25)
-	dd.Jsonf("Request from %s", "192.168.1.1")
+	dd.JSONF("Request from %s", "192.168.1.1")
 
 	// Logger methods
 	logger := dd.ToConsole()
@@ -190,7 +190,7 @@ func example4DebugUtilities() {
 
 	fmt.Println("\nLogger methods:")
 	logger.Text("Processing", "item", 42)
-	logger.Json("result", true, "count", 100)
+	logger.JSON("result", true, "count", 100)
 
 	// Exit() - Debug and exit (commented out to avoid terminating)
 	// dd.Exit("Program terminated here")

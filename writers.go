@@ -234,7 +234,10 @@ func (fw *FileWriter) cleanupRoutine() {
 		case <-fw.ctx.Done():
 			return
 		case <-ticker.C:
-			internal.CleanupOldFiles(fw.path, fw.maxAge)
+			if err := internal.CleanupOldFiles(fw.path, fw.maxAge); err != nil {
+				// Log the error but continue running
+				// The cleanup is a background task, errors shouldn't stop the logger
+			}
 		}
 	}
 }

@@ -2,7 +2,9 @@
 package dd
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -438,8 +440,7 @@ func (l *Logger) FatalWith(msg string, fields ...Field) { l.LogWith(LevelFatal, 
 // fmt package replacement methods - output to stdout with caller info
 // These methods match the behavior of package-level Print/Println/Printf functions
 
-// Print formats using the default formats and writes to stdout with caller info and newline.
-// This is an alias for Println() - both methods add spaces between operands and append a newline.
+// Print writes to stdout with caller info and newline.
 func (l *Logger) Print(args ...any) {
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
 	if caller != "" {
@@ -448,8 +449,7 @@ func (l *Logger) Print(args ...any) {
 	fmt.Fprintln(os.Stdout, args...)
 }
 
-// Println formats using the default formats and writes to stdout with caller info.
-// Spaces are always added between operands and a newline is appended.
+// Println writes to stdout with caller info, spaces between operands, and a newline.
 func (l *Logger) Println(args ...any) {
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
 	if caller != "" {
@@ -470,31 +470,78 @@ func (l *Logger) Printf(format string, args ...any) {
 // Debug utilities - Text and JSON output for debugging
 
 // Text These methods output directly to stdout with caller information,
-// matching the behavior of package-level Text() and Json() functions.
+// matching the behavior of package-level Text() and JSON() functions.
 func (l *Logger) Text(data ...any) {
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	outputText(caller, data...)
+	if len(data) == 0 {
+		fmt.Fprintln(os.Stdout)
+		return
+	}
+
+	// Simple types output directly
+	for i, item := range data {
+		if isSimpleType(item) {
+			output := formatSimpleValue(item)
+			if i < len(data)-1 {
+				fmt.Fprintf(os.Stdout, "%s ", output)
+			} else {
+				fmt.Fprintf(os.Stdout, "%s\n", output)
+			}
+			continue
+		}
+		// Complex types - use JSON formatting
+		buf := debugBufPool.Get().(*bytes.Buffer)
+		defer func() {
+			buf.Reset()
+			debugBufPool.Put(buf)
+		}()
+
+		encoder := json.NewEncoder(buf)
+		encoder.SetEscapeHTML(false)
+		encoder.SetIndent("", "  ")
+
+		convertedItem := convertValue(item)
+		if err := encoder.Encode(convertedItem); err != nil {
+			fmt.Fprintf(os.Stdout, "[%d] %v", i, item)
+			if i < len(data)-1 {
+				fmt.Fprint(os.Stdout, " ")
+			} else {
+				fmt.Fprintln(os.Stdout)
+			}
+			continue
+		}
+
+		out := buf.Bytes()
+		if len(out) > 0 && out[len(out)-1] == '\n' {
+			out = out[:len(out)-1]
+		}
+
+		if i < len(data)-1 {
+			fmt.Fprintf(os.Stdout, "%s ", out)
+		} else {
+			fmt.Fprintf(os.Stdout, "%s\n", out)
+		}
+	}
 }
 
 func (l *Logger) Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	fmt.Fprintf(os.Stdout, "%s %s\n", caller, formatted)
+	fmt.Fprintln(os.Stdout, formatted)
 }
 
-func (l *Logger) Json(data ...any) {
+func (l *Logger) JSON(data ...any) {
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
 	outputJSON(caller, data...)
 }
 
-func (l *Logger) Jsonf(format string, args ...any) {
+func (l *Logger) JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
 	outputJSON(caller, formatted)
 }
 
 var (
-	defaultLogger atomic.Pointer[Logger]
+	defaultLogger     atomic.Pointer[Logger]
+	defaultLoggerOnce sync.Once
 )
 
 // Default returns the default global logger (thread-safe).
@@ -506,23 +553,25 @@ func Default() *Logger {
 		return logger
 	}
 
-	logger, err := New(nil)
-	if err != nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		logger = &Logger{
-			callerDepth: DefaultCallerDepth,
-			formatter:   newMessageFormatter(DefaultConfig()),
-			writers:     []io.Writer{os.Stderr},
-			ctx:         ctx,
-			cancel:      cancel,
+	var logger *Logger
+	defaultLoggerOnce.Do(func() {
+		var err error
+		logger, err = New(nil)
+		if err != nil {
+			ctx, cancel := context.WithCancel(context.Background())
+			logger = &Logger{
+				callerDepth: DefaultCallerDepth,
+				formatter:   newMessageFormatter(DefaultConfig()),
+				writers:     []io.Writer{os.Stderr},
+				ctx:         ctx,
+				cancel:      cancel,
+			}
+			logger.level.Store(int32(LevelInfo))
+			logger.securityConfig.Store(DefaultSecurityConfig())
 		}
-		logger.level.Store(int32(LevelInfo))
-		logger.securityConfig.Store(DefaultSecurityConfig())
-	}
+		defaultLogger.Store(logger)
+	})
 
-	if defaultLogger.CompareAndSwap(nil, logger) {
-		return logger
-	}
 	return defaultLogger.Load()
 }
 

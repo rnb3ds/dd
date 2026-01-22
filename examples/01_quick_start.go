@@ -70,7 +70,7 @@ func example2ConvenienceConstructors() {
 	// JSON file
 	logger3 := dd.ToJSONFile()
 	defer logger3.Close()
-	logger3.Info("Json format → logs/app.log")
+	logger3.Info("JSON format → logs/app.log")
 
 	// Console + file
 	logger4 := dd.ToAll()

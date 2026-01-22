@@ -47,7 +47,7 @@ func example1PresetConfigs() {
 	// JSONConfig: structured JSON output for log aggregation
 	logger3, _ := dd.New(dd.JSONConfig())
 	defer logger3.Close()
-	logger3.InfoWith("Json: structured logging", dd.String("format", "json"))
+	logger3.InfoWith("JSON: structured logging", dd.String("format", "json"))
 
 	fmt.Println()
 }
@@ -81,7 +81,7 @@ func example2FileRotation() {
 
 // Example 3: JSON customization
 func example3JSONCustomization() {
-	fmt.Println("3. Json Customization")
+	fmt.Println("3. JSON Customization")
 	fmt.Println("---------------------")
 
 	// Custom field names and pretty print
@@ -101,7 +101,7 @@ func example3JSONCustomization() {
 	logger, _ := dd.New(config)
 	defer logger.Close()
 
-	logger.InfoWith("Custom Json format",
+	logger.InfoWith("Custom JSON format",
 		dd.Int("user_id", 123),
 		dd.String("action", "login"),
 	)

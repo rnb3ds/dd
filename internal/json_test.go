@@ -93,10 +93,10 @@ func TestFormatMessage(t *testing.T) {
 				nil,
 			)
 
-			// Verify it's valid Json
+			// Verify it's valid JSON
 			var jsonData map[string]any
 			if err := json.Unmarshal([]byte(result), &jsonData); err != nil {
-				t.Fatalf("Result is not valid Json: %v", err)
+				t.Fatalf("Result is not valid JSON: %v", err)
 			}
 
 			// Check required content
@@ -167,10 +167,10 @@ func TestFormatMessageWithOptions(t *testing.T) {
 				tt.opts,
 			)
 
-			// Verify it's valid Json
+			// Verify it's valid JSON
 			var jsonData map[string]any
 			if err := json.Unmarshal([]byte(result), &jsonData); err != nil {
-				t.Fatalf("Result is not valid Json: %v", err)
+				t.Fatalf("Result is not valid JSON: %v", err)
 			}
 
 			// Test pretty print
@@ -367,10 +367,10 @@ func TestFormatMessageComplexFields(t *testing.T) {
 		nil,
 	)
 
-	// Verify it's valid Json
+	// Verify it's valid JSON
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(result), &jsonData); err != nil {
-		t.Fatalf("Result is not valid Json: %v", err)
+		t.Fatalf("Result is not valid JSON: %v", err)
 	}
 
 	// Verify fields are present
@@ -430,7 +430,7 @@ newlines`
 	// Verify it's valid JSON (should properly escape special characters)
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(result), &jsonData); err != nil {
-		t.Fatalf("Result is not valid Json: %v", err)
+		t.Fatalf("Result is not valid JSON: %v", err)
 	}
 
 	// Verify message is preserved correctly

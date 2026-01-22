@@ -242,9 +242,9 @@ func verifyGzipFile(path string) error {
 	return nil
 }
 
-func CleanupOldFiles(basePath string, maxAge time.Duration) {
+func CleanupOldFiles(basePath string, maxAge time.Duration) error {
 	if maxAge <= 0 {
-		return
+		return nil
 	}
 
 	cutoff := time.Now().Add(-maxAge)
@@ -255,8 +255,12 @@ func CleanupOldFiles(basePath string, maxAge time.Duration) {
 
 	prefix := baseNameWithoutExt + "_" + strings.TrimPrefix(ext, ".")
 
-	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	var firstErr error
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("walk error: %w", err)
+			}
 			return nil
 		}
 
@@ -264,9 +268,17 @@ func CleanupOldFiles(basePath string, maxAge time.Duration) {
 		if strings.HasPrefix(fileName, prefix+"_") &&
 			fileName != baseName &&
 			info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
+			if removeErr := os.Remove(path); removeErr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("remove %s: %w", path, removeErr)
+			}
 		}
 
 		return nil
 	})
+
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	return firstErr
 }

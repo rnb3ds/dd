@@ -12,26 +12,73 @@ import (
 	"github.com/cybergodev/dd/internal"
 )
 
-// Json outputs data as compact JSON to console for debugging.
-func Json(data ...any) {
+// JSON outputs data as compact JSON to console for debugging.
+func JSON(data ...any) {
 	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
-// Jsonf outputs formatted data as compact JSON to console for debugging.
-func Jsonf(format string, args ...any) {
+// JSONF outputs formatted data as compact JSON to console for debugging.
+func JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
 // Text outputs data as pretty-printed format to console for debugging.
 func Text(data ...any) {
-	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
+	if len(data) == 0 {
+		fmt.Fprintln(os.Stdout)
+		return
+	}
+
+	buf := debugBufPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		debugBufPool.Put(buf)
+	}()
+
+	encoder := json.NewEncoder(buf)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+
+	for i, item := range data {
+		if isSimpleType(item) {
+			output := formatSimpleValue(item)
+			if i < len(data)-1 {
+				fmt.Fprintf(os.Stdout, "%s ", output)
+			} else {
+				fmt.Fprintf(os.Stdout, "%s\n", output)
+			}
+			continue
+		}
+
+		buf.Reset()
+		convertedItem := convertValue(item)
+
+		if err := encoder.Encode(convertedItem); err != nil {
+			fmt.Fprintf(os.Stdout, "[%d] %v", i, item)
+			if i < len(data)-1 {
+				fmt.Fprint(os.Stdout, " ")
+			}
+			continue
+		}
+
+		out := buf.Bytes()
+		if len(out) > 0 && out[len(out)-1] == '\n' {
+			out = out[:len(out)-1]
+		}
+
+		if i < len(data)-1 {
+			fmt.Fprintf(os.Stdout, "%s ", out)
+		} else {
+			fmt.Fprintf(os.Stdout, "%s\n", out)
+		}
+	}
 }
 
 // Textf outputs formatted data as pretty-printed format to console for debugging.
 func Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintln(os.Stdout, formatted)
 }
 
 // Exit outputs data as pretty-printed format to console for debugging and then exits the program.
@@ -109,7 +156,7 @@ var (
 	}
 )
 
-// convertValue converts any value to a Json-serializable format.
+// convertValue converts any value to a JSON-serializable format.
 // Simplified version focused on debugging rather than comprehensive type handling.
 func convertValue(v any) any {
 	if v == nil {
@@ -179,7 +226,7 @@ func convertValue(v any) any {
 			}
 		}
 
-		// Try Json marshaling as fallback
+		// Try JSON marshaling as fallback
 		if val.CanInterface() {
 			if data, err := json.Marshal(val.Interface()); err == nil {
 				var result any
@@ -290,7 +337,7 @@ func indexOf(s, sep string) int {
 	return -1
 }
 
-// formatJSONData formats data as Json using intelligent type conversion.
+// formatJSONData formats data as JSON using intelligent type conversion.
 func formatJSONData(data ...any) string {
 	if len(data) == 0 {
 		return "{}"

@@ -702,7 +702,7 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 	jsonLogger, _ := New(jsonConfig)
 	defer jsonLogger.Close()
 
-	b.Run("Json", func(b *testing.B) {
+	b.Run("JSON", func(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			jsonLogger.InfoWith("test",
@@ -714,7 +714,7 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 }
 
 // ============================================================================
-// Json OPTIONS BENCHMARKS
+// JSON OPTIONS BENCHMARKS
 // ============================================================================
 
 func BenchmarkJSONOptions(b *testing.B) {

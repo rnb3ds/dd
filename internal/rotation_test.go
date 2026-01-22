@@ -301,7 +301,9 @@ func TestCleanupOldFiles(t *testing.T) {
 	}
 
 	// Cleanup files older than 1 hour
-	CleanupOldFiles(basePath, time.Hour)
+	if err := CleanupOldFiles(basePath, time.Hour); err != nil {
+		t.Fatalf("CleanupOldFiles failed: %v", err)
+	}
 
 	// Check that old files are removed
 	if _, err := os.Stat(oldFile1); !os.IsNotExist(err) {
@@ -330,7 +332,9 @@ func TestCleanupOldFilesZeroAge(t *testing.T) {
 	}
 
 	// Cleanup with zero age (should not remove anything)
-	CleanupOldFiles(basePath, 0)
+	if err := CleanupOldFiles(basePath, 0); err != nil {
+		t.Fatalf("CleanupOldFiles failed: %v", err)
+	}
 
 	// File should still exist
 	if _, err := os.Stat(testFile); err != nil {

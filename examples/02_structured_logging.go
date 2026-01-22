@@ -30,7 +30,7 @@ func main() {
 	fmt.Println("  • Use type-safe fields (String, Int, Bool) over Any for better performance")
 	fmt.Println("  • Keep 5-10 fields per log entry")
 	fmt.Println("  • Use consistent field names across your application")
-	fmt.Println("  • Json format for production, Text format for development")
+	fmt.Println("  • JSON format for production, Text format for development")
 }
 
 // Example 1: Core field types

@@ -7,6 +7,26 @@ All notable changes to the cybergodev/dd library will be documented in this file
 
 ---
 
+## v1.1.1 - Critical Bug Fixes & API Refinement (2025-01-22)
+
+### Fixed
+- **Race Condition**: Fixed concurrent initialization issue in Default() logger using sync.Once pattern
+- **Error Handling**: Convenience functions (ToFile, ToJSONFile, ToConsole, ToAll) now panic on initialization failure instead of silently failing
+- **Memory Leak**: Fixed silent error handling in CleanupOldFiles, now properly reports cleanup errors
+- **Test Race Condition**: Fixed data race in concurrent writer test using mutex-protected buffer
+- **Documentation Accuracy**: Corrected function names (Json → JSON, Jsonf → JSONF) and added behavior warnings
+
+### Changed
+- **Text/Textf Functions**: Removed caller information for cleaner output (focused on data content only)
+- **Other Debug Functions**: JSON, JSONF, Exit, Exitf retain caller information as before
+
+### Test Results
+- All tests pass ✓
+- Race detector clean ✓
+- No regressions introduced ✓
+
+---
+
 ## v1.1.0 - [Stable version] Comprehensive Testing, Documentation & Quality Enhancement (2026-01-16)
 
 ### Added
