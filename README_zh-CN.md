@@ -288,13 +288,13 @@ dd.Debug / Info / Warn / Error / Fatal (args ...any)
 dd.Debugf / Infof / Warnf / Errorf / Fatalf (format string, args ...any)
 dd.DebugWith / InfoWith / WarnWith / ErrorWith / FatalWith (msg string, fields ...Field)
 
-// 调试可视化（输出到 stdout 并包含调用者信息，而非 log writers）
-dd.Json(data ...any)                    // 输出紧凑 JSON 到控制台
-dd.Jsonf(format string, args ...any)    // 输出格式化 JSON 到控制台
-dd.Text(data ...any)                    // 输出美化文本到控制台
-dd.Textf(format string, args ...any)    // 输出格式化文本到控制台
-dd.Exit(data ...any)                    // 输出文本到控制台并退出程序 (os.Exit(0))
-dd.Exitf(format string, args ...any)    // 输出格式化文本到控制台并退出程序
+// 调试可视化（输出到 stdout 并包含调用者信息）
+dd.JSON(data ...any)                    // 输出紧凑 JSON 到控制台并包含调用者信息
+dd.JSONF(format string, args ...any)    // 输出格式化 JSON 到控制台并包含调用者信息
+dd.Text(data ...any)                    // 输出美化文本到控制台（无调用者信息）
+dd.Textf(format string, args ...any)    // 输出格式化文本到控制台（无调用者信息）
+dd.Exit(data ...any)                    // 输出文本到控制台并包含调用者信息并退出程序 (os.Exit(0))
+dd.Exitf(format string, args ...any)    // 输出格式化文本到控制台并包含调用者信息并退出程序
 
 // 全局 logger 管理
 dd.Default() *Logger
@@ -316,13 +316,13 @@ logger.Debugf / Infof / Warnf / Errorf / Fatalf (format string, args ...any)
 // 结构化日志
 logger.DebugWith / InfoWith / WarnWith / ErrorWith / FatalWith (msg string, fields ...Field)
 
-// 调试可视化（输出到 stdout 并包含调用者信息，而非 log writers）
-logger.Json(data ...any)                    // 输出紧凑 JSON 到控制台
-logger.Jsonf(format string, args ...any)    // 输出格式化 JSON 到控制台
-logger.Text(data ...any)                    // 输出美化文本到控制台
-logger.Textf(format string, args ...any)    // 输出格式化文本到控制台
-logger.Exit(data ...any)                    // 输出文本到控制台并退出程序 (os.Exit(0))
-logger.Exitf(format string, args ...any)    // 输出格式化文本到控制台并退出程序
+// 调试可视化（输出到 stdout 并包含调用者信息）
+logger.JSON(data ...any)                    // 输出紧凑 JSON 到控制台并包含调用者信息
+logger.JSONF(format string, args ...any)    // 输出格式化 JSON 到控制台并包含调用者信息
+logger.Text(data ...any)                    // 输出美化文本到控制台（无调用者信息）
+logger.Textf(format string, args ...any)    // 输出格式化文本到控制台（无调用者信息）
+logger.Exit(data ...any)                    // 输出文本到控制台并包含调用者信息并退出程序 (os.Exit(0))
+logger.Exitf(format string, args ...any)    // 输出格式化文本到控制台并包含调用者信息并退出程序
 
 // fmt 包替换方法（输出到 stdout 并包含调用者信息）
 logger.Println(args ...any)                 // 默认格式输出并带换行和调用者信息
@@ -338,14 +338,16 @@ logger.Close() error
 
 ### 便捷构造函数
 
+> ⚠️ **注意**：`ToFile()`、`ToJSONFile()`、`ToConsole()` 和 `ToAll()` 构造函数在初始化失败时会 **panic**。对于需要错误处理的生产代码，请使用 `dd.NewWithOptions()` 代替。
+
 ```go
-// 快速构造函数（一行代码创建）
+// 快速构造函数（出错时会 panic）
 dd.ToFile(filename ...string) *Logger        // 仅文件（默认 logs/app.log）
 dd.ToJSONFile(filename ...string) *Logger    // 仅 JSON 文件（默认 logs/app.log）
 dd.ToConsole() *Logger                       // 仅控制台
 dd.ToAll(filename ...string) *Logger         // 控制台 + 文件（默认 logs/app.log）
 
-// 标准构造函数
+// 标准构造函数（返回错误）
 dd.New(config *LoggerConfig) (*Logger, error)        // 使用配置对象
 dd.NewWithOptions(opts Options) (*Logger, error)     // 使用 Options 模式
 

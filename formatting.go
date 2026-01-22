@@ -186,7 +186,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 	return internal.FormatJSON(entry, f.getJSONOptions())
 }
 
-// getJSONFieldNames returns the Json field names configuration (thread-safe)
+// getJSONFieldNames returns the JSON field names configuration (thread-safe)
 func (f *MessageFormatter) getJSONFieldNames() *JSONFieldNames {
 	if f.jsonConfig != nil && f.jsonConfig.FieldNames != nil {
 		return internal.MergeWithDefaults((*internal.JSONFieldNames)(f.jsonConfig.FieldNames))
@@ -194,7 +194,7 @@ func (f *MessageFormatter) getJSONFieldNames() *JSONFieldNames {
 	return internal.DefaultJSONFieldNames()
 }
 
-// getJSONOptions returns the Json formatting options (thread-safe)
+// getJSONOptions returns the JSON formatting options (thread-safe)
 func (f *MessageFormatter) getJSONOptions() *internal.JSONOptions {
 	if f.jsonConfig == nil {
 		return &internal.JSONOptions{

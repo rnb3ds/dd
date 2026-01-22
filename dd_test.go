@@ -269,10 +269,10 @@ func TestJSONConfig(t *testing.T) {
 	config := JSONConfig()
 
 	if config.Format != FormatJSON {
-		t.Errorf("Json config format = %v, want %v", config.Format, FormatJSON)
+		t.Errorf("JSON config format = %v, want %v", config.Format, FormatJSON)
 	}
 	if config.JSON == nil {
-		t.Error("Json config should have Json options")
+		t.Error("JSON config should have JSON options")
 	}
 }
 
@@ -516,7 +516,7 @@ func TestJSONLogging(t *testing.T) {
 	logger.Info("test message")
 
 	if !strings.Contains(buf.String(), `"message":"test message"`) {
-		t.Error("Json logging should format as Json")
+		t.Error("JSON logging should format as JSON")
 	}
 }
 
@@ -1592,18 +1592,18 @@ func TestJSONLoggingPipeline(t *testing.T) {
 
 	output := buf.String()
 
-	// Should be valid Json
+	// Should be valid JSON
 	var jsonData map[string]any
 	if err := json.Unmarshal([]byte(output), &jsonData); err != nil {
-		t.Fatalf("Output is not valid Json: %v", err)
+		t.Fatalf("Output is not valid JSON: %v", err)
 	}
 
 	// Should have required fields
 	if jsonData["message"] == nil {
-		t.Error("Json should have message field")
+		t.Error("JSON should have message field")
 	}
 	if jsonData["level"] == nil {
-		t.Error("Json should have level field")
+		t.Error("JSON should have level field")
 	}
 }
 
@@ -1654,7 +1654,7 @@ func TestDebugVisualizationJson(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	Json(map[string]string{"key": "value"})
+	JSON(map[string]string{"key": "value"})
 
 	w.Close()
 	os.Stdout = oldStdout
@@ -1663,9 +1663,9 @@ func TestDebugVisualizationJson(t *testing.T) {
 	buf.ReadFrom(r)
 	output := buf.String()
 
-	// Should be valid Json
+	// Should be valid JSON
 	if !strings.Contains(output, `"key"`) || !strings.Contains(output, `"value"`) {
-		t.Error("Json() should output Json")
+		t.Error("JSON() should output JSON")
 	}
 }
 
@@ -1674,7 +1674,7 @@ func TestDebugVisualizationJsonf(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	Jsonf("test: %s", "formatted")
+	JSONF("test: %s", "formatted")
 
 	w.Close()
 	os.Stdout = oldStdout
@@ -1684,7 +1684,7 @@ func TestDebugVisualizationJsonf(t *testing.T) {
 	output := buf.String()
 
 	if !strings.Contains(output, "test: formatted") {
-		t.Error("Jsonf() should output formatted data as Json")
+		t.Error("JSONF() should output formatted data as JSON")
 	}
 }
 
@@ -1723,17 +1723,17 @@ func TestTypeConverterComplexTypes(t *testing.T) {
 	os.Stdout = w
 
 	// Test slice
-	Json([]int{1, 2, 3})
+	JSON([]int{1, 2, 3})
 
 	// Test map
-	Json(map[string]int{"one": 1, "two": 2})
+	JSON(map[string]int{"one": 1, "two": 2})
 
 	// Test struct
 	type TestStruct struct {
 		Name string `json:"name"`
 		Age  int    `json:"age"`
 	}
-	Json(TestStruct{Name: "John", Age: 30})
+	JSON(TestStruct{Name: "John", Age: 30})
 
 	w.Close()
 	os.Stdout = oldStdout
@@ -1742,9 +1742,9 @@ func TestTypeConverterComplexTypes(t *testing.T) {
 	buf.ReadFrom(r)
 	output := buf.String()
 
-	// Should be valid Json output
+	// Should be valid JSON output
 	if !strings.Contains(output, "[") && !strings.Contains(output, "{") {
-		t.Error("Complex types should be converted to Json")
+		t.Error("Complex types should be converted to JSON")
 	}
 }
 

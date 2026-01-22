@@ -133,7 +133,7 @@ func ToFile(filename ...string) *Logger {
 		File:    getFilename(filename),
 	})
 	if err != nil {
-		return Default()
+		panic(fmt.Sprintf("dd: failed to create file logger: %v", err))
 	}
 	return logger
 }
@@ -141,7 +141,7 @@ func ToFile(filename ...string) *Logger {
 func ToConsole() *Logger {
 	logger, err := NewWithOptions(Options{Console: true})
 	if err != nil {
-		return Default()
+		panic(fmt.Sprintf("dd: failed to create console logger: %v", err))
 	}
 	return logger
 }
@@ -153,7 +153,7 @@ func ToJSONFile(filename ...string) *Logger {
 		File:    getFilename(filename),
 	})
 	if err != nil {
-		return Default()
+		panic(fmt.Sprintf("dd: failed to create JSON file logger: %v", err))
 	}
 	return logger
 }
@@ -164,7 +164,7 @@ func ToAll(filename ...string) *Logger {
 		File:    getFilename(filename),
 	})
 	if err != nil {
-		return Default()
+		panic(fmt.Sprintf("dd: failed to create multi-output logger: %v", err))
 	}
 	return logger
 }

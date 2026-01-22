@@ -288,13 +288,13 @@ dd.Debug / Info / Warn / Error / Fatal (args ...any)
 dd.Debugf / Infof / Warnf / Errorf / Fatalf (format string, args ...any)
 dd.DebugWith / InfoWith / WarnWith / ErrorWith / FatalWith (msg string, fields ...Field)
 
-// Debug visualization (output to stdout with caller info, not to log writers)
-dd.Json(data ...any)                    // Output compact JSON to console
-dd.Jsonf(format string, args ...any)    // Output formatted JSON to console
-dd.Text(data ...any)                    // Output pretty-printed text to console
-dd.Textf(format string, args ...any)    // Output formatted text to console
-dd.Exit(data ...any)                    // Output text to console and exit program (os.Exit(0))
-dd.Exitf(format string, args ...any)    // Output formatted text to console and exit program
+// Debug visualization (output to stdout)
+dd.JSON(data ...any)                    // Output compact JSON to console with caller info
+dd.JSONF(format string, args ...any)    // Output formatted JSON to console with caller info
+dd.Text(data ...any)                    // Output pretty-printed text to console (NO caller info)
+dd.Textf(format string, args ...any)    // Output formatted text to console (NO caller info)
+dd.Exit(data ...any)                    // Output text to console with caller info and exit program (os.Exit(0))
+dd.Exitf(format string, args ...any)    // Output formatted text to console with caller info and exit program
 
 // Global logger management
 dd.Default() *Logger
@@ -316,13 +316,13 @@ logger.Debugf / Infof / Warnf / Errorf / Fatalf (format string, args ...any)
 // Structured logging
 logger.DebugWith / InfoWith / WarnWith / ErrorWith / FatalWith (msg string, fields ...Field)
 
-// Debug visualization (output to stdout with caller info, not to log writers)
-logger.Json(data ...any)                    // Output compact JSON to console
-logger.Jsonf(format string, args ...any)    // Output formatted JSON to console
-logger.Text(data ...any)                    // Output pretty-printed text to console
-logger.Textf(format string, args ...any)    // Output formatted text to console
-logger.Exit(data ...any)                    // Output text to console and exit program (os.Exit(0))
-logger.Exitf(format string, args ...any)    // Output formatted text to console and exit program
+// Debug visualization (output to stdout)
+logger.JSON(data ...any)                    // Output compact JSON to console with caller info
+logger.JSONF(format string, args ...any)    // Output formatted JSON to console with caller info
+logger.Text(data ...any)                    // Output pretty-printed text to console (NO caller info)
+logger.Textf(format string, args ...any)    // Output formatted text to console (NO caller info)
+logger.Exit(data ...any)                    // Output text to console with caller info and exit program (os.Exit(0))
+logger.Exitf(format string, args ...any)    // Output formatted text to console with caller info and exit program
 
 // fmt package replacement methods (output to stdout with caller info)
 logger.Println(args ...any)                 // Default format output with newline and caller info
@@ -338,14 +338,16 @@ logger.Close() error
 
 ### Convenience Constructors
 
+> ⚠️ **Note:** The `ToFile()`, `ToJSONFile()`, `ToConsole()`, and `ToAll()` constructors will **panic** if initialization fails. For production code where you need error handling, use `dd.NewWithOptions()` instead.
+
 ```go
-// Quick constructors (create with one line)
+// Quick constructors (panic on error)
 dd.ToFile(filename ...string) *Logger        // File only (default logs/app.log)
 dd.ToJSONFile(filename ...string) *Logger    // JSON file only (default logs/app.log)
 dd.ToConsole() *Logger                       // Console only
 dd.ToAll(filename ...string) *Logger         // Console + file (default logs/app.log)
 
-// Standard constructors
+// Standard constructors (return error)
 dd.New(config *LoggerConfig) (*Logger, error)        // Use config object
 dd.NewWithOptions(opts Options) (*Logger, error)     // Use Options pattern
 
@@ -388,8 +390,8 @@ dd.NewErrorWith(format, args...) // Create error AND log it
 
 // Buffer Operations - identical to fmt
 dd.AppendFormat(dst, format, args...) // Append formatted to buffer
-dd.Append(dst, args...)               // Append default format to buffer
-dd.Appendln(dst, args...)             // Append with newline to buffer
+dd.Append(dst, args...)                 // Append default format to buffer
+dd.Appendln(dst, args...)               // Append with newline to buffer
 
 // Enhanced Functions with Logging Integration
 dd.PrintfWith(format, args...) // Output to stdout AND log message

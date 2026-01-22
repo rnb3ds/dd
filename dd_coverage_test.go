@@ -214,8 +214,8 @@ func TestLoggerJsonVisualization(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = oldStdout }()
 
-	t.Run("Json", func(t *testing.T) {
-		logger.Json(map[string]string{"key": "value"})
+	t.Run("JSON", func(t *testing.T) {
+		logger.JSON(map[string]string{"key": "value"})
 
 		w.Close()
 		var buf bytes.Buffer
@@ -223,7 +223,7 @@ func TestLoggerJsonVisualization(t *testing.T) {
 		output := buf.String()
 
 		if !strings.Contains(output, `"key"`) || !strings.Contains(output, `"value"`) {
-			t.Error("logger.Json() should output JSON")
+			t.Error("logger.JSON() should output JSON")
 		}
 	})
 }
@@ -237,8 +237,8 @@ func TestLoggerJsonfVisualization(t *testing.T) {
 	os.Stdout = w
 	defer func() { os.Stdout = oldStdout }()
 
-	t.Run("Jsonf", func(t *testing.T) {
-		logger.Jsonf("test: %s", "formatted")
+	t.Run("JSONF", func(t *testing.T) {
+		logger.JSONF("test: %s", "formatted")
 
 		w.Close()
 		var buf bytes.Buffer
@@ -246,7 +246,7 @@ func TestLoggerJsonfVisualization(t *testing.T) {
 		output := buf.String()
 
 		if !strings.Contains(output, "test: formatted") {
-			t.Error("logger.Jsonf() should work")
+			t.Error("logger.JSONF() should work")
 		}
 	})
 }
@@ -552,7 +552,7 @@ func TestFileRotationTrigger(t *testing.T) {
 
 	// Write data to trigger rotation - need to write more than MaxSizeMB
 	largeData := make([]byte, 1024*1024) // 1MB
-	for i := 0; i < 3; i++ { // Write 3MB to ensure rotation triggers
+	for i := 0; i < 3; i++ {             // Write 3MB to ensure rotation triggers
 		n, err := fw.Write(largeData)
 		if err != nil || n != len(largeData) {
 			t.Logf("Write %d: %d bytes, err=%v", i, n, err)
@@ -585,7 +585,7 @@ func TestFileCompressionTrigger(t *testing.T) {
 
 	// Write data to trigger rotation and compression
 	largeData := make([]byte, 1024*1024) // 1MB
-	for i := 0; i < 3; i++ { // Write 3MB to ensure rotation
+	for i := 0; i < 3; i++ {             // Write 3MB to ensure rotation
 		fw.Write(largeData)
 	}
 
@@ -656,10 +656,10 @@ func TestJSONOptionsCustomization(t *testing.T) {
 func TestDynamicCallerDetection(t *testing.T) {
 	var buf bytes.Buffer
 	logger, _ := New(&LoggerConfig{
-		Level:        LevelInfo,
-		Writers:      []io.Writer{&buf},
+		Level:         LevelInfo,
+		Writers:       []io.Writer{&buf},
 		DynamicCaller: true,
-		FullPath:     false,
+		FullPath:      false,
 	})
 
 	logger.Info("test message")
@@ -673,10 +673,10 @@ func TestDynamicCallerDetection(t *testing.T) {
 func TestFullPathCaller(t *testing.T) {
 	var buf bytes.Buffer
 	logger, _ := New(&LoggerConfig{
-		Level:        LevelInfo,
-		Writers:      []io.Writer{&buf},
+		Level:         LevelInfo,
+		Writers:       []io.Writer{&buf},
 		DynamicCaller: true,
-		FullPath:     true,
+		FullPath:      true,
 	})
 
 	logger.Info("test message")
@@ -700,13 +700,26 @@ func TestConcurrentWriterAddRemove(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			var buf bytes.Buffer
-			logger.AddWriter(&buf)
+			// Use a mutex-protected writer to avoid race condition in test
+			buf := &threadSafeBuffer{Buffer: &bytes.Buffer{}}
+			logger.AddWriter(buf)
 			logger.Info("test")
-			logger.RemoveWriter(&buf)
+			logger.RemoveWriter(buf)
 		}(i)
 	}
 	wg.Wait()
+}
+
+// threadSafeBuffer wraps bytes.Buffer with mutex for safe concurrent access
+type threadSafeBuffer struct {
+	mu sync.Mutex
+	*bytes.Buffer
+}
+
+func (b *threadSafeBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
 }
 
 // ============================================================================
