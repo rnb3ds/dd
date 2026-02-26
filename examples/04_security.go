@@ -15,28 +15,29 @@ import (
 // 1. Basic filtering (passwords, API keys, credit cards)
 // 2. Full filtering (emails, IPs, SSNs, database URLs)
 // 3. Custom filtering patterns
-// 4. Message size limits
+// 4. Disable filtering when needed
 func main() {
-	fmt.Println("=== DD Security Features ===\n ")
+	fmt.Println("=== DD Security Features ===\n")
 
 	example1BasicFiltering()
 	example2FullFiltering()
 	example3CustomFiltering()
-	// example4MessageSizeLimit()
+	example4DisableFiltering()
 
 	fmt.Println("\n✅ Security examples completed!")
 	fmt.Println("\nSecurity Tips:")
-	fmt.Println("  • Filtering is disabled by default - enable manually when needed")
-	fmt.Println("  • Use EnableBasicFiltering() for common sensitive data")
+	fmt.Println("  • Basic filtering is enabled by default for security")
 	fmt.Println("  • Use EnableFullFiltering() for comprehensive protection")
+	fmt.Println("  • Use DisableFiltering() only when you need raw data")
 	fmt.Println("  • Log injection protection is always enabled")
 }
 
-// Example 1: Basic filtering
+// Example 1: Basic filtering (enabled by default)
 func example1BasicFiltering() {
-	fmt.Println("1. Basic Filtering")
-	fmt.Println("------------------")
+	fmt.Println("1. Basic Filtering (Default)")
+	fmt.Println("----------------------------")
 
+	// Basic filtering is enabled by default in DefaultSecurityConfig()
 	config := dd.DefaultConfig().EnableBasicFiltering()
 	logger, _ := dd.New(config)
 	defer logger.Close()
@@ -45,16 +46,16 @@ func example1BasicFiltering() {
 	logger.Info("password=secret123")
 	logger.Info("api_key=sk-1234567890abcdef")
 	logger.Info("credit_card=4532015112830366")
-	logger.Info("token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9")
+	logger.Info("phone=+1-415-555-2671")
 
 	// Structured logging with sensitive fields
 	logger.InfoWith("User login",
 		dd.String("username", "john_doe"),
-		dd.String("password", "secret123"), // Filtered
-		dd.String("api_key", "sk-abc123"),  // Filtered
+		dd.String("password", "secret123"), // Filtered by key name
+		dd.String("api_key", "sk-abc123"),  // Filtered by key name
 	)
 
-	fmt.Println("✓ Sensitive data filtered\n ")
+	fmt.Println("✓ Sensitive data filtered\n")
 }
 
 // Example 2: Full filtering
@@ -70,7 +71,6 @@ func example2FullFiltering() {
 	logger.Info("email=user@example.com")
 	logger.Info("ssn=123-45-6789")
 	logger.Info("ip=192.168.1.1")
-	logger.Info("phone=+8613800000000")
 	logger.Info("mysql://user:pass@localhost:3306/db")
 
 	// JWT tokens
@@ -83,7 +83,7 @@ MIIEpAIBAAKCAQEA1234567890...
 -----END RSA PRIVATE KEY-----`
 	logger.Info(privateKey)
 
-	fmt.Println("✓ Comprehensive filtering applied\n ")
+	fmt.Println("✓ Comprehensive filtering applied\n")
 }
 
 // Example 3: Custom filtering patterns
@@ -106,22 +106,38 @@ func example3CustomFiltering() {
 	logger.Info("secret_code=def456")
 	logger.Info("public_data=visible") // Not filtered
 
-	fmt.Println("✓ Custom patterns applied\n ")
+	fmt.Println("✓ Custom patterns applied\n")
 }
 
-// Example 4: Message size limit
-func example4MessageSizeLimit() {
-	fmt.Println("4. Message Size Limit")
+// Example 4: Disable filtering when needed
+func example4DisableFiltering() {
+	fmt.Println("4. Disable Filtering")
+	fmt.Println("--------------------")
+
+	// Disable all filtering (use with caution)
+	config := dd.DefaultConfig().DisableFiltering()
+	logger, _ := dd.New(config)
+	defer logger.Close()
+
+	logger.Info("password=secret123") // Not filtered
+
+	fmt.Println("Note: Use DisableFiltering() only when you need raw data")
+	fmt.Println()
+}
+
+// Example 5: Message size limit (commented out to avoid large output)
+func example5MessageSizeLimit() {
+	fmt.Println("5. Message Size Limit")
 	fmt.Println("---------------------")
 
 	// Default limit is 5MB
-	config1 := dd.DefaultConfig()
-	logger1, _ := dd.New(config1)
-	defer logger1.Close()
+	config := dd.DefaultConfig()
+	logger, _ := dd.New(config)
+	defer logger.Close()
 
 	// Try to log 6MB message (will be truncated)
 	largeMsg := strings.Repeat("A", 6*1024*1024)
-	logger1.Info(largeMsg)
+	logger.Info(largeMsg)
 	fmt.Println("✓ 6MB message truncated to 5MB (default limit)")
 
 	// Custom limit: 1MB
@@ -135,18 +151,6 @@ func example4MessageSizeLimit() {
 	mediumMsg := strings.Repeat("B", 2*1024*1024)
 	logger2.Info(mediumMsg)
 	fmt.Println("✓ 2MB message truncated to 1MB (custom limit)")
-
-	// Custom limit: 10MB
-	config3 := dd.DefaultConfig()
-	config3.SecurityConfig = &dd.SecurityConfig{
-		MaxMessageSize: 10 * 1024 * 1024, // 10MB
-	}
-	logger3, _ := dd.New(config3)
-	defer logger3.Close()
-
-	smallMsg := strings.Repeat("C", 6*1024*1024)
-	logger3.Info(smallMsg)
-	fmt.Println("✓ 6MB message not truncated (10MB limit)")
 
 	fmt.Println()
 }

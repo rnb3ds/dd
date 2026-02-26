@@ -14,16 +14,14 @@ import (
 //
 // This example demonstrates:
 // 1. Core field types (String, Int, Float64, Bool, Err, Any)
-// 2. Production-ready templates for common scenarios
+// 2. Real-world logging templates
 // 3. Best practices for structured logging
 func main() {
-	fmt.Println("=== DD Structured Logging ===\n ")
+	fmt.Println("=== DD Structured Logging ===\n")
 
 	example1CoreFieldTypes()
 	example2HTTPRequestLogging()
-	example3DatabaseOperations()
-	example4BusinessEvents()
-	example5ErrorLogging()
+	example3ErrorLogging()
 
 	fmt.Println("\n✅ Structured logging examples completed!")
 	fmt.Println("\nBest Practices:")
@@ -38,7 +36,11 @@ func example1CoreFieldTypes() {
 	fmt.Println("1. Core Field Types")
 	fmt.Println("-------------------")
 
-	logger := dd.ToJSONFile("logs/structured.log")
+	logger, err := dd.JSONFileLogger("logs/structured.log")
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	logger.InfoWith("All field types",
@@ -56,7 +58,7 @@ func example1CoreFieldTypes() {
 		dd.Any("timestamp", time.Now()),
 	)
 
-	fmt.Println("✓ Logged with all field types\n ")
+	fmt.Println("✓ Logged with all field types\n")
 }
 
 // Example 2: HTTP request logging template
@@ -64,7 +66,11 @@ func example2HTTPRequestLogging() {
 	fmt.Println("2. HTTP Request Logging")
 	fmt.Println("-----------------------")
 
-	logger := dd.ToJSONFile("logs/http.log")
+	logger, err := dd.JSONFileLogger("logs/http.log")
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	// Request received
@@ -84,76 +90,23 @@ func example2HTTPRequestLogging() {
 		dd.Int("response_size", 512),
 	)
 
-	fmt.Println("✓ HTTP request/response logged\n ")
+	fmt.Println("✓ HTTP request/response logged\n")
 }
 
-// Example 3: Database operations template
-func example3DatabaseOperations() {
-	fmt.Println("3. Database Operations")
-	fmt.Println("----------------------")
+// Example 3: Error logging template
+func example3ErrorLogging() {
+	fmt.Println("3. Error & Warning Logging")
+	fmt.Println("--------------------------")
 
-	logger := dd.ToJSONFile("logs/database.log")
+	logger, err := dd.JSONFileLogger("logs/errors.log")
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
-	// Query execution
-	logger.InfoWith("Database query",
-		dd.String("operation", "SELECT"),
-		dd.String("table", "users"),
-		dd.Float64("duration_ms", 12.5),
-		dd.Int("rows", 150),
-		dd.Bool("cache_hit", true),
-	)
-
-	// Insert operation
-	logger.InfoWith("Database insert",
-		dd.String("operation", "INSERT"),
-		dd.String("table", "orders"),
-		dd.String("order_id", "ORD-2024-001"),
-		dd.Float64("duration_ms", 8.3),
-	)
-
-	fmt.Println("✓ Database operations logged\n ")
-}
-
-// Example 4: Business events template
-func example4BusinessEvents() {
-	fmt.Println("4. Business Events")
-	fmt.Println("------------------")
-
-	logger := dd.ToJSONFile("logs/events.log")
-	defer logger.Close()
-
-	// Order created
-	logger.InfoWith("Order created",
-		dd.String("event", "order_created"),
-		dd.String("order_id", "ORD-2024-001"),
-		dd.String("user_id", "user-12345"),
-		dd.Float64("amount", 1459.97),
-		dd.String("currency", "USD"),
-		dd.Int("item_count", 3),
-	)
-
-	// Payment processed
-	logger.InfoWith("Payment processed",
-		dd.String("event", "payment_processed"),
-		dd.String("order_id", "ORD-2024-001"),
-		dd.String("payment_method", "credit_card"),
-		dd.Bool("success", true),
-	)
-
-	fmt.Println("✓ Business events logged\n ")
-}
-
-// Example 5: Error logging template
-func example5ErrorLogging() {
-	fmt.Println("5. Error Logging")
-	fmt.Println("----------------")
-
-	logger := dd.ToJSONFile("logs/errors.log")
-	defer logger.Close()
-
-	// Application error
-	err := errors.New("connection timeout")
+	// Application error with context
+	err = errors.New("connection timeout")
 	logger.ErrorWith("Operation failed",
 		dd.Err(err),
 		dd.String("operation", "user_query"),
@@ -161,7 +114,7 @@ func example5ErrorLogging() {
 		dd.Int("retry_count", 3),
 	)
 
-	// Resource alert
+	// Resource warning
 	logger.WarnWith("Resource alert",
 		dd.String("alert_type", "high_memory"),
 		dd.Float64("memory_percent", 85.5),
@@ -169,5 +122,5 @@ func example5ErrorLogging() {
 		dd.String("host", "app-server-01"),
 	)
 
-	fmt.Println("✓ Errors and alerts logged\n ")
+	fmt.Println("✓ Errors and alerts logged\n")
 }

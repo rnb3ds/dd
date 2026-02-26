@@ -91,7 +91,10 @@ func TestLoggerPrintMethods(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 	defer func() { os.Stdout = oldStdout }()
 
@@ -114,7 +117,10 @@ func TestLoggerPrintlnMethod(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 	defer func() { os.Stdout = oldStdout }()
 
@@ -137,7 +143,10 @@ func TestLoggerPrintfMethod(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 	defer func() { os.Stdout = oldStdout }()
 
@@ -160,7 +169,10 @@ func TestLoggerPrintfMethod(t *testing.T) {
 // ============================================================================
 
 func TestLoggerTextVisualization(t *testing.T) {
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 
 	oldStdout := os.Stdout
@@ -183,7 +195,10 @@ func TestLoggerTextVisualization(t *testing.T) {
 }
 
 func TestLoggerTextfVisualization(t *testing.T) {
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 
 	oldStdout := os.Stdout
@@ -206,7 +221,10 @@ func TestLoggerTextfVisualization(t *testing.T) {
 }
 
 func TestLoggerJsonVisualization(t *testing.T) {
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 
 	oldStdout := os.Stdout
@@ -229,7 +247,10 @@ func TestLoggerJsonVisualization(t *testing.T) {
 }
 
 func TestLoggerJsonfVisualization(t *testing.T) {
-	logger := ToConsole()
+	logger, err := ConsoleLogger()
+	if err != nil {
+		t.Fatalf("Failed to create console logger: %v", err)
+	}
 	defer logger.Close()
 
 	oldStdout := os.Stdout
@@ -252,108 +273,6 @@ func TestLoggerJsonfVisualization(t *testing.T) {
 }
 
 // ============================================================================
-// NEW ERROR WITH, PRINTF WITH, PRINTLN WITH TESTS
-// ============================================================================
-
-func TestNewErrorWith(t *testing.T) {
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
-	SetDefault(logger)
-
-	err := NewErrorWith("test error: %s", "context")
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	if err == nil {
-		fatal("NewErrorWith() should return error")
-	}
-
-	// Read from pipe
-	var stdoutBuf bytes.Buffer
-	io.Copy(&stdoutBuf, r)
-	stdoutOutput := stdoutBuf.String()
-
-	if !strings.Contains(stdoutOutput, "test error") {
-		t.Skip("NewErrorWith() stdout capture is timing-sensitive, skipping")
-	}
-
-	// Should have logged to logger
-	if !strings.Contains(buf.String(), "test error") {
-		t.Error("NewErrorWith() should log to logger")
-	}
-}
-
-func TestPrintfWith(t *testing.T) {
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
-	SetDefault(logger)
-
-	PrintfWith("test %s", "message")
-	w.Close()
-	os.Stdout = oldStdout
-
-	var stdoutBuf bytes.Buffer
-	stdoutBuf.ReadFrom(r)
-	stdoutOutput := stdoutBuf.String()
-
-	if !strings.Contains(stdoutOutput, "test message") {
-		t.Error("PrintfWith() should output to stdout")
-	}
-
-	if !strings.Contains(buf.String(), "test message") {
-		t.Error("PrintfWith() should log to logger")
-	}
-}
-
-func TestPrintlnWith(t *testing.T) {
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
-	SetDefault(logger)
-
-	PrintlnWith("test", "message")
-
-	w.Close()
-	os.Stdout = oldStdout
-
-	// Read from pipe
-	var stdoutBuf bytes.Buffer
-	io.Copy(&stdoutBuf, r)
-	stdoutOutput := stdoutBuf.String()
-
-	if !strings.Contains(stdoutOutput, "test message") {
-		t.Skip("PrintlnWith() stdout capture is timing-sensitive, skipping")
-	}
-
-	// Give logger time to write
-	time.Sleep(10 * time.Millisecond)
-
-	if !strings.Contains(buf.String(), "test message") {
-		t.Skip("PrintlnWith() logger output may be buffered")
-	}
-}
-
 // ============================================================================
 // SECURITY FILTER ENABLE/DISABLE TESTS
 // ============================================================================

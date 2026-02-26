@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,11 +31,8 @@ func Text(data ...any) {
 		return
 	}
 
-	buf := debugBufPool.Get().(*bytes.Buffer)
-	defer func() {
-		buf.Reset()
-		debugBufPool.Put(buf)
-	}()
+	buf := newDebugBuffer()
+	defer buf.Release()
 
 	encoder := json.NewEncoder(buf)
 	encoder.SetEscapeHTML(false)
@@ -103,26 +101,7 @@ func isSimpleType(v any) bool {
 		return true
 	}
 
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
-
-	if kind == reflect.Ptr {
-		if val.IsNil() {
-			return true
-		}
-		val = val.Elem()
-		kind = val.Kind()
-	}
-
-	switch kind {
-	case reflect.String, reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return true
-	default:
-		return false
-	}
+	return !internal.IsComplexValue(v)
 }
 
 func formatSimpleValue(v any) string {
@@ -155,6 +134,33 @@ var (
 		},
 	}
 )
+
+// debugBuffer is a helper type that manages getting and returning a buffer from the pool.
+type debugBuffer struct {
+	*bytes.Buffer
+}
+
+func newDebugBuffer() *debugBuffer {
+	return &debugBuffer{Buffer: debugBufPool.Get().(*bytes.Buffer)}
+}
+
+func (b *debugBuffer) Release() {
+	if b.Buffer != nil {
+		b.Reset()
+		debugBufPool.Put(b.Buffer)
+		b.Buffer = nil
+	}
+}
+
+// withDebugBuffer is a helper function for buffer pool operations.
+func withDebugBuffer(fn func(*bytes.Buffer)) {
+	buf := debugBufPool.Get().(*bytes.Buffer)
+	defer func() {
+		buf.Reset()
+		debugBufPool.Put(buf)
+	}()
+	fn(buf)
+}
 
 // convertValue converts any value to a JSON-serializable format.
 // Simplified version focused on debugging rather than comprehensive type handling.
@@ -302,9 +308,10 @@ func convertStruct(val reflect.Value) any {
 
 		fieldName := fieldType.Name
 		if tag := fieldType.Tag.Get("json"); tag != "" && tag != "-" {
-			if tagName, _, found := cut(tag, ","); found {
+			tagName, _, found := strings.Cut(tag, ",")
+			if found && tagName != "" {
 				fieldName = tagName
-			} else {
+			} else if !found && tag != "" {
 				fieldName = tag
 			}
 			if fieldName == "" {
@@ -320,23 +327,6 @@ func convertStruct(val reflect.Value) any {
 	return result
 }
 
-// cut is a simplified version of strings.Cut to avoid dependency.
-func cut(s, sep string) (before, after string, found bool) {
-	if i := indexOf(s, sep); i >= 0 {
-		return s[:i], s[i+len(sep):], true
-	}
-	return s, "", false
-}
-
-func indexOf(s, sep string) int {
-	for i := 0; i <= len(s)-len(sep); i++ {
-		if s[i:i+len(sep)] == sep {
-			return i
-		}
-	}
-	return -1
-}
-
 // formatJSONData formats data as JSON using intelligent type conversion.
 func formatJSONData(data ...any) string {
 	if len(data) == 0 {
@@ -344,11 +334,8 @@ func formatJSONData(data ...any) string {
 	}
 
 	if len(data) == 1 {
-		buf := debugBufPool.Get().(*bytes.Buffer)
-		defer func() {
-			buf.Reset()
-			debugBufPool.Put(buf)
-		}()
+		buf := newDebugBuffer()
+		defer buf.Release()
 
 		converted := convertValue(data[0])
 
@@ -387,11 +374,8 @@ func formatJSONData(data ...any) string {
 		}
 	}
 
-	buf := debugBufPool.Get().(*bytes.Buffer)
-	defer func() {
-		buf.Reset()
-		debugBufPool.Put(buf)
-	}()
+	buf := newDebugBuffer()
+	defer buf.Release()
 
 	encoder := json.NewEncoder(buf)
 	encoder.SetEscapeHTML(false)
@@ -427,11 +411,8 @@ func outputText(caller string, data ...any) {
 
 	fmt.Fprint(os.Stdout, caller)
 
-	buf := debugBufPool.Get().(*bytes.Buffer)
-	defer func() {
-		buf.Reset()
-		debugBufPool.Put(buf)
-	}()
+	buf := newDebugBuffer()
+	defer buf.Release()
 
 	encoder := json.NewEncoder(buf)
 	encoder.SetEscapeHTML(false)

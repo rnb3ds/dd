@@ -299,6 +299,10 @@ dd.Exitf(format string, args ...any)    // Output formatted text to console with
 // Global logger management
 dd.Default() *Logger
 dd.SetDefault(logger *Logger)
+
+// Level management
+dd.SetLevel(level LogLevel)              // Set log level for default logger
+dd.GetLevel() LogLevel                   // Get current log level of default logger
 ```
 
 ### Logging Instance Methods
@@ -483,8 +487,13 @@ dd.LevelFatal  // Fatal error (calls os.Exit(1) to terminate program)
 
 **Dynamic Level Adjustment**:
 ```go
+// Instance methods
 logger.SetLevel(dd.LevelDebug)  // Adjust at runtime
 currentLevel := logger.GetLevel()
+
+// Package-level functions (for default logger)
+dd.SetLevel(dd.LevelDebug)      // Set default logger level
+currentLevel := dd.GetLevel()   // Get default logger level
 ```
 
 ### Output Formats

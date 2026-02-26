@@ -18,7 +18,7 @@ import (
 // 3. JSON customization
 // 4. Production-ready configurations
 func main() {
-	fmt.Println("=== DD Configuration ===\n ")
+	fmt.Println("=== DD Configuration ===\n")
 
 	example1PresetConfigs()
 	example2FileRotation()
@@ -58,12 +58,16 @@ func example2FileRotation() {
 	fmt.Println("----------------")
 
 	// Basic rotation with size, age, and backup limits
-	config, _ := dd.DefaultConfig().WithFile("logs/app.log", dd.FileWriterConfig{
+	config, err := dd.DefaultConfig().WithFile("logs/app.log", dd.FileWriterConfig{
 		MaxSizeMB:  10,                 // Rotate at 10MB
 		MaxBackups: 5,                  // Keep 5 old files
 		MaxAge:     7 * 24 * time.Hour, // Delete after 7 days
 		Compress:   true,               // Compress old logs (.gz)
 	})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
 
 	logger, _ := dd.New(config)
 	defer logger.Close()
@@ -109,7 +113,7 @@ func example3JSONCustomization() {
 	fmt.Println()
 }
 
-// Example 4: Production setup
+// Example 4: Production setup with multiple loggers
 func example4ProductionSetup() {
 	fmt.Println("4. Production Setup")
 	fmt.Println("The log is saved in the `logs` directory.")
@@ -151,25 +155,6 @@ func example4ProductionSetup() {
 		dd.Err(fmt.Errorf("connection timeout")),
 		dd.String("host", "db.example.com"),
 		dd.Int("port", 5432),
-	)
-
-	// Access logger: high volume, shorter retention
-	accessConfig := dd.JSONConfig()
-	accessConfig, _ = accessConfig.WithFileOnly("logs/access.log", dd.FileWriterConfig{
-		MaxSizeMB:  500,
-		MaxBackups: 20,
-		MaxAge:     14 * 24 * time.Hour,
-		Compress:   true,
-	})
-
-	accessLogger, _ := dd.New(accessConfig)
-	defer accessLogger.Close()
-
-	accessLogger.InfoWith("HTTP request",
-		dd.String("method", "GET"),
-		dd.String("path", "/api/users"),
-		dd.Int("status", 200),
-		dd.String("ip", "192.168.1.100"),
 	)
 
 	fmt.Println()

@@ -21,17 +21,18 @@ func DefaultJSONOptions() *JSONOptions {
 }
 
 type LoggerConfig struct {
-	Level          LogLevel
-	Format         LogFormat
-	TimeFormat     string
-	IncludeTime    bool
-	IncludeLevel   bool
-	FullPath       bool
-	DynamicCaller  bool
-	Writers        []io.Writer
-	SecurityConfig *SecurityConfig
-	FatalHandler   FatalHandler
-	JSON           *JSONOptions
+	Level             LogLevel
+	Format            LogFormat
+	TimeFormat        string
+	IncludeTime       bool
+	IncludeLevel      bool
+	FullPath          bool
+	DynamicCaller     bool
+	Writers           []io.Writer
+	SecurityConfig    *SecurityConfig
+	FatalHandler      FatalHandler
+	WriteErrorHandler WriteErrorHandler
+	JSON              *JSONOptions
 }
 
 func DefaultConfig() *LoggerConfig {
@@ -76,21 +77,25 @@ func JSONConfig() *LoggerConfig {
 	}
 }
 
+// Clone creates a shallow copy of the configuration.
+// Note: The Writers slice is copied but the Writer instances themselves are shared.
+// SecurityConfig is deep-copied.
 func (c *LoggerConfig) Clone() *LoggerConfig {
 	if c == nil {
 		return DefaultConfig()
 	}
 
 	clone := &LoggerConfig{
-		Level:         c.Level,
-		Format:        c.Format,
-		TimeFormat:    c.TimeFormat,
-		IncludeTime:   c.IncludeTime,
-		IncludeLevel:  c.IncludeLevel,
-		FullPath:      c.FullPath,
-		DynamicCaller: c.DynamicCaller,
-		FatalHandler:  c.FatalHandler,
-		Writers:       make([]io.Writer, len(c.Writers)),
+		Level:             c.Level,
+		Format:            c.Format,
+		TimeFormat:        c.TimeFormat,
+		IncludeTime:       c.IncludeTime,
+		IncludeLevel:      c.IncludeLevel,
+		FullPath:          c.FullPath,
+		DynamicCaller:     c.DynamicCaller,
+		FatalHandler:      c.FatalHandler,
+		WriteErrorHandler: c.WriteErrorHandler,
+		Writers:           make([]io.Writer, len(c.Writers)),
 	}
 	copy(clone.Writers, c.Writers)
 
@@ -123,11 +128,11 @@ func (c *LoggerConfig) Validate() error {
 	}
 
 	if c.Level < LevelDebug || c.Level > LevelFatal {
-		return fmt.Errorf("%w: %d", ErrInvalidLevel, c.Level)
+		return fmt.Errorf("%w: %d (valid range: %d-%d)", ErrInvalidLevel, c.Level, LevelDebug, LevelFatal)
 	}
 
 	if c.Format != FormatText && c.Format != FormatJSON {
-		return fmt.Errorf("%w: %d", ErrInvalidFormat, c.Format)
+		return fmt.Errorf("%w: %d (valid: %d=Text, %d=JSON)", ErrInvalidFormat, c.Format, FormatText, FormatJSON)
 	}
 
 	return nil
@@ -255,6 +260,9 @@ func (c *LoggerConfig) WithDynamicCaller(enabled bool) *LoggerConfig {
 	return clone
 }
 
+// DisableFiltering disables all sensitive data filtering.
+// Note: Basic filtering is enabled by default for security.
+// Use this method if you need to log raw data without any filtering.
 func (c *LoggerConfig) DisableFiltering() *LoggerConfig {
 	if c == nil {
 		return nil
@@ -292,6 +300,15 @@ func (c *LoggerConfig) WithFilter(filter *SensitiveDataFilter) *LoggerConfig {
 	clone := c.Clone()
 	clone.ensureSecurityConfig()
 	clone.SecurityConfig.SensitiveFilter = filter
+	return clone
+}
+
+func (c *LoggerConfig) WithWriteErrorHandler(handler WriteErrorHandler) *LoggerConfig {
+	if c == nil {
+		return nil
+	}
+	clone := c.Clone()
+	clone.WriteErrorHandler = handler
 	return clone
 }
 

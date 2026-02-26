@@ -3,6 +3,7 @@ package dd
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -42,16 +43,18 @@ var allPatterns = []patternDefinition{
 	{`(?i)((?:oracle|tns|sid)[\s=:]+)[^\s]{1,100}\b`, false},
 	{`(?i)(?:[\w.-]+:[\w.-]+@)(?:[\w.-]+|\([^\)]+\))(?::\d+)?(?:/[\w.-]+)?`, false},
 	// Phone numbers - global patterns
+	// These patterns are designed to be specific enough to avoid false positives
+	// on short numeric strings like "12345" or years like "2024".
+	// Standalone 11-digit numbers (e.g., Chinese mobile) are NOT filtered to avoid
+	// matching order IDs, timestamps, or user IDs. Use field-based filtering
+	// (phone:, mobile:, etc.) for those cases.
 	{`(?i)((?:phone|mobile|tel|telephone|cell|cellular|fax|contact|number)[\s:=]+)[\+]?[(]?\d{1,4}[)]?[-\s.]?\(?\d{1,4}\)?[-\s.]?\d{1,9}[-\s.]?\d{0,9}\b`, true},
-	{`\+\d{1,3}[- ]?\d{6,14}\b`, true},                            // International: +XXXXXXXXXXXX (without word boundary)
-	{`\+[\d\s\-\(\)]{7,}\b`, true},                                // International phone with + and any format (7+ chars total)
-	{`\b00[1-9]\d{6,14}\b`, true},                                 // 00 prefix international
-	{`\b(?:\(\d{3}\)\s?|\d{3}[-.\s]?)?\d{3}[-.\s]?\d{4}\b`, true}, // Minimum 7 digits for NANP
-	{`\b\d{10,}\b`, true},                                         // Standalone 10+ digit numbers (matches most international formats)
-	{`\b\d{3,5}[- ]\d{4,8}\b`, true},                              // Phone numbers with separators (7-13 digits total)
-	{`\b0\d{3,5}[- ]?\d{4,8}\b`, true},                            // Starting with 0 and separators (10+ digits total)
-	// General international format with various separators (minimum 7 digits)
-	{`\b(?:\+\d{1,3}[-\s]?)?\(?\d{1,4}\)?[-\s]?\d{3,4}([-]\s]?\d{0,4})?\b`, true},
+	{`\+\d{1,3}[- ]?\d{6,14}\b`, true},                          // International: +XXXXXXXXXXXX (7-15 digits after +)
+	{`\+[\d\s\-\(\)]{7,}\b`, true},                              // International phone with + and formatting (7+ chars total)
+	{`\b00[1-9]\d{6,14}\b`, true},                               // 00 prefix international (8-16 digits total)
+	{`\b(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]?\d{4}\b`, true}, // NANP with required separator: (415) 555-2671 or 415-555-2671
+	{`\b\d{3,5}[- ]\d{4,8}\b`, true},                            // Phone numbers with separators (7-13 digits total)
+	{`\b0\d{3,5}[- ]?\d{4,8}\b`, true},                          // Starting with 0 and separators (10+ digits total)
 }
 
 type SensitiveDataFilter struct {
@@ -123,42 +126,158 @@ func (f *SensitiveDataFilter) addPattern(pattern string) error {
 }
 
 // hasNestedQuantifiers checks for regex patterns with nested quantifiers
-// that can cause exponential backtracking (ReDoS vulnerability)
+// that can cause exponential backtracking (ReDoS vulnerability).
+// Returns true if dangerous patterns like (a+)+, a++, or a{1,10000} are found.
 func hasNestedQuantifiers(pattern string) bool {
-	// Look for patterns like (a+)+, (a*)*, (a+)?+, etc.
-	// These can cause catastrophic backtracking
-	nestedCount := 0
-	inGroup := false
+	// Track consecutive quantifiers
+	prevWasQuantifier := false
+
+	// Track if the content inside a group ends with a quantifier
+	// This helps detect (a+)+ patterns
+	groupEndsWithQuantifier := make(map[int]bool)
+	// Track if a group contains alternation with quantified parts
+	groupHasQuantifiedAlternation := make(map[int]bool)
+	depth := 0
 
 	for i := 0; i < len(pattern); i++ {
 		c := pattern[i]
 
 		switch c {
 		case '(':
-			inGroup = true
+			depth++
+			prevWasQuantifier = false
+			groupEndsWithQuantifier[depth] = false
+			groupHasQuantifiedAlternation[depth] = false
 		case ')':
-			if inGroup {
-				inGroup = false
+			if depth > 0 {
+				// Check if this group is followed by a repeating quantifier (+, *, {n,})
+				// AND the group content ends with a quantifier or has quantified alternation
+				if i+1 < len(pattern) && (groupEndsWithQuantifier[depth] || groupHasQuantifiedAlternation[depth]) {
+					next := pattern[i+1]
+					// Only + and * are dangerous when applied to a quantified group
+					// ? is safe because it's optional (no repetition)
+					if next == '+' || next == '*' {
+						return true
+					}
+					if next == '{' {
+						// Check for {0,} or {1,} which are equivalent to * or +
+						end := strings.Index(pattern[i+1:], "}")
+						if end != -1 {
+							rangeContent := pattern[i+2 : i+1+end]
+							if strings.HasSuffix(rangeContent, ",") ||
+								strings.Contains(rangeContent, ",") && !strings.Contains(rangeContent[len(strings.Split(rangeContent, ",")[0]):], "0") {
+								// Patterns like {1,} or {0,} can cause backtracking
+								return true
+							}
+						}
+					}
+				}
+				delete(groupEndsWithQuantifier, depth)
+				delete(groupHasQuantifiedAlternation, depth)
+				depth--
 			}
+			prevWasQuantifier = false
+		case '|':
+			// Alternation - if we have a quantifier before this, mark the group
+			if depth > 0 && prevWasQuantifier {
+				groupHasQuantifiedAlternation[depth] = true
+			}
+			prevWasQuantifier = false
 		case '+', '*', '?':
-			// Check if this quantifier is followed by another quantifier
-			if i+1 < len(pattern) {
-				next := pattern[i+1]
-				if next == '+' || next == '*' || next == '?' || next == '{' {
-					return true // Nested quantifier found
-				}
+			// Check for consecutive quantifiers (e.g., a++, a*?)
+			if prevWasQuantifier {
+				return true
 			}
-			// Check for quantifier after group
-			if inGroup && i > 0 && (pattern[i-1] == ')' || pattern[i-1] == ']' || pattern[i-1] == '}') {
-				nestedCount++
-				if nestedCount > 1 {
-					return true // Multiple nested quantifiers
+			// Mark that current depth ends with a quantifier
+			if depth > 0 {
+				groupEndsWithQuantifier[depth] = true
+			}
+			prevWasQuantifier = true
+		case '{':
+			// Find the closing brace
+			end := strings.Index(pattern[i:], "}")
+			if end != -1 {
+				// Check for consecutive quantifier like a{1,2}+
+				if prevWasQuantifier {
+					return true
 				}
+
+				// Check for excessive quantifier range
+				rangeContent := pattern[i+1 : i+end]
+				if err := validateQuantifierRange(rangeContent); err != nil {
+					return true
+				}
+
+				// Mark that current depth ends with a quantifier
+				if depth > 0 {
+					groupEndsWithQuantifier[depth] = true
+				}
+				prevWasQuantifier = true
+				i += end
+			}
+		default:
+			// Reset for non-special characters (but not for \, |, ^, $, ., [, ])
+			if c != '\\' && c != '|' && c != '^' && c != '$' && c != '.' {
+				prevWasQuantifier = false
 			}
 		}
 	}
 
 	return false
+}
+
+// validateQuantifierRange checks if a quantifier range is within safe limits.
+func validateQuantifierRange(rangeStr string) error {
+	parts := strings.Split(rangeStr, ",")
+
+	// Parse the maximum value
+	var maxVal int
+	var err error
+
+	if len(parts) == 1 {
+		// Exact count: {n}
+		maxVal, err = parseInt(parts[0])
+	} else if len(parts) == 2 {
+		// Range: {n,m} or {n,}
+		if parts[1] == "" {
+			// Open-ended range {n,} - dangerous, but handled elsewhere
+			return nil
+		}
+		maxVal, err = parseInt(parts[1])
+	} else {
+		return fmt.Errorf("invalid quantifier range")
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if maxVal > MaxQuantifierRange {
+		return fmt.Errorf("quantifier range %d exceeds maximum %d", maxVal, MaxQuantifierRange)
+	}
+
+	return nil
+}
+
+// parseInt safely parses an integer from a string.
+func parseInt(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty number")
+	}
+
+	var result int
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid character in number")
+		}
+		result = result*10 + int(c-'0')
+		// Early exit for very large numbers
+		if result > MaxQuantifierRange*10 {
+			return result, nil
+		}
+	}
+	return result, nil
 }
 
 func (f *SensitiveDataFilter) AddPattern(pattern string) error {
@@ -311,18 +430,23 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	case res := <-done:
 		return res.output
 	case <-ctx.Done():
+		// Note: The goroutine may continue running in the background.
+		// For safety, we return [REDACTED] to ensure sensitive data is not leaked.
 		return "[REDACTED]"
 	}
 }
 
 func (f *SensitiveDataFilter) filterInChunks(input string, pattern *regexp.Regexp) string {
-	const chunkSize = 1024
+	const chunkSize = 4096
+
 	inputLen := len(input)
 
 	if inputLen <= chunkSize {
 		return f.replaceWithPattern(input, pattern)
 	}
 
+	// Process input in non-overlapping chunks for efficiency.
+	// Patterns spanning chunk boundaries will be caught by the final pass.
 	var result strings.Builder
 	result.Grow(inputLen)
 
@@ -333,7 +457,9 @@ func (f *SensitiveDataFilter) filterInChunks(input string, pattern *regexp.Regex
 		result.WriteString(filtered)
 	}
 
-	return result.String()
+	// Final pass to catch any patterns that might have been split across chunk boundaries
+	resultStr := result.String()
+	return f.replaceWithPattern(resultStr, pattern)
 }
 
 func (f *SensitiveDataFilter) replaceWithPattern(input string, pattern *regexp.Regexp) string {
@@ -343,62 +469,80 @@ func (f *SensitiveDataFilter) replaceWithPattern(input string, pattern *regexp.R
 	return pattern.ReplaceAllString(input, "[REDACTED]")
 }
 
-func (f *SensitiveDataFilter) FilterValue(value any) any {
-	if f == nil || !f.enabled.Load() {
-		return value
-	}
-	if str, ok := value.(string); ok {
-		return f.Filter(str)
-	}
-	return value
-}
-
+// sensitiveKeywords contains field names that indicate sensitive data.
+// These keywords support both exact match and substring matching.
+// For short keywords that may cause false positives (e.g., "db", "url"),
+// use exactMatchOnlyKeywords instead.
+//
+// Categories:
+//   - Credentials: password, passwd, pwd, secret, token, bearer, auth, authorization
+//   - API Keys: api_key, apikey, api-key, access_key, accesskey, access-key
+//   - Secrets: secret_key, secretkey, secret-key, private_key, privatekey, private-key
+//   - PII: credit_card, creditcard, ssn, social_security
+//   - Contact: phone, telephone, mobile, cell, cellular, tel, fax, contact
 var sensitiveKeywords = map[string]struct{}{
-	"password":        {},
-	"passwd":          {},
-	"pwd":             {},
-	"secret":          {},
-	"token":           {},
-	"bearer":          {},
-	"api_key":         {},
-	"apikey":          {},
-	"api-key":         {},
-	"access_key":      {},
-	"accesskey":       {},
-	"access-key":      {},
-	"secret_key":      {},
-	"secretkey":       {},
-	"secret-key":      {},
-	"private_key":     {},
-	"privatekey":      {},
-	"private-key":     {},
-	"auth":            {},
-	"authorization":   {},
+	// Credentials
+	"password":      {},
+	"passwd":        {},
+	"pwd":           {},
+	"secret":        {},
+	"token":         {},
+	"bearer":        {},
+	"auth":          {},
+	"authorization": {},
+
+	// API Keys
+	"api_key":    {},
+	"apikey":     {},
+	"api-key":    {},
+	"access_key": {},
+	"accesskey":  {},
+	"access-key": {},
+
+	// Secrets
+	"secret_key":  {},
+	"secretkey":   {},
+	"secret-key":  {},
+	"private_key": {},
+	"privatekey":  {},
+	"private-key": {},
+
+	// Personal Identifiable Information (PII)
 	"credit_card":     {},
 	"creditcard":      {},
 	"ssn":             {},
 	"social_security": {},
-	"phone":           {},
-	"telephone":       {},
-	"mobile":          {},
-	"cell":            {},
-	"cellular":        {},
-	"tel":             {},
-	"fax":             {},
-	"contact":         {},
-	"phonenumber":     {},
-	"phone_number":    {},
-	"connection":      {},
-	"conn":            {},
-	"dsn":             {},
-	"database":        {},
-	"db":              {},
-	"host":            {},
-	"hostname":        {},
-	"server":          {},
-	"uri":             {},
-	"url":             {},
-	"endpoint":        {},
+
+	// Contact Information
+	"phone":        {},
+	"telephone":    {},
+	"mobile":       {},
+	"cell":         {},
+	"cellular":     {},
+	"tel":          {},
+	"fax":          {},
+	"contact":      {},
+	"phonenumber":  {},
+	"phone_number": {},
+
+	// Database/Connection Strings (longer forms that are less likely to cause false positives)
+	"connection": {},
+	"database":   {},
+	"hostname":   {},
+	"endpoint":   {},
+}
+
+// exactMatchOnlyKeywords contains keywords that should only match exactly.
+// These are typically short words that could cause false positives with substring matching.
+// For example, "db" should not match "mongodb", and "url" should not match "curl".
+var exactMatchOnlyKeywords = map[string]struct{}{
+	// Short words that need exact matching to avoid false positives
+	"conn": {},
+	"dsn":  {},
+	"db":   {},
+	"host": {},
+	"uri":  {},
+	"url":  {},
 }
 
 func isSensitiveKey(key string) bool {
@@ -407,12 +551,16 @@ func isSensitiveKey(key string) bool {
 	}
 	lowerKey := strings.ToLower(key)
 
-	// Direct match check
+	// Check exact match for all keywords
 	if _, exists := sensitiveKeywords[lowerKey]; exists {
 		return true
 	}
+	if _, exists := exactMatchOnlyKeywords[lowerKey]; exists {
+		return true
+	}
 
-	// Substring match check for compound keys like "api_key", "access_token", etc.
+	// Substring match for compound keys like "user_password", "api_key_secret", etc.
+	// Only use sensitiveKeywords (not exactMatchOnlyKeywords) for substring matching
 	for keyword := range sensitiveKeywords {
 		if strings.Contains(lowerKey, keyword) {
 			return true
@@ -436,6 +584,146 @@ func (f *SensitiveDataFilter) FilterFieldValue(key string, value any) any {
 	}
 
 	return f.Filter(str)
+}
+
+// FilterValueRecursive recursively filters sensitive data from nested structures.
+// It processes maps, slices, arrays, and structs to filter sensitive values.
+// Circular references are detected and replaced with "[CIRCULAR_REFERENCE]".
+// Maximum recursion depth is limited to MaxRecursionDepth to prevent stack overflow.
+func (f *SensitiveDataFilter) FilterValueRecursive(key string, value any) any {
+	return f.filterValueRecursiveInternal(key, value, make(map[uintptr]bool), 0)
+}
+
+// filterValueRecursiveInternal is the internal implementation with circular reference detection.
+func (f *SensitiveDataFilter) filterValueRecursiveInternal(key string, value any, visited map[uintptr]bool, depth int) any {
+	if f == nil || !f.enabled.Load() {
+		return value
+	}
+
+	// Check recursion depth to prevent stack overflow on deeply nested structures
+	if depth > MaxRecursionDepth {
+		return "[MAX_DEPTH_EXCEEDED]"
+	}
+
+	// Handle nil values
+	if value == nil {
+		return nil
+	}
+
+	// Check if the key itself is sensitive
+	if isSensitiveKey(key) {
+		return "[REDACTED]"
+	}
+
+	// Handle string values directly
+	if str, ok := value.(string); ok {
+		return f.Filter(str)
+	}
+
+	// Use reflection for complex types
+	val := reflect.ValueOf(value)
+	if !val.IsValid() {
+		return value
+	}
+
+	kind := val.Kind()
+
+	// Handle pointers - check for circular references
+	if kind == reflect.Ptr {
+		if val.IsNil() {
+			return nil
+		}
+		ptr := val.Pointer()
+		if visited[ptr] {
+			return "[CIRCULAR_REFERENCE]"
+		}
+		visited[ptr] = true
+		return f.filterValueRecursiveInternal(key, val.Elem().Interface(), visited, depth+1)
+	}
+
+	// Handle interfaces
+	if kind == reflect.Interface {
+		if val.IsNil() {
+			return nil
+		}
+		return f.filterValueRecursiveInternal(key, val.Elem().Interface(), visited, depth+1)
+	}
+
+	// Handle slices and arrays
+	if kind == reflect.Slice || kind == reflect.Array {
+		if val.Len() == 0 {
+			if kind == reflect.Slice {
+				return []any{}
+			}
+			return value
+		}
+		// Check for circular reference in slice pointer
+		if kind == reflect.Slice {
+			ptr := val.Pointer()
+			if visited[ptr] {
+				return "[CIRCULAR_REFERENCE]"
+			}
+			visited[ptr] = true
+		}
+		result := make([]any, val.Len())
+		for i := 0; i < val.Len(); i++ {
+			result[i] = f.filterValueRecursiveInternal("", val.Index(i).Interface(), visited, depth+1)
+		}
+		return result
+	}
+
+	// Handle maps
+	if kind == reflect.Map {
+		if val.IsNil() {
+			return nil
+		}
+		// Check for circular reference in map pointer
+		ptr := val.Pointer()
+		if visited[ptr] {
+			return "[CIRCULAR_REFERENCE]"
+		}
+		visited[ptr] = true
+		result := make(map[string]any, val.Len())
+		for _, mapKey := range val.MapKeys() {
+			keyStr := fmt.Sprintf("%v", mapKey.Interface())
+			mapValue := val.MapIndex(mapKey).Interface()
+			result[keyStr] = f.filterValueRecursiveInternal(keyStr, mapValue, visited, depth+1)
+		}
+		return result
+	}
+
+	// Handle structs
+	if kind == reflect.Struct {
+		result := make(map[string]any)
+		typ := val.Type()
+		for i := 0; i < val.NumField(); i++ {
+			field := val.Field(i)
+			fieldType := typ.Field(i)
+
+			// Skip unexported fields
+			if !field.CanInterface() {
+				continue
+			}
+
+			fieldName := fieldType.Name
+			// Check for json tag
+			if tag := fieldType.Tag.Get("json"); tag != "" && tag != "-" {
+				if commaIdx := strings.Index(tag, ","); commaIdx >= 0 {
+					if tagName := tag[:commaIdx]; tagName != "" {
+						fieldName = tagName
+					}
+				} else if tag != "" {
+					fieldName = tag
+				}
+			}
+
+			result[fieldName] = f.filterValueRecursiveInternal(fieldName, field.Interface(), visited, depth+1)
+		}
+		return result
+	}
+
+	// For other types, return as-is
+	return value
 }
 
 type SecurityConfig struct {
@@ -476,14 +764,21 @@ func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
 	return filter
 }
 
+// DefaultSecurityConfig returns a security config with basic sensitive data filtering enabled.
+// This provides out-of-the-box protection for common sensitive data like passwords,
+// API keys, credit cards, and phone numbers.
 func DefaultSecurityConfig() *SecurityConfig {
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
 		MaxWriters:      MaxWriterCount,
-		SensitiveFilter: nil,
+		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 }
 
+// SecureSecurityConfig returns a security config with full sensitive data filtering enabled.
+// This includes all patterns from basic filtering plus additional patterns for
+// emails, IP addresses, JWT tokens, and database connection strings.
+// Use this for maximum security in production environments.
 func SecureSecurityConfig() *SecurityConfig {
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,

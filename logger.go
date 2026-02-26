@@ -37,13 +37,16 @@ const (
 
 type FatalHandler func()
 
+type WriteErrorHandler func(writer io.Writer, err error)
+
 type Logger struct {
 	level  atomic.Int32
 	closed atomic.Bool
 
-	callerDepth  int
-	fatalHandler FatalHandler
-	formatter    *MessageFormatter
+	callerDepth       int
+	fatalHandler      FatalHandler
+	writeErrorHandler atomic.Value // stores WriteErrorHandler
+	formatter         *MessageFormatter
 
 	writers        []io.Writer
 	mu             sync.RWMutex
@@ -80,6 +83,10 @@ func New(configs ...*LoggerConfig) (*Logger, error) {
 		cancel:       cancel,
 	}
 
+	if config.WriteErrorHandler != nil {
+		l.writeErrorHandler.Store(config.WriteErrorHandler)
+	}
+
 	l.level.Store(int32(config.Level))
 	l.securityConfig.Store(config.SecurityConfig)
 
@@ -106,6 +113,25 @@ func (l *Logger) SetLevel(level LogLevel) error {
 		return ErrInvalidLevel
 	}
 	l.level.Store(int32(level))
+	return nil
+}
+
+// SetWriteErrorHandler sets a callback for handling write errors (thread-safe).
+// When a write operation fails, the handler is called with the writer and error.
+// If no handler is set, write errors are silently ignored.
+func (l *Logger) SetWriteErrorHandler(handler WriteErrorHandler) {
+	if handler != nil {
+		l.writeErrorHandler.Store(handler)
+	} else {
+		l.writeErrorHandler.Store(nil)
+	}
+}
+
+// getWriteErrorHandler returns the current write error handler (thread-safe).
+func (l *Logger) getWriteErrorHandler() WriteErrorHandler {
+	if v := l.writeErrorHandler.Load(); v != nil {
+		return v.(WriteErrorHandler)
+	}
 	return nil
 }
 
@@ -144,10 +170,6 @@ func (l *Logger) AddWriter(writer io.Writer) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.closed.Load() {
-		return ErrLoggerClosed
-	}
-
 	if len(l.writers) >= MaxWriterCount {
 		return ErrMaxWritersExceeded
 	}
@@ -168,10 +190,6 @@ func (l *Logger) RemoveWriter(writer io.Writer) error {
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-
-	if l.closed.Load() {
-		return ErrLoggerClosed
-	}
 
 	writerCount := len(l.writers)
 	for i := 0; i < writerCount; i++ {
@@ -294,7 +312,7 @@ func (l *Logger) processFields(fields []Field) []Field {
 	for i, field := range fields {
 		filtered[i] = Field{
 			Key:   field.Key,
-			Value: secConfig.SensitiveFilter.FilterFieldValue(field.Key, field.Value),
+			Value: secConfig.SensitiveFilter.FilterValueRecursive(field.Key, field.Value),
 		}
 	}
 
@@ -405,7 +423,11 @@ func (l *Logger) writeMessage(message string) {
 	if writerCount == 1 {
 		w := l.writers[0]
 		l.mu.RUnlock()
-		_, _ = w.Write(buf)
+		if _, err := w.Write(buf); err != nil {
+			if handler := l.getWriteErrorHandler(); handler != nil {
+				handler(w, err)
+			}
+		}
 		return
 	}
 
@@ -414,7 +436,11 @@ func (l *Logger) writeMessage(message string) {
 	l.mu.RUnlock()
 
 	for _, writer := range writers {
-		_, _ = writer.Write(buf)
+		if _, err := writer.Write(buf); err != nil {
+			if handler := l.getWriteErrorHandler(); handler != nil {
+				handler(writer, err)
+			}
+		}
 	}
 }
 
@@ -437,34 +463,55 @@ func (l *Logger) WarnWith(msg string, fields ...Field)  { l.LogWith(LevelWarn, m
 func (l *Logger) ErrorWith(msg string, fields ...Field) { l.LogWith(LevelError, msg, fields...) }
 func (l *Logger) FatalWith(msg string, fields ...Field) { l.LogWith(LevelFatal, msg, fields...) }
 
-// fmt package replacement methods - output to stdout with caller info
-// These methods match the behavior of package-level Print/Println/Printf functions
+// IsClosed returns true if the logger has been closed (thread-safe).
+func (l *Logger) IsClosed() bool {
+	return l.closed.Load()
+}
 
-// Print writes to stdout with caller info and newline.
+// WriterCount returns the number of registered writers (thread-safe).
+func (l *Logger) WriterCount() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return len(l.writers)
+}
+
+// Flush flushes all buffered writers (thread-safe).
+// Writers that implement interface{ Flush() error } will be flushed.
+func (l *Logger) Flush() error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	var firstErr error
+	for _, w := range l.writers {
+		if flusher, ok := w.(interface{ Flush() error }); ok {
+			if err := flusher.Flush(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// fmt package replacement methods - output via logger's writers with caller info
+
+// Print writes to configured writers with caller info and newline.
+// Uses LevelDebug for filtering. Arguments are joined with spaces.
+// Note: Both Print() and Println() behave identically because Log() already adds a newline.
 func (l *Logger) Print(args ...any) {
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	if caller != "" {
-		fmt.Fprintf(os.Stdout, "%s ", caller)
-	}
-	fmt.Fprintln(os.Stdout, args...)
+	l.Log(LevelDebug, args...)
 }
 
-// Println writes to stdout with caller info, spaces between operands, and a newline.
+// Println writes to configured writers with caller info, spaces between operands, and a newline.
+// Uses LevelDebug for filtering.
+// Note: Behaves identically to Print() because Log() already adds a newline.
 func (l *Logger) Println(args ...any) {
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	if caller != "" {
-		fmt.Fprintf(os.Stdout, "%s ", caller)
-	}
-	fmt.Fprintln(os.Stdout, args...)
+	l.Log(LevelDebug, args...)
 }
 
-// Printf formats according to a format specifier and writes to stdout with caller info.
+// Printf formats according to a format specifier and writes to configured writers with caller info.
+// Uses LevelDebug for filtering.
 func (l *Logger) Printf(format string, args ...any) {
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	if caller != "" {
-		fmt.Fprintf(os.Stdout, "%s ", caller)
-	}
-	fmt.Printf(format, args...)
+	l.Logf(LevelDebug, format, args...)
 }
 
 // Debug utilities - Text and JSON output for debugging
@@ -539,10 +586,7 @@ func (l *Logger) JSONF(format string, args ...any) {
 	outputJSON(caller, formatted)
 }
 
-var (
-	defaultLogger     atomic.Pointer[Logger]
-	defaultLoggerOnce sync.Once
-)
+var defaultLogger atomic.Pointer[Logger]
 
 // Default returns the default global logger (thread-safe).
 // The logger is created on first call with default configuration.
@@ -553,30 +597,34 @@ func Default() *Logger {
 		return logger
 	}
 
-	var logger *Logger
-	defaultLoggerOnce.Do(func() {
-		var err error
-		logger, err = New(nil)
-		if err != nil {
-			ctx, cancel := context.WithCancel(context.Background())
-			logger = &Logger{
-				callerDepth: DefaultCallerDepth,
-				formatter:   newMessageFormatter(DefaultConfig()),
-				writers:     []io.Writer{os.Stderr},
-				ctx:         ctx,
-				cancel:      cancel,
-			}
-			logger.level.Store(int32(LevelInfo))
-			logger.securityConfig.Store(DefaultSecurityConfig())
+	// Create default logger
+	logger, err := New(nil)
+	if err != nil {
+		// Create fallback logger with proper initialization if New() fails
+		defaultConfig := DefaultConfig()
+		ctx, cancel := context.WithCancel(context.Background())
+		logger = &Logger{
+			callerDepth: DefaultCallerDepth,
+			formatter:   newMessageFormatter(defaultConfig),
+			writers:     []io.Writer{os.Stderr},
+			ctx:         ctx,
+			cancel:      cancel,
 		}
-		defaultLogger.Store(logger)
-	})
+		logger.level.Store(int32(defaultConfig.Level))
+		logger.securityConfig.Store(defaultConfig.SecurityConfig)
+	}
 
+	// Use CompareAndSwap for atomic initialization
+	// If another goroutine already set it, use their value
+	if defaultLogger.CompareAndSwap(nil, logger) {
+		return logger
+	}
 	return defaultLogger.Load()
 }
 
 // SetDefault sets the default global logger (thread-safe).
 // This affects all subsequent calls to package-level convenience functions.
+// Passing nil is ignored (no change).
 func SetDefault(logger *Logger) {
 	if logger != nil {
 		defaultLogger.Store(logger)
@@ -601,4 +649,9 @@ func SetLevel(level LogLevel) {
 		// Fallback to stderr since logger might not be available
 		fmt.Fprintf(os.Stderr, "Failed to set log level: %v\n", err)
 	}
+}
+
+// GetLevel returns the current log level of the default logger.
+func GetLevel() LogLevel {
+	return Default().GetLevel()
 }

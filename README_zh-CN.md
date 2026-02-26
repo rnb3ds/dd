@@ -299,6 +299,10 @@ dd.Exitf(format string, args ...any)    // 输出格式化文本到控制台并�
 // 全局 logger 管理
 dd.Default() *Logger
 dd.SetDefault(logger *Logger)
+
+// 日志级别管理
+dd.SetLevel(level LogLevel)              // 设置默认 logger 的日志级别
+dd.GetLevel() LogLevel                   // 获取默认 logger 的当前日志级别
 ```
 
 ### Logger 实例方法
@@ -483,8 +487,13 @@ dd.LevelFatal  // 致命错误（调用 os.Exit(1) 终止程序）
 
 **动态级别调整**：
 ```go
+// 实例方法
 logger.SetLevel(dd.LevelDebug)  // 运行时调整
 currentLevel := logger.GetLevel()
+
+// 包级别函数（用于默认 logger）
+dd.SetLevel(dd.LevelDebug)      // 设置默认 logger 的级别
+currentLevel := dd.GetLevel()   // 获取默认 logger 的级别
 ```
 
 ### 输出格式

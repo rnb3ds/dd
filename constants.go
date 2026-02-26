@@ -2,6 +2,36 @@ package dd
 
 import "time"
 
+// FilterLevel defines the level of sensitive data filtering.
+//
+// Deprecated: Use NewBasicSensitiveDataFilter() or NewSensitiveDataFilter() directly
+// for more control over filtering behavior.
+type FilterLevel int
+
+const (
+	// FilterNone disables all sensitive data filtering.
+	FilterNone FilterLevel = iota
+	// FilterBasic enables basic filtering for common sensitive data
+	// (passwords, API keys, credit cards, phone numbers).
+	FilterBasic
+	// FilterFull enables comprehensive filtering including emails,
+	// IP addresses, JWT tokens, and database connection strings.
+	FilterFull
+)
+
+func (f FilterLevel) String() string {
+	switch f {
+	case FilterNone:
+		return "none"
+	case FilterBasic:
+		return "basic"
+	case FilterFull:
+		return "full"
+	default:
+		return "unknown"
+	}
+}
+
 const (
 	DefaultCallerDepth = 3
 )
@@ -14,12 +44,13 @@ const (
 )
 
 const (
-	MaxPathLength     = 4096
-	MaxMessageSize    = 5 * 1024 * 1024
-	MaxInputLength    = 256 * 1024
-	MaxWriterCount    = 100
-	MaxFieldKeyLength = 256
-	MaxPatternLength  = 1000
+	MaxPathLength      = 4096
+	MaxMessageSize     = 5 * 1024 * 1024
+	MaxInputLength     = 256 * 1024
+	MaxWriterCount     = 100
+	MaxPatternLength   = 1000
+	MaxQuantifierRange = 1000
+	MaxRecursionDepth  = 100
 )
 
 const (
@@ -38,8 +69,7 @@ const (
 )
 
 const (
-	DirPermissions  = 0700
-	FilePermissions = 0600
+	DirPermissions = 0700
 )
 
 const (

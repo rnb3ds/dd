@@ -19,6 +19,5 @@ var (
 	ErrMaxSizeExceeded    = errors.New("maximum size exceeded")
 	ErrMaxBackupsExceeded = errors.New("maximum backup count exceeded")
 	ErrBufferSizeTooLarge = errors.New("buffer size too large")
-	ErrInvalidFilterLevel = errors.New("invalid filter level")
 	ErrInvalidPattern     = errors.New("invalid regex pattern")
 )

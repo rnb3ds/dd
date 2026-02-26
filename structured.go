@@ -3,10 +3,11 @@ package dd
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/cybergodev/dd/internal"
 )
 
 type Field struct {
@@ -117,7 +118,7 @@ func formatFields(fields []Field) string {
 			sb.WriteString("<nil>")
 		default:
 			// For complex types (slices, maps, structs), use JSON formatting
-			if isComplexFieldValue(v) {
+			if internal.IsComplexValue(v) {
 				if jsonData, err := json.Marshal(v); err == nil {
 					sb.Write(jsonData)
 				} else {
@@ -150,35 +151,3 @@ func InfoWith(msg string, fields ...Field)  { Default().LogWith(LevelInfo, msg, 
 func WarnWith(msg string, fields ...Field)  { Default().LogWith(LevelWarn, msg, fields...) }
 func ErrorWith(msg string, fields ...Field) { Default().LogWith(LevelError, msg, fields...) }
 func FatalWith(msg string, fields ...Field) { Default().LogWith(LevelFatal, msg, fields...) }
-
-// isComplexFieldValue checks if a field value is a complex type that should be JSON-formatted.
-// This is used in formatFields to determine if a value needs JSON marshaling.
-func isComplexFieldValue(v any) bool {
-	if v == nil {
-		return false
-	}
-
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
-
-	// Handle pointers
-	if kind == reflect.Ptr {
-		if val.IsNil() {
-			return false
-		}
-		val = val.Elem()
-		kind = val.Kind()
-	}
-
-	// Check for complex types that benefit from JSON formatting
-	switch kind {
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct:
-		// Special case: time.Time and time.Duration have good String() methods
-		if _, ok := v.(interface{ String() string }); ok {
-			return false
-		}
-		return true
-	default:
-		return false
-	}
-}

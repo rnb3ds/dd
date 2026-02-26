@@ -584,6 +584,36 @@ func TestConvenienceFunctions(t *testing.T) {
 	}
 }
 
+func TestGlobalGetLevel(t *testing.T) {
+	oldLevel := Default().GetLevel()
+	oldDefault := Default()
+	defer func() {
+		SetDefault(oldDefault)
+		oldDefault.SetLevel(oldLevel)
+	}()
+
+	var buf bytes.Buffer
+	logger, _ := New(&LoggerConfig{Level: LevelInfo, Writers: []io.Writer{&buf}})
+	SetDefault(logger)
+
+	// Test initial level
+	if GetLevel() != LevelInfo {
+		t.Errorf("GetLevel() = %v, want %v", GetLevel(), LevelInfo)
+	}
+
+	// Test after setting level
+	SetLevel(LevelDebug)
+	if GetLevel() != LevelDebug {
+		t.Errorf("GetLevel() after SetLevel(Debug) = %v, want %v", GetLevel(), LevelDebug)
+	}
+
+	// Test after setting another level
+	SetLevel(LevelError)
+	if GetLevel() != LevelError {
+		t.Errorf("GetLevel() after SetLevel(Error) = %v, want %v", GetLevel(), LevelError)
+	}
+}
+
 func TestAllGlobalFunctions(t *testing.T) {
 	oldDefault := Default()
 	defer SetDefault(oldDefault)
@@ -802,7 +832,9 @@ func TestMultiWriterManagement(t *testing.T) {
 	mw := NewMultiWriter(&buf1, &buf2)
 
 	// Test AddWriter
-	mw.AddWriter(&buf3)
+	if err := mw.AddWriter(&buf3); err != nil {
+		t.Errorf("AddWriter failed: %v", err)
+	}
 	data := []byte("test\n")
 	mw.Write(data)
 
@@ -1171,42 +1203,57 @@ func TestFieldConstructors(t *testing.T) {
 // ============================================================================
 
 func TestConvenienceConstructors(t *testing.T) {
-	t.Run("ToFile", func(t *testing.T) {
-		logger := ToFile()
+	t.Run("FileLogger", func(t *testing.T) {
+		logger, err := FileLogger()
+		if err != nil {
+			t.Fatalf("FileLogger should not return error: %v", err)
+		}
 		if logger == nil {
-			t.Fatal("ToFile should return logger")
+			t.Fatal("FileLogger should return logger")
 		}
 		logger.Close()
 	})
 
-	t.Run("ToFileWithPath", func(t *testing.T) {
-		logger := ToFile(t.TempDir() + "/test.log")
+	t.Run("FileLoggerWithPath", func(t *testing.T) {
+		logger, err := FileLogger(t.TempDir() + "/test.log")
+		if err != nil {
+			t.Fatalf("FileLogger should not return error: %v", err)
+		}
 		if logger == nil {
-			t.Fatal("ToFile should return logger")
+			t.Fatal("FileLogger should return logger")
 		}
 		logger.Close()
 	})
 
-	t.Run("ToJSONFile", func(t *testing.T) {
-		logger := ToJSONFile()
+	t.Run("JSONFileLogger", func(t *testing.T) {
+		logger, err := JSONFileLogger()
+		if err != nil {
+			t.Fatalf("JSONFileLogger should not return error: %v", err)
+		}
 		if logger == nil {
-			t.Fatal("ToJSONFile should return logger")
+			t.Fatal("JSONFileLogger should return logger")
 		}
 		logger.Close()
 	})
 
-	t.Run("ToConsole", func(t *testing.T) {
-		logger := ToConsole()
+	t.Run("ConsoleLogger", func(t *testing.T) {
+		logger, err := ConsoleLogger()
+		if err != nil {
+			t.Fatalf("ConsoleLogger should not return error: %v", err)
+		}
 		if logger == nil {
-			t.Fatal("ToConsole should return logger")
+			t.Fatal("ConsoleLogger should return logger")
 		}
 		logger.Close()
 	})
 
-	t.Run("ToAll", func(t *testing.T) {
-		logger := ToAll()
+	t.Run("MultiLogger", func(t *testing.T) {
+		logger, err := MultiLogger(t.TempDir() + "/test.log")
+		if err != nil {
+			t.Fatalf("MultiLogger should not return error: %v", err)
+		}
 		if logger == nil {
-			t.Fatal("ToAll should return logger")
+			t.Fatal("MultiLogger should return logger")
 		}
 		logger.Close()
 	})
@@ -1250,7 +1297,7 @@ func TestNewWithOptions(t *testing.T) {
 
 	t.Run("WithFilterLevel", func(t *testing.T) {
 		logger, err := NewWithOptions(Options{
-			FilterLevel: "basic",
+			FilterLevel: FilterBasic,
 		})
 		if err != nil {
 			t.Fatalf("NewWithOptions should not error: %v", err)
@@ -1478,26 +1525,27 @@ func TestAppendlnReplacement(t *testing.T) {
 	}
 }
 
-func TestAppendFormatReplacement(t *testing.T) {
+func TestAppendfReplacement(t *testing.T) {
 	dst := []byte("prefix ")
-	result := AppendFormat(dst, "test %s", "formatted")
+	result := Appendf(dst, "test %s", "formatted")
 
 	if !bytes.Contains(result, []byte("prefix test formatted")) {
-		t.Error("AppendFormat() should append formatted text")
+		t.Error("Appendf() should append formatted text")
 	}
 }
 
 func TestNewError(t *testing.T) {
-	err := NewError("test error: %s", "context")
+	// NewError was removed; use fmt.Errorf directly
+	err := fmt.Errorf("test error: %s", "context")
 
 	if err == nil {
-		t.Fatal("NewError() should return error")
+		t.Fatal("fmt.Errorf() should return error")
 	}
 	if !strings.Contains(err.Error(), "test error") {
-		t.Error("NewError() should contain message")
+		t.Error("fmt.Errorf() should contain message")
 	}
 	if !strings.Contains(err.Error(), "context") {
-		t.Error("NewError() should contain formatted context")
+		t.Error("fmt.Errorf() should contain formatted context")
 	}
 }
 
@@ -1884,5 +1932,79 @@ func TestDefaultSecurityConfig(t *testing.T) {
 
 	if config.MaxWriters <= 0 {
 		t.Error("MaxWriters should be positive")
+	}
+}
+
+// ============================================================================
+// CONCURRENT DEFAULT LOGGER TESTS
+// ============================================================================
+
+func TestDefaultLoggerConcurrent(t *testing.T) {
+	// Reset the default logger for this test
+	// This test verifies that concurrent access to Default() is safe
+
+	var wg sync.WaitGroup
+	const goroutines = 100
+
+	// Concurrent calls to Default()
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			logger := Default()
+			if logger == nil {
+				t.Error("Default() should not return nil")
+			}
+		}()
+
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			logger, err := New(nil)
+			if err != nil {
+				return
+			}
+			defer logger.Close()
+			SetDefault(logger)
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Verify final state is consistent
+	logger := Default()
+	if logger == nil {
+		t.Error("Final Default() should not return nil")
+	}
+}
+
+func TestDefaultLoggerCompareAndSwap(t *testing.T) {
+	// Test that CompareAndSwap semantics work correctly
+	logger1, err := New(nil)
+	if err != nil {
+		t.Fatalf("Failed to create logger1: %v", err)
+	}
+	defer logger1.Close()
+
+	logger2, err := New(nil)
+	if err != nil {
+		t.Fatalf("Failed to create logger2: %v", err)
+	}
+	defer logger2.Close()
+
+	// Set default to logger1
+	SetDefault(logger1)
+
+	// Verify Default() returns logger1
+	if Default() != logger1 {
+		t.Error("Default() should return logger1")
+	}
+
+	// Set default to logger2
+	SetDefault(logger2)
+
+	// Verify Default() returns logger2
+	if Default() != logger2 {
+		t.Error("Default() should return logger2")
 	}
 }

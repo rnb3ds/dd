@@ -3,7 +3,6 @@ package dd
 import (
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"runtime"
 	"strings"
 	"time"
@@ -38,9 +37,9 @@ func (f *MessageFormatter) formatMessage(level LogLevel, callerDepth int, args .
 	// Complex types (slices, maps, structs) are formatted as JSON for better readability
 	var parts []string
 	for _, arg := range args {
-		if isComplexType(arg) {
+		if internal.IsComplexValue(arg) {
 			// Use JSON formatting for complex types
-			if jsonData, err := json.Marshal(convertToJSONCompatible(arg)); err == nil {
+			if jsonData, err := json.Marshal(convertValue(arg)); err == nil {
 				parts = append(parts, string(jsonData))
 			} else {
 				// Fallback to fmt.Sprint if JSON formatting fails
@@ -52,11 +51,6 @@ func (f *MessageFormatter) formatMessage(level LogLevel, callerDepth int, args .
 		}
 	}
 	message := strings.Join(parts, " ")
-	return f.formatWithMessage(level, callerDepth, message, nil)
-}
-
-func (f *MessageFormatter) formatMessagef(level LogLevel, callerDepth int, format string, args ...any) string {
-	message := fmt.Sprintf(format, args...)
 	return f.formatWithMessage(level, callerDepth, message, nil)
 }
 
@@ -260,96 +254,4 @@ func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 	}
 
 	return adjustedDepth
-}
-
-// isComplexType checks if a value is a complex type (slice, map, struct, etc.)
-// that should be formatted as JSON for better readability.
-func isComplexType(v any) bool {
-	if v == nil {
-		return false
-	}
-
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
-
-	// Handle pointers
-	if kind == reflect.Ptr {
-		if val.IsNil() {
-			return false
-		}
-		val = val.Elem()
-		kind = val.Kind()
-	}
-
-	// Complex types that should be JSON-formatted
-	switch kind {
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct:
-		return true
-	default:
-		return false
-	}
-}
-
-// convertToJSONCompatible converts a value to a JSON-compatible format.
-// For simple types, it returns the value as-is. For complex types, it attempts
-// to convert them to a format that can be properly JSON-serialized.
-func convertToJSONCompatible(v any) any {
-	if v == nil {
-		return nil
-	}
-
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
-
-	// Handle pointers
-	if kind == reflect.Ptr {
-		if val.IsNil() {
-			return nil
-		}
-		val = val.Elem()
-		kind = val.Kind()
-	}
-
-	// For basic types, return as-is
-	switch kind {
-	case reflect.String, reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return val.Interface()
-	case reflect.Interface:
-		if val.IsNil() {
-			return nil
-		}
-		return convertToJSONCompatible(val.Interface())
-	case reflect.Slice, reflect.Array:
-		// Convert slice to []any for proper JSON serialization
-		length := val.Len()
-		if length == 0 {
-			return []any{}
-		}
-		result := make([]any, length)
-		for i := 0; i < length; i++ {
-			result[i] = convertToJSONCompatible(val.Index(i).Interface())
-		}
-		return result
-	case reflect.Map:
-		// Convert map to map[string]any for proper JSON serialization
-		if val.IsNil() {
-			return nil
-		}
-		result := make(map[string]any, val.Len())
-		for _, key := range val.MapKeys() {
-			keyStr := fmt.Sprintf("%v", key.Interface())
-			result[keyStr] = convertToJSONCompatible(val.MapIndex(key).Interface())
-		}
-		return result
-	case reflect.Struct:
-		// For structs, we'll let JSON marshaling handle it
-		// The JSON package will use exported fields
-		return v
-	default:
-		// For other types (channels, functions, etc.), use fmt.Sprint
-		return fmt.Sprintf("%v", v)
-	}
 }

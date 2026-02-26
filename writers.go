@@ -3,6 +3,7 @@ package dd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,10 +47,6 @@ func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
 
 	if err := validateFileWriterConfig(&config); err != nil {
 		return nil, err
-	}
-
-	if config.MaxAge > 0 && config.MaxBackups <= 0 {
-		return nil, fmt.Errorf("MaxAge is set but MaxBackups is not configured, set MaxBackups to enable cleanup")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -116,23 +113,32 @@ func validateAndSecurePath(path string) (string, error) {
 }
 
 func validateFileWriterConfig(config *FileWriterConfig) error {
-	maxSize := config.MaxSizeMB
-	if maxSize <= 0 {
-		maxSize = DefaultMaxSizeMB
-	}
-	maxAge := config.MaxAge
-	if maxAge <= 0 {
-		maxAge = DefaultMaxAge
-	}
-	maxBackups := config.MaxBackups
-	if maxBackups < 0 {
-		maxBackups = DefaultMaxBackups
+	// Apply defaults for zero/negative MaxSizeMB
+	if config.MaxSizeMB <= 0 {
+		config.MaxSizeMB = DefaultMaxSizeMB
 	}
 
-	if maxSize > MaxFileSizeMB {
+	// Cleanup is enabled only when at least one cleanup parameter is configured.
+	// Apply defaults based on what the user has specified:
+	// - Both zero: use full defaults (MaxAge + MaxBackups)
+	// - Only MaxBackups set: use count-based cleanup only (MaxAge = 0)
+	// - Only MaxAge set: use time-based cleanup with default MaxBackups
+	if config.MaxAge == 0 && config.MaxBackups == 0 {
+		config.MaxAge = DefaultMaxAge
+		config.MaxBackups = DefaultMaxBackups
+	} else if config.MaxAge == 0 && config.MaxBackups > 0 {
+		// User set MaxBackups but not MaxAge - disable time-based cleanup
+		config.MaxAge = 0
+	} else if config.MaxAge > 0 && config.MaxBackups == 0 {
+		// User set MaxAge but not MaxBackups - use default MaxBackups
+		config.MaxBackups = DefaultMaxBackups
+	}
+
+	// Validate limits
+	if config.MaxSizeMB > MaxFileSizeMB {
 		return fmt.Errorf("%w: maximum %dMB", ErrMaxSizeExceeded, MaxFileSizeMB)
 	}
-	if maxBackups > MaxBackupCount {
+	if config.MaxBackups > MaxBackupCount {
 		return fmt.Errorf("%w: maximum %d", ErrMaxBackupsExceeded, MaxBackupCount)
 	}
 
@@ -242,6 +248,11 @@ func (fw *FileWriter) cleanupRoutine() {
 	}
 }
 
+// BufferedWriter wraps an io.Writer with buffering capabilities.
+// It automatically flushes when the buffer reaches a certain size or after a timeout.
+//
+// IMPORTANT: Always call Close() when done to ensure all buffered data is flushed.
+// Failure to call Close() may result in data loss.
 type BufferedWriter struct {
 	writer    io.Writer
 	buffer    *bufio.Writer
@@ -256,6 +267,9 @@ type BufferedWriter struct {
 	closed    atomic.Bool
 }
 
+// NewBufferedWriter creates a new BufferedWriter with the specified buffer size.
+// The writer automatically flushes when the buffer is half full or every 100ms.
+// Remember to call Close() to ensure all buffered data is written to the underlying writer.
 func NewBufferedWriter(w io.Writer, bufferSize int) (*BufferedWriter, error) {
 	if w == nil {
 		return nil, ErrNilWriter
@@ -362,7 +376,10 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 		case <-ticker.C:
 			bw.mu.Lock()
 			if bw.buffer.Buffered() > 0 && time.Since(bw.lastFlush) >= bw.flushTime {
-				_ = bw.buffer.Flush()
+				if err := bw.buffer.Flush(); err != nil {
+					// Log to stderr as fallback - buffered writer errors should not be silent
+					fmt.Fprintf(os.Stderr, "dd: autoflush error: %v\n", err)
+				}
 				bw.lastFlush = time.Now()
 			}
 			bw.mu.Unlock()
@@ -445,26 +462,30 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 	return pLen, nil
 }
 
-func (mw *MultiWriter) AddWriter(w io.Writer) {
-	if w == nil || mw == nil {
-		return
+func (mw *MultiWriter) AddWriter(w io.Writer) error {
+	if mw == nil {
+		return fmt.Errorf("multiwriter is nil")
+	}
+	if w == nil {
+		return ErrNilWriter
 	}
 
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
-	// Check for duplicates and max limit
+	// Check for duplicates
 	for _, existing := range mw.writers {
 		if existing == w {
-			return // Already exists
+			return nil // Already exists, not an error
 		}
 	}
 
 	if len(mw.writers) >= MaxWriterCount {
-		return // Silently ignore if max reached
+		return ErrMaxWritersExceeded
 	}
 
 	mw.writers = append(mw.writers, w)
+	return nil
 }
 
 func (mw *MultiWriter) RemoveWriter(w io.Writer) {
@@ -492,14 +513,14 @@ func (mw *MultiWriter) Close() error {
 	copy(writers, mw.writers)
 	mw.mu.RUnlock()
 
-	var lastErr error
+	var errs []error
 	for _, w := range writers {
 		if closer, ok := w.(io.Closer); ok {
 			if err := closer.Close(); err != nil {
-				lastErr = err
+				errs = append(errs, err)
 			}
 		}
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }

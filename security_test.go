@@ -241,7 +241,7 @@ func TestFilterFieldValueSubstring(t *testing.T) {
 	}
 }
 
-func TestFilterValue(t *testing.T) {
+func TestFilterValueRecursive(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
 	tests := []struct {
@@ -259,10 +259,10 @@ func TestFilterValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := filter.FilterValue(tt.value)
+			result := filter.FilterValueRecursive("", tt.value)
 			// Should not panic
 			if result == nil && tt.value != nil {
-				t.Error("FilterValue should not return nil for non-nil input")
+				t.Error("FilterValueRecursive should not return nil for non-nil input")
 			}
 		})
 	}
@@ -308,6 +308,138 @@ func TestNilFilterClone(t *testing.T) {
 // REDOS PROTECTION TESTS
 // ============================================================================
 
+func TestFilterValueRecursiveCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	type Node struct {
+		Value int
+		Next  *Node
+	}
+
+	a := &Node{Value: 1}
+	b := &Node{Value: 2}
+	a.Next = b
+	b.Next = a // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", a)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+
+	// Check that circular reference is detected
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map result, got %T", result)
+	}
+
+	next, ok := resultMap["Next"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Next to be a map, got %T", resultMap["Next"])
+	}
+
+	// The circular reference should be marked
+	if next["Next"] != "[CIRCULAR_REFERENCE]" {
+		t.Errorf("Expected [CIRCULAR_REFERENCE], got %v", next["Next"])
+	}
+}
+
+func TestFilterValueRecursiveSliceCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	type Container struct {
+		Items []*Container
+	}
+
+	a := &Container{}
+	b := &Container{}
+	a.Items = []*Container{b}
+	b.Items = []*Container{a} // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", a)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+}
+
+func TestFilterValueRecursiveMapCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create maps with circular references
+	mapA := make(map[string]any)
+	mapB := make(map[string]any)
+	mapA["ref"] = mapB
+	mapB["ref"] = mapA // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", mapA)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map result, got %T", result)
+	}
+
+	ref, ok := resultMap["ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected ref to be a map, got %T", resultMap["ref"])
+	}
+
+	// The circular reference should be marked
+	if ref["ref"] != "[CIRCULAR_REFERENCE]" {
+		t.Errorf("Expected [CIRCULAR_REFERENCE], got %v", ref["ref"])
+	}
+}
+
+func TestReDoSAlternationPattern(t *testing.T) {
+	filter := NewEmptySensitiveDataFilter()
+
+	tests := []struct {
+		name    string
+		pattern string
+		safe    bool
+	}{
+		// Dangerous alternation patterns
+		{"alternation with quantifier first", "(a+|b)+", false},
+		{"alternation with quantifier second", "(a|b+)+", false},
+		{"alternation both quantified", "(a+|b+)+", false},
+		{"alternation with star", "(a*|b)+", false},
+		{"nested alternation", "((a|b)+|c)+", false},
+
+		// Safe alternation patterns
+		{"simple alternation", "(a|b)", true},
+		{"alternation optional", "(a|b)?", true},
+		{"alternation with count", "(a|b){3}", true},
+		{"alternation with range", "(a|b){1,5}", true},
+
+		// Dangerous excessive ranges
+		{"excessive range", "a{1,10000}", false},
+		{"exact excessive", "a{5000}", false},
+
+		// Safe ranges
+		{"safe range", "a{1,100}", true},
+		{"safe exact", "a{50}", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := filter.AddPattern(tt.pattern)
+			if tt.safe {
+				if err != nil {
+					t.Errorf("Pattern %q should be safe, got error: %v", tt.pattern, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("Pattern %q should be rejected as dangerous", tt.pattern)
+				}
+			}
+		})
+	}
+}
+
 func TestReDoSProtection(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
@@ -332,13 +464,20 @@ func TestReDoSProtection(t *testing.T) {
 func TestFilterTimeout(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
-	// Add a complex pattern that might timeout
+	// Try to add a dangerous ReDoS pattern - should be rejected
 	err := filter.AddPattern(`(a+)+b`)
-	if err != nil {
-		t.Fatalf("Failed to add pattern: %v", err)
+	if err == nil {
+		t.Error("Should reject dangerous nested quantifier pattern (a+)+b")
 	}
 
-	// Input that could cause backtracking
+	// Add a safe pattern instead
+	err = filter.AddPattern(`a+b`)
+	if err != nil {
+		t.Fatalf("Failed to add safe pattern: %v", err)
+	}
+
+	// Input that could cause backtracking with the dangerous pattern
+	// but is safe with the simple pattern
 	input := strings.Repeat("a", 50)
 
 	result := filter.Filter(input)
@@ -609,10 +748,13 @@ func TestPhoneNumberFiltering(t *testing.T) {
 		},
 
 		// Chinese mobile numbers
+		// Note: Standalone 11-digit numbers are NOT filtered to avoid over-matching
+		// order IDs, timestamps, user IDs, etc. They ARE filtered when used with
+		// sensitive field names like "phone", "mobile", etc.
 		{
-			name:     "Chinese mobile 11 digits",
+			name:     "Chinese mobile 11 digits (standalone - not filtered)",
 			input:    "13812345678",
-			contains: "[REDACTED]",
+			contains: "13812345678",
 		},
 		{
 			name:     "Chinese mobile with country code",
@@ -625,19 +767,19 @@ func TestPhoneNumberFiltering(t *testing.T) {
 			contains: "[REDACTED]",
 		},
 		{
-			name:     "Chinese mobile starts with 13",
+			name:     "Chinese mobile starts with 13 (standalone - not filtered)",
 			input:    "13123456789",
-			contains: "[REDACTED]",
+			contains: "13123456789",
 		},
 		{
-			name:     "Chinese mobile starts with 18",
+			name:     "Chinese mobile starts with 18 (standalone - not filtered)",
 			input:    "18123456789",
-			contains: "[REDACTED]",
+			contains: "18123456789",
 		},
 		{
-			name:     "Chinese mobile starts with 19",
+			name:     "Chinese mobile starts with 19 (standalone - not filtered)",
 			input:    "19123456789",
-			contains: "[REDACTED]",
+			contains: "19123456789",
 		},
 
 		// UK mobile numbers

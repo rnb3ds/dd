@@ -17,7 +17,7 @@ type Options struct {
 	FullPath          bool
 	DynamicCaller     bool
 	TimeFormat        string
-	FilterLevel       string
+	FilterLevel       FilterLevel
 	CustomFilter      *SensitiveDataFilter
 	JSONOptions       *JSONOptions
 	AdditionalWriters []io.Writer
@@ -93,15 +93,14 @@ func NewWithOptions(opts Options) (*Logger, error) {
 		config.SecurityConfig.SensitiveFilter = opts.CustomFilter
 	} else {
 		switch opts.FilterLevel {
-		case "none":
+		case FilterNone:
 			config.SecurityConfig.SensitiveFilter = nil
-		case "basic":
+		case FilterBasic:
 			config.SecurityConfig.SensitiveFilter = NewBasicSensitiveDataFilter()
-		case "full":
+		case FilterFull:
 			config.SecurityConfig.SensitiveFilter = NewSensitiveDataFilter()
-		case "":
 		default:
-			return nil, fmt.Errorf("%w: %s (must be 'none', 'basic', or 'full')", ErrInvalidFilterLevel, opts.FilterLevel)
+			// Default is already set by DefaultSecurityConfig() which uses Basic
 		}
 	}
 
@@ -127,44 +126,36 @@ func getFilename(filename []string) string {
 	return DefaultLogFile
 }
 
-func ToFile(filename ...string) *Logger {
-	logger, err := NewWithOptions(Options{
+// FileLogger creates a logger that writes to a file.
+// Returns an error if the file cannot be created or opened.
+func FileLogger(filename ...string) (*Logger, error) {
+	return NewWithOptions(Options{
 		Console: false,
 		File:    getFilename(filename),
 	})
-	if err != nil {
-		panic(fmt.Sprintf("dd: failed to create file logger: %v", err))
-	}
-	return logger
 }
 
-func ToConsole() *Logger {
-	logger, err := NewWithOptions(Options{Console: true})
-	if err != nil {
-		panic(fmt.Sprintf("dd: failed to create console logger: %v", err))
-	}
-	return logger
+// ConsoleLogger creates a logger that writes to stdout.
+// Returns an error if the logger cannot be created.
+func ConsoleLogger() (*Logger, error) {
+	return NewWithOptions(Options{Console: true})
 }
 
-func ToJSONFile(filename ...string) *Logger {
-	logger, err := NewWithOptions(Options{
+// JSONFileLogger creates a logger that writes JSON format to a file.
+// Returns an error if the file cannot be created or opened.
+func JSONFileLogger(filename ...string) (*Logger, error) {
+	return NewWithOptions(Options{
 		Format:  FormatJSON,
 		Console: false,
 		File:    getFilename(filename),
 	})
-	if err != nil {
-		panic(fmt.Sprintf("dd: failed to create JSON file logger: %v", err))
-	}
-	return logger
 }
 
-func ToAll(filename ...string) *Logger {
-	logger, err := NewWithOptions(Options{
+// MultiLogger creates a logger that writes to both console and file.
+// Returns an error if the file cannot be created or opened.
+func MultiLogger(filename ...string) (*Logger, error) {
+	return NewWithOptions(Options{
 		Console: true,
 		File:    getFilename(filename),
 	})
-	if err != nil {
-		panic(fmt.Sprintf("dd: failed to create multi-output logger: %v", err))
-	}
-	return logger
 }

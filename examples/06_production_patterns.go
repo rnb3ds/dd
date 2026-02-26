@@ -23,7 +23,7 @@ import (
 // 3. Graceful shutdown
 // 4. Background job logging
 func main() {
-	fmt.Println("=== DD Production Patterns ===\n ")
+	fmt.Println("=== DD Production Patterns ===\n")
 
 	example1ErrorHandling()
 	example2ContextPropagation()
@@ -38,15 +38,19 @@ func example1ErrorHandling() {
 	fmt.Println("1. Error Handling & Panic Recovery")
 	fmt.Println("----------------------------------")
 
-	logger, _ := dd.NewWithOptions(dd.Options{
+	logger, err := dd.NewWithOptions(dd.Options{
 		Format:  dd.FormatJSON,
 		Console: true,
 		File:    "logs/errors.log",
 	})
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	// Basic error logging
-	err := errors.New("database connection failed")
+	err = errors.New("database connection failed")
 	logger.ErrorWith("Operation failed",
 		dd.Err(err),
 		dd.String("operation", "user_query"),
@@ -67,7 +71,7 @@ func example1ErrorHandling() {
 		panic("nil pointer dereference")
 	}()
 
-	fmt.Println("✓ Errors logged and panic recovered\n ")
+	fmt.Println("✓ Errors logged and panic recovered\n")
 }
 
 // Example 2: Context propagation for request tracking
@@ -75,11 +79,15 @@ func example2ContextPropagation() {
 	fmt.Println("2. Context Propagation")
 	fmt.Println("----------------------")
 
-	logger, _ := dd.NewWithOptions(dd.Options{
+	logger, err := dd.NewWithOptions(dd.Options{
 		Format:  dd.FormatJSON,
 		Console: true,
 		File:    "logs/requests.log",
 	})
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	// Create context with request metadata
@@ -103,7 +111,7 @@ func example2ContextPropagation() {
 	logWithContext(ctx, "Processing payment", dd.Float64("amount", 99.99))
 	logWithContext(ctx, "Request completed", dd.String("status", "success"))
 
-	fmt.Println("✓ Request tracked across multiple steps\n ")
+	fmt.Println("✓ Request tracked across multiple steps\n")
 }
 
 // Example 3: Graceful shutdown
@@ -111,11 +119,15 @@ func example3GracefulShutdown() {
 	fmt.Println("3. Graceful Shutdown")
 	fmt.Println("--------------------")
 
-	logger, _ := dd.NewWithOptions(dd.Options{
+	logger, err := dd.NewWithOptions(dd.Options{
 		Format:  dd.FormatJSON,
 		Console: true,
 		File:    "logs/shutdown.log",
 	})
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 
 	logger.InfoWith("Application started", dd.Int("pid", os.Getpid()))
 
@@ -155,7 +167,7 @@ func example3GracefulShutdown() {
 	logger.Info("Shutting down gracefully")
 	logger.Close()
 
-	fmt.Println("✓ Graceful shutdown completed\n ")
+	fmt.Println("✓ Graceful shutdown completed\n")
 }
 
 // Example 4: Background jobs
@@ -163,11 +175,15 @@ func example4BackgroundJobs() {
 	fmt.Println("4. Background Jobs")
 	fmt.Println("------------------")
 
-	logger, _ := dd.NewWithOptions(dd.Options{
+	logger, err := dd.NewWithOptions(dd.Options{
 		Format:  dd.FormatJSON,
 		Console: true,
 		File:    "logs/jobs.log",
 	})
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	var wg sync.WaitGroup
@@ -206,5 +222,5 @@ func example4BackgroundJobs() {
 	}
 
 	wg.Wait()
-	fmt.Println("✓ Background jobs completed\n ")
+	fmt.Println("✓ Background jobs completed\n")
 }

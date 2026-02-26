@@ -20,7 +20,7 @@ import (
 // 3. Performance benchmarking
 // 4. Debug utilities (Text, JSON, Exit)
 func main() {
-	fmt.Println("=== DD Advanced Features ===\n ")
+	fmt.Println("=== DD Advanced Features ===\n")
 
 	example1CallerDetection()
 	example2CloudLogging()
@@ -84,19 +84,12 @@ func example2CloudLogging() {
 		dd.Int("http.status", 201),
 	)
 
-	// AWS CloudWatch format
-	cwLogger := dd.ToJSONFile()
-	defer cwLogger.Close()
-
-	cwLogger.InfoWith("CloudWatch format",
-		dd.String("aws.region", "us-east-1"),
-		dd.String("ecs.cluster", "production"),
-		dd.String("ecs.task", "user-api:123"),
-		dd.String("container.name", "user-api"),
-	)
-
-	// Distributed tracing
-	traceLogger := dd.ToJSONFile()
+	// Distributed tracing format
+	traceLogger, err := dd.JSONFileLogger("logs/trace.log")
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer traceLogger.Close()
 
 	traceLogger.InfoWith("Distributed trace",
@@ -176,7 +169,7 @@ func example4DebugUtilities() {
 	dd.Text("Complex:", map[string]any{"name": "Alice", "age": 30})
 
 	// JSON() - JSON format output
-	fmt.Println("\nJson() output:")
+	fmt.Println("\nJSON() output:")
 	dd.JSON("user", 123, map[string]string{"status": "active"})
 
 	// Textf() and JSONF() - Formatted output
@@ -185,7 +178,11 @@ func example4DebugUtilities() {
 	dd.JSONF("Request from %s", "192.168.1.1")
 
 	// Logger methods
-	logger := dd.ToConsole()
+	logger, err := dd.ConsoleLogger()
+	if err != nil {
+		fmt.Printf("Failed to create console logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	fmt.Println("\nLogger methods:")

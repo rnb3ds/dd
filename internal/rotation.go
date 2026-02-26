@@ -255,29 +255,36 @@ func CleanupOldFiles(basePath string, maxAge time.Duration) error {
 
 	prefix := baseNameWithoutExt + "_" + strings.TrimPrefix(ext, ".")
 
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read directory: %w", err)
+	}
+
 	var firstErr error
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		fileName := entry.Name()
+		if !strings.HasPrefix(fileName, prefix+"_") || fileName == baseName {
+			continue
+		}
+
+		info, err := entry.Info()
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("walk error: %w", err)
+				firstErr = fmt.Errorf("get file info %s: %w", fileName, err)
 			}
-			return nil
+			continue
 		}
 
-		fileName := filepath.Base(path)
-		if strings.HasPrefix(fileName, prefix+"_") &&
-			fileName != baseName &&
-			info.ModTime().Before(cutoff) {
-			if removeErr := os.Remove(path); removeErr != nil && firstErr == nil {
-				firstErr = fmt.Errorf("remove %s: %w", path, removeErr)
+		if info.ModTime().Before(cutoff) {
+			filePath := filepath.Join(dir, fileName)
+			if removeErr := os.Remove(filePath); removeErr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("remove %s: %w", filePath, removeErr)
 			}
 		}
-
-		return nil
-	})
-
-	if err != nil && firstErr == nil {
-		firstErr = err
 	}
 
 	return firstErr
