@@ -23,10 +23,6 @@ var (
 	}
 )
 
-// hexChars is a package-level constant for hex digit conversion
-// Avoids allocation in sanitizeControlChars hot path
-const hexChars = "0123456789abcdef"
-
 // Re-export log level types and constants
 type LogLevel = internal.LogLevel
 
@@ -56,7 +52,7 @@ type Logger struct {
 	callerDepth       int
 	fatalHandler      FatalHandler
 	writeErrorHandler atomic.Value // stores WriteErrorHandler
-	formatter         *MessageFormatter
+	formatter         *internal.MessageFormatter
 
 	// writersPtr stores an immutable slice of writers using atomic pointer.
 	// This eliminates slice copying during write operations.
@@ -94,10 +90,21 @@ func New(configs ...*LoggerConfig) (*Logger, error) {
 	// Pre-allocate writers slice with expected capacity
 	initialWriters := make([]io.Writer, 0, len(config.Writers))
 
+	// Create formatter config from logger config
+	formatterConfig := &internal.FormatterConfig{
+		Format:        internal.LogFormat(config.Format),
+		TimeFormat:    config.TimeFormat,
+		IncludeTime:   config.IncludeTime,
+		IncludeLevel:  config.IncludeLevel,
+		FullPath:      config.FullPath,
+		DynamicCaller: config.DynamicCaller,
+		JSON:          config.JSON,
+	}
+
 	l := &Logger{
 		callerDepth:  DefaultCallerDepth,
 		fatalHandler: config.FatalHandler,
-		formatter:    newMessageFormatter(config),
+		formatter:    internal.NewMessageFormatter(formatterConfig),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -310,9 +317,9 @@ func (l *Logger) Log(level LogLevel, args ...any) {
 	}
 
 	// Format args to string first, then apply security filtering before adding timestamp/level/caller
-	msg := l.formatter.formatArgsToString(args...)
+	msg := l.formatter.FormatArgsToString(args...)
 	msg = l.applyMessageSecurity(msg)
-	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, nil)
+	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, nil)
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
@@ -329,7 +336,7 @@ func (l *Logger) Logf(level LogLevel, format string, args ...any) {
 	// Format with sprintf first, then apply security filtering before adding timestamp/level/caller
 	msg := fmt.Sprintf(format, args...)
 	msg = l.applyMessageSecurity(msg)
-	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, nil)
+	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, nil)
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
@@ -345,12 +352,37 @@ func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
 
 	msg = l.applyMessageSecurity(msg)
 	processedFields := l.processFields(fields)
-	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, processedFields)
+	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(processedFields))
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
 		l.handleFatal()
 	}
+}
+
+// toInternalFields converts dd.Field slice to internal.Field slice
+// Uses stack allocation for small field counts (<=8) to avoid heap allocation
+func toInternalFields(fields []Field) []internal.Field {
+	if len(fields) == 0 {
+		return nil
+	}
+
+	// For small field counts (90% of cases), use stack-allocated array
+	// This avoids heap allocation for typical logging scenarios
+	if len(fields) <= 8 {
+		var result [8]internal.Field
+		for i, f := range fields {
+			result[i] = internal.Field{Key: f.Key, Value: f.Value}
+		}
+		return result[:len(fields)]
+	}
+
+	// For larger counts, allocate on heap
+	result := make([]internal.Field, len(fields))
+	for i, f := range fields {
+		result[i] = internal.Field{Key: f.Key, Value: f.Value}
+	}
+	return result
 }
 
 // processFields processes and filters structured fields
@@ -361,9 +393,25 @@ func (l *Logger) processFields(fields []Field) []Field {
 
 	secConfig := l.getSecurityConfig()
 	if secConfig == nil || secConfig.SensitiveFilter == nil || !secConfig.SensitiveFilter.IsEnabled() {
-		return fields
+		return fields // Early return - no allocation
 	}
 
+	// Quick check: if no patterns and no sensitive keys, skip processing
+	if secConfig.SensitiveFilter.PatternCount() == 0 {
+		// Still need to check for sensitive keys
+		hasSensitiveKey := false
+		for _, field := range fields {
+			if internal.IsSensitiveKey(field.Key) {
+				hasSensitiveKey = true
+				break
+			}
+		}
+		if !hasSensitiveKey {
+			return fields // No patterns and no sensitive keys - return original
+		}
+	}
+
+	// Only allocate when actually filtering
 	filtered := make([]Field, len(fields))
 	for i, field := range fields {
 		filtered[i] = Field{
@@ -379,14 +427,14 @@ func (l *Logger) processFields(fields []Field) []Field {
 func (l *Logger) applyMessageSecurity(message string) string {
 	secConfig := l.getSecurityConfig()
 	if secConfig == nil {
-		return sanitizeControlChars(message)
+		return internal.SanitizeControlChars(message)
 	}
 
 	if secConfig.SensitiveFilter != nil && secConfig.SensitiveFilter.IsEnabled() {
 		message = secConfig.SensitiveFilter.Filter(message)
 	}
 
-	return sanitizeControlChars(message)
+	return internal.SanitizeControlChars(message)
 }
 
 // applySizeLimit applies message size limit to the formatted message (after formatting)
@@ -401,67 +449,6 @@ func (l *Logger) applySizeLimit(message string) string {
 	}
 
 	return message
-}
-
-// sanitizeControlChars replaces dangerous control characters with visible escape sequences.
-// This preserves debugging information while preventing log injection attacks.
-// Allowed control characters: \n (newline), \r (carriage return), \t (tab)
-// Null bytes (\x00) and DEL (127) are removed entirely for security.
-// Other control characters (0x01-0x1F except \n, \r, \t) are replaced with \xNN format.
-func sanitizeControlChars(message string) string {
-	msgLen := len(message)
-	if msgLen == 0 {
-		return message
-	}
-
-	// Fast path: check if sanitization is needed using string indexing
-	// Avoids []byte allocation when no sanitization is needed
-	needsSanitization := false
-	for i := 0; i < msgLen; i++ {
-		b := message[i]
-		if b == 0x00 || (b < 32 && b != '\n' && b != '\r' && b != '\t') || b == 127 {
-			needsSanitization = true
-			break
-		}
-	}
-
-	if !needsSanitization {
-		return message
-	}
-
-	// Slow path: replace control characters with escape sequences
-	// Now we need the byte slice for manipulation
-	msgBytes := []byte(message)
-
-	// Pre-calculate result size to avoid reallocations
-	resultSize := msgLen
-	for _, b := range msgBytes {
-		if b == 0x00 || b == 127 {
-			resultSize-- // These are removed
-		} else if b < 32 && b != '\n' && b != '\r' && b != '\t' {
-			resultSize += 3 // \xNN is 4 bytes, but we already counted 1
-		}
-	}
-
-	result := make([]byte, 0, resultSize)
-
-	for _, b := range msgBytes {
-		switch {
-		case b == 0x00:
-			// Null bytes are removed entirely for security (prevent log truncation)
-			continue
-		case b == 127:
-			// DEL character is removed
-			continue
-		case b < 32 && b != '\n' && b != '\r' && b != '\t':
-			// Replace other control characters with visible escape sequence \xNN
-			result = append(result, '\\', 'x', hexChars[b>>4], hexChars[b&0x0f])
-		default:
-			result = append(result, b)
-		}
-	}
-
-	return string(result)
 }
 
 // handleFatal handles fatal log messages
@@ -641,7 +628,7 @@ func (l *Logger) Printf(format string, args ...any) {
 // Do not use with sensitive data in production environments. For secure logging,
 // use logger.Info(), logger.Debug(), etc. which apply sensitive data filtering.
 func (l *Logger) Text(data ...any) {
-	outputTextData(os.Stdout, data...)
+	internal.OutputTextData(os.Stdout, data...)
 }
 
 func (l *Logger) Textf(format string, args ...any) {
@@ -651,13 +638,13 @@ func (l *Logger) Textf(format string, args ...any) {
 
 func (l *Logger) JSON(data ...any) {
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	outputJSON(caller, data...)
+	internal.OutputJSON(os.Stdout, caller, data...)
 }
 
 func (l *Logger) JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	caller := internal.GetCaller(DebugVisualizationDepth, false)
-	outputJSON(caller, formatted)
+	internal.OutputJSON(os.Stdout, caller, formatted)
 }
 
 var (
@@ -683,9 +670,18 @@ func Default() *Logger {
 				defaultConfig := DefaultConfig()
 				ctx, cancel := context.WithCancel(context.Background())
 				fallbackWriters := []io.Writer{os.Stderr}
+				formatterConfig := &internal.FormatterConfig{
+					Format:        internal.LogFormat(defaultConfig.Format),
+					TimeFormat:    defaultConfig.TimeFormat,
+					IncludeTime:   defaultConfig.IncludeTime,
+					IncludeLevel:  defaultConfig.IncludeLevel,
+					FullPath:      defaultConfig.FullPath,
+					DynamicCaller: defaultConfig.DynamicCaller,
+					JSON:          defaultConfig.JSON,
+				}
 				logger = &Logger{
 					callerDepth: DefaultCallerDepth,
-					formatter:   newMessageFormatter(defaultConfig),
+					formatter:   internal.NewMessageFormatter(formatterConfig),
 					ctx:         ctx,
 					cancel:      cancel,
 				}

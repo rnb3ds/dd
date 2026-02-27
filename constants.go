@@ -1,25 +1,18 @@
 package dd
 
-import "time"
+import (
+	"time"
 
-// LogFormat defines the output format for log messages.
-type LogFormat int8
-
-const (
-	FormatText LogFormat = iota
-	FormatJSON
+	"github.com/cybergodev/dd/internal"
 )
 
-func (f LogFormat) String() string {
-	switch f {
-	case FormatText:
-		return "text"
-	case FormatJSON:
-		return "json"
-	default:
-		return "unknown"
-	}
-}
+// LogFormat defines the output format for log messages.
+type LogFormat = internal.LogFormat
+
+const (
+	FormatText LogFormat = internal.LogFormatText
+	FormatJSON LogFormat = internal.LogFormatJSON
+)
 
 const (
 	DefaultCallerDepth = 3
@@ -83,6 +76,17 @@ const (
 	// regex filtering skips chunking and timeout protection.
 	// Small inputs are processed directly for better performance.
 	FastPathThreshold = 100
+
+	// BoundaryCheckSize is the size of the boundary region to check for sensitive data
+	// when truncating input. This ensures patterns spanning the truncation boundary
+	// are still detected and redacted.
+	// Set to 512 to cover most sensitive data patterns (credit cards, SSNs, API keys, etc.)
+	BoundaryCheckSize = 512
+
+	// ChunkOverlapSize is the overlap size between chunks during chunked filtering.
+	// This ensures sensitive data patterns that span chunk boundaries are still detected.
+	// Must be >= maximum expected sensitive pattern length.
+	ChunkOverlapSize = 512
 )
 
 const (

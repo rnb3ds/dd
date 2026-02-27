@@ -2,10 +2,13 @@ package dd
 
 import (
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cybergodev/dd/internal"
 )
 
 // NOTE: TestSensitiveDataFilter, TestBasicSensitiveDataFilter, and TestDefaultSecurityConfig
@@ -1169,5 +1172,207 @@ func TestDatabaseConnectionInMessage(t *testing.T) {
 	}
 	if !strings.Contains(output, "postgresql://[REDACTED]") {
 		t.Error("Should contain redacted PostgreSQL connection")
+	}
+}
+
+// ============================================================================
+// BOUNDARY SECURITY TESTS (Truncation & Chunking)
+// ============================================================================
+
+// TestTruncationBoundarySensitiveData tests that sensitive data patterns spanning
+// the truncation boundary are still detected and redacted.
+func TestTruncationBoundarySensitiveData(t *testing.T) {
+	// Initialize patterns first
+	internal.InitPatterns()
+
+	// Create a custom filter with smaller max input length for testing
+	smallFilter := &SensitiveDataFilter{
+		maxInputLength: 1000, // Small limit for testing
+		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+	}
+	smallFilter.enabled.Store(true)
+
+	// Copy patterns from default filter
+	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
+	copy(patterns, internal.CompiledBasicPatterns)
+	smallFilter.patternsPtr.Store(&patterns)
+
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+		description      string
+	}{
+		{
+			name: "password at truncation boundary",
+			// Create input where password spans the 1000 byte boundary (must exceed maxInputLength)
+			input:            strings.Repeat("x", 950) + "password=supersecret123 more text here that exceeds the limit",
+			shouldNotContain: "supersecret123",
+			description:      "Password value should be redacted even at truncation boundary",
+		},
+		{
+			name: "credit card at truncation boundary",
+			// Credit card format: 4532-0151-1283-0366 matches the pattern
+			input:            strings.Repeat("x", 930) + "card=4532-0151-1283-0366 end of message",
+			shouldNotContain: "4532-0151-1283-0366",
+			description:      "Credit card should be redacted even at truncation boundary",
+		},
+		{
+			name: "api key at truncation boundary",
+			// API key format: sk- followed by 16-48 alphanumeric chars
+			input:            strings.Repeat("x", 920) + "api_key=sk-1234567890abcdefghijkl more data here",
+			shouldNotContain: "sk-1234567890abcdefghijkl",
+			description:      "API key should be redacted even at truncation boundary",
+		},
+		{
+			name:             "connection string at truncation boundary",
+			input:            strings.Repeat("x", 880) + "mysql://user:pass@localhost:3306/db tail of message",
+			shouldNotContain: "user:pass@localhost:3306",
+			description:      "Connection string should be redacted even at truncation boundary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Ensure input exceeds maxInputLength
+			if len(tt.input) <= 1000 {
+				tt.input = tt.input + strings.Repeat("x", 1001-len(tt.input))
+			}
+
+			result := smallFilter.Filter(tt.input)
+
+			// Check that the sensitive data was redacted
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("%s\nInput length: %d, Result contains sensitive data: %s\nResult preview: %s",
+					tt.description, len(tt.input), tt.shouldNotContain, result[:min(200, len(result))])
+			}
+
+			// Verify the result contains truncation marker
+			if !strings.Contains(result, "[TRUNCATED") {
+				t.Errorf("Expected [TRUNCATED] marker for input length %d", len(tt.input))
+			}
+		})
+	}
+}
+
+// TestChunkedProcessingBoundarySensitiveData tests that sensitive data patterns
+// spanning chunk boundaries during chunked processing are still detected.
+func TestChunkedProcessingBoundarySensitiveData(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create large inputs that will trigger chunked processing
+	// Chunk size is 4096, so we create inputs larger than that
+	// NOTE: Test inputs must have word boundaries (spaces) around sensitive data
+	// for the patterns to match correctly.
+
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+		description      string
+	}{
+		{
+			name: "credit card spanning chunk boundary",
+			// Place credit card number at chunk boundary (4096 byte mark) with spaces for word boundary
+			input:            strings.Repeat("x ", 2045) + " 4532-0151-1283-0366 " + strings.Repeat(" y", 500),
+			shouldNotContain: "4532-0151-1283-0366",
+			description:      "Credit card spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "password spanning chunk boundary",
+			input:            strings.Repeat("x ", 2040) + " password=supersecretvalue " + strings.Repeat(" y", 500),
+			shouldNotContain: "supersecretvalue",
+			description:      "Password spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "SSN spanning chunk boundary",
+			input:            strings.Repeat("x ", 2045) + " 123-45-6789 " + strings.Repeat(" y", 500),
+			shouldNotContain: "123-45-6789",
+			description:      "SSN spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "API key spanning chunk boundary",
+			input:            strings.Repeat("x ", 2035) + " sk-1234567890abcdefghijklmnop " + strings.Repeat(" y", 500),
+			shouldNotContain: "sk-1234567890abcdefghijklmnop",
+			description:      "API key spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "connection string spanning chunk boundary",
+			input:            strings.Repeat("x ", 2000) + " mysql://admin:secretpass@db.host:3306/prod " + strings.Repeat(" y", 500),
+			shouldNotContain: "admin:secretpass@db.host:3306",
+			description:      "Connection string spanning chunk boundary should be redacted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filter.Filter(tt.input)
+
+			// Check that the sensitive data was redacted
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("%s\nInput length: %d, Result still contains: %s",
+					tt.description, len(tt.input), tt.shouldNotContain)
+			}
+
+			// Verify result contains [REDACTED]
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("Expected [REDACTED] in result for: %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestChunkedProcessingPreservesNonSensitiveData tests that chunked processing
+// doesn't corrupt non-sensitive data.
+func TestChunkedProcessingPreservesNonSensitiveData(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create a large input without any sensitive data
+	input := strings.Repeat("hello world ", 1000) // ~12KB
+
+	result := filter.Filter(input)
+
+	// The result should be very similar (may have some differences due to final pass)
+	// but should not contain [REDACTED] since there's no sensitive data
+	if strings.Contains(result, "[REDACTED]") {
+		t.Error("Non-sensitive data should not be redacted")
+	}
+
+	// Most of the content should be preserved
+	if len(result) < len(input)/2 {
+		t.Errorf("Result too short: got %d, input was %d", len(result), len(input))
+	}
+}
+
+// TestTruncationWithNoSensitiveDataAtBoundary tests that truncation works
+// correctly when there's no sensitive data at the boundary.
+func TestTruncationWithNoSensitiveDataAtBoundary(t *testing.T) {
+	// Create a filter with small max input length
+	smallFilter := &SensitiveDataFilter{
+		maxInputLength: 500,
+		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+	}
+	smallFilter.enabled.Store(true)
+
+	// Copy patterns from default filter
+	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
+	copy(patterns, internal.CompiledBasicPatterns)
+	smallFilter.patternsPtr.Store(&patterns)
+
+	// Create input with no sensitive data near the boundary
+	input := strings.Repeat("normal text ", 100) // ~1200 bytes, no sensitive data
+
+	result := smallFilter.Filter(input)
+
+	// Should contain truncation marker
+	if !strings.Contains(result, "[TRUNCATED") {
+		t.Error("Large input should be truncated")
+	}
+
+	// Should not contain [REDACTED] since there's no sensitive data
+	if strings.Contains(result, "[REDACTED]") {
+		t.Error("Non-sensitive data should not be redacted")
 	}
 }

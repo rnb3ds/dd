@@ -1,4 +1,4 @@
-package dd
+package internal
 
 import (
 	"encoding/json"
@@ -8,12 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/cybergodev/dd/internal"
 )
 
 // Cached default JSON options to avoid repeated allocations
-var defaultJSONOptions = &internal.JSONOptions{
+var defaultJSONOptions = &JSONOptions{
 	PrettyPrint: false,
 	Indent:      DefaultJSONIndent,
 }
@@ -24,6 +22,16 @@ var textBuilderPool = sync.Pool{
 	New: func() any {
 		var buf strings.Builder
 		buf.Grow(256) // typical log message size
+		return &buf
+	},
+}
+
+// argsBuilderPool pools strings.Builder objects for argument concatenation
+// to reduce memory allocations when formatting multiple arguments.
+var argsBuilderPool = sync.Pool{
+	New: func() any {
+		var buf strings.Builder
+		buf.Grow(128) // typical args concatenation size
 		return &buf
 	},
 }
@@ -84,6 +92,20 @@ func (tc *timeCache) getFormattedTime() string {
 	return cached.formatted
 }
 
+// FormatterConfig holds the configuration for creating a MessageFormatter.
+// This is used to pass configuration from the root package without importing it.
+type FormatterConfig struct {
+	Format        LogFormat
+	TimeFormat    string
+	IncludeTime   bool
+	IncludeLevel  bool
+	FullPath      bool
+	DynamicCaller bool
+	JSON          *JSONOptions
+}
+
+// MessageFormatter handles formatting of log messages.
+// It supports both text and JSON formats and caches resources for performance.
 type MessageFormatter struct {
 	format        LogFormat
 	timeFormat    string
@@ -92,14 +114,15 @@ type MessageFormatter struct {
 	fullPath      bool
 	dynamicCaller bool
 	// Cached JSON options to avoid repeated allocations
-	jsonOpts *internal.JSONOptions
+	jsonOpts *JSONOptions
 	// Cached merged field names to avoid allocations during logging
-	cachedFieldNames *internal.JSONFieldNames
+	cachedFieldNames *JSONFieldNames
 	// Time cache for reducing time formatting overhead
 	timeCache *timeCache
 }
 
-func newMessageFormatter(config *LoggerConfig) *MessageFormatter {
+// NewMessageFormatter creates a new MessageFormatter with the given configuration.
+func NewMessageFormatter(config *FormatterConfig) *MessageFormatter {
 	mf := &MessageFormatter{
 		format:        config.Format,
 		timeFormat:    config.TimeFormat,
@@ -112,25 +135,26 @@ func newMessageFormatter(config *LoggerConfig) *MessageFormatter {
 
 	// Pre-compute JSON options to avoid allocations during logging
 	if config.JSON != nil {
-		mf.jsonOpts = &internal.JSONOptions{
+		mf.jsonOpts = &JSONOptions{
 			PrettyPrint: config.JSON.PrettyPrint,
 			Indent:      config.JSON.Indent,
 			FieldNames:  config.JSON.FieldNames,
 		}
 		// Pre-merge field names at creation time
-		mf.cachedFieldNames = internal.MergeWithDefaults(config.JSON.FieldNames)
+		mf.cachedFieldNames = MergeWithDefaults(config.JSON.FieldNames)
 	} else {
 		mf.jsonOpts = defaultJSONOptions
 		// Use default field names when no JSON config provided
-		mf.cachedFieldNames = internal.DefaultJSONFieldNames()
+		mf.cachedFieldNames = DefaultJSONFieldNames()
 	}
 
 	return mf
 }
 
-// formatArgsToString converts arguments to a single string for filtering.
+// FormatArgsToString converts arguments to a single string for filtering.
 // Complex types (slices, maps, structs) are formatted as JSON for better readability.
-func (f *MessageFormatter) formatArgsToString(args ...any) string {
+// Uses pooled strings.Builder to reduce allocations.
+func (f *MessageFormatter) FormatArgsToString(args ...any) string {
 	if len(args) == 0 {
 		return ""
 	}
@@ -138,31 +162,39 @@ func (f *MessageFormatter) formatArgsToString(args ...any) string {
 		return f.formatArgToString(args[0])
 	}
 
-	var parts []string
-	for _, arg := range args {
-		parts = append(parts, f.formatArgToString(arg))
+	// Use pooled builder for multiple arguments
+	sb := argsBuilderPool.Get().(*strings.Builder)
+	sb.Reset()
+	defer argsBuilderPool.Put(sb)
+
+	for i, arg := range args {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(f.formatArgToString(arg))
 	}
-	return strings.Join(parts, " ")
+	return sb.String()
 }
 
 // formatArgToString converts a single argument to string.
 func (f *MessageFormatter) formatArgToString(arg any) string {
-	if internal.IsComplexValue(arg) {
-		if jsonData, err := json.Marshal(convertValue(arg)); err == nil {
+	if IsComplexValue(arg) {
+		if jsonData, err := json.Marshal(ConvertValue(arg)); err == nil {
 			return string(jsonData)
 		}
 	}
 	return fmt.Sprint(arg)
 }
 
-func (f *MessageFormatter) formatWithMessage(level LogLevel, callerDepth int, message string, fields []Field) string {
+// FormatWithMessage formats a complete log message with level, caller, and fields.
+func (f *MessageFormatter) FormatWithMessage(level LogLevel, callerDepth int, message string, fields []Field) string {
 	// Adjust caller depth if dynamic detection is enabled
 	if f.dynamicCaller {
 		callerDepth = f.adjustCallerDepth(callerDepth)
 	}
 
 	switch f.format {
-	case FormatJSON:
+	case LogFormatJSON:
 		return f.formatJSON(level, callerDepth, message, fields)
 	default:
 		return f.formatText(level, callerDepth, message, fields)
@@ -210,7 +242,7 @@ func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message s
 
 	// Add caller
 	if f.dynamicCaller {
-		if callerInfo := internal.GetCaller(callerDepth, f.fullPath); callerInfo != "" {
+		if callerInfo := GetCaller(callerDepth, f.fullPath); callerInfo != "" {
 			if buf.Len() > 0 {
 				buf.WriteByte(' ')
 			}
@@ -226,7 +258,7 @@ func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message s
 
 	// Add fields
 	if len(fields) > 0 {
-		if fieldsStr := formatFields(fields); fieldsStr != "" {
+		if fieldsStr := FormatFields(fields); fieldsStr != "" {
 			buf.WriteByte(' ')
 			buf.WriteString(fieldsStr)
 		}
@@ -263,7 +295,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 
 	// Add caller if enabled
 	if f.dynamicCaller {
-		if callerInfo := internal.GetCaller(callerDepth, f.fullPath); callerInfo != "" {
+		if callerInfo := GetCaller(callerDepth, f.fullPath); callerInfo != "" {
 			entry[fieldNames.Caller] = callerInfo
 		}
 	}
@@ -282,7 +314,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 	}
 
 	// Format JSON
-	result := internal.FormatJSON(entry, f.getJSONOptions())
+	result := FormatJSON(entry, f.getJSONOptions())
 
 	return result
 }
@@ -295,11 +327,11 @@ func (f *MessageFormatter) getJSONFieldNames() *JSONFieldNames {
 		return f.cachedFieldNames
 	}
 	// Fallback (should never happen if properly initialized)
-	return internal.DefaultJSONFieldNames()
+	return DefaultJSONFieldNames()
 }
 
 // getJSONOptions returns the JSON formatting options (cached at initialization)
-func (f *MessageFormatter) getJSONOptions() *internal.JSONOptions {
+func (f *MessageFormatter) getJSONOptions() *JSONOptions {
 	return f.jsonOpts
 }
 

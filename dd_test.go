@@ -1628,28 +1628,28 @@ func TestDebugVisualizationJsonf(t *testing.T) {
 
 func TestTypeConverter(t *testing.T) {
 	// Test simple types
-	isSimple := isSimpleType("test")
+	isSimple := internal.IsSimpleType("test")
 	if !isSimple {
 		t.Error("String should be simple type")
 	}
 
-	isSimple = isSimpleType(42)
+	isSimple = internal.IsSimpleType(42)
 	if !isSimple {
 		t.Error("Int should be simple type")
 	}
 
-	isSimple = isSimpleType(map[string]string{})
+	isSimple = internal.IsSimpleType(map[string]string{})
 	if isSimple {
 		t.Error("Map should not be simple type")
 	}
 
 	// Test format simple value
-	formatted := formatSimpleValue("test")
+	formatted := internal.FormatSimpleValue("test")
 	if formatted != "test" {
 		t.Errorf("formatSimpleValue(string) = %q, want %q", formatted, "test")
 	}
 
-	formatted = formatSimpleValue(nil)
+	formatted = internal.FormatSimpleValue(nil)
 	if formatted != "nil" {
 		t.Errorf("formatSimpleValue(nil) = %q, want %q", formatted, "nil")
 	}

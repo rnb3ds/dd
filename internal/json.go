@@ -1,10 +1,22 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 )
+
+// jsonBufPool pools bytes.Buffer objects for JSON encoding
+// to reduce memory allocations during high-frequency logging.
+var jsonBufPool = sync.Pool{
+	New: func() any {
+		buf := &bytes.Buffer{}
+		buf.Grow(512) // typical JSON log entry size
+		return buf
+	},
+}
 
 // File system and retry configuration constants.
 const (
@@ -70,17 +82,27 @@ func FormatJSON(entry map[string]any, opts *JSONOptions) string {
 		opts = &JSONOptions{PrettyPrint: false, Indent: "  "}
 	}
 
-	var data []byte
-	var err error
+	// Use pooled buffer and encoder for better performance
+	buf := jsonBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer jsonBufPool.Put(buf)
+
+	enc := json.NewEncoder(buf)
+	enc.SetEscapeHTML(false)
+
 	if opts.PrettyPrint {
-		data, err = json.MarshalIndent(entry, "", opts.Indent)
-	} else {
-		data, err = json.Marshal(entry)
+		enc.SetIndent("", opts.Indent)
 	}
 
-	if err != nil {
+	if err := enc.Encode(entry); err != nil {
 		return fmt.Sprintf(`{"error":"json marshal failed: %v"}`, err)
 	}
 
-	return string(data)
+	// json.Encoder adds a trailing newline, remove it
+	result := buf.String()
+	if len(result) > 0 && result[len(result)-1] == '\n' {
+		result = result[:len(result)-1]
+	}
+
+	return result
 }

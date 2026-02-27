@@ -1,10 +1,38 @@
 package internal
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 )
+
+// DefaultJSONIndent is the default indentation string for JSON output.
+const DefaultJSONIndent = "  "
+
+// MaxConvertDepth is the maximum recursion depth for ConvertValue.
+// This prevents stack overflow when converting deeply nested structures.
+const MaxConvertDepth = 100
+
+// LogFormat defines the output format for log messages.
+type LogFormat int8
+
+const (
+	LogFormatText LogFormat = iota
+	LogFormatJSON
+)
+
+func (f LogFormat) String() string {
+	switch f {
+	case LogFormatText:
+		return "text"
+	case LogFormatJSON:
+		return "json"
+	default:
+		return "unknown"
+	}
+}
 
 type LogLevel int8
 
@@ -155,4 +183,195 @@ func IsComplexValue(v any) bool {
 	default:
 		return false
 	}
+}
+
+// ConvertValue converts any value to a JSON-serializable format.
+// This is used for debug visualization and complex value formatting.
+// The function has a maximum recursion depth to prevent stack overflow.
+func ConvertValue(v any) any {
+	return convertValueWithDepth(v, 0)
+}
+
+// convertValueWithDepth is the internal implementation with depth tracking.
+func convertValueWithDepth(v any, depth int) any {
+	// Check recursion depth to prevent stack overflow
+	if depth > MaxConvertDepth {
+		return "[MAX_DEPTH_EXCEEDED]"
+	}
+
+	if v == nil {
+		return nil
+	}
+
+	val := reflect.ValueOf(v)
+
+	if !val.IsValid() {
+		return nil
+	}
+
+	// Handle pointers
+	if val.Kind() == reflect.Ptr {
+		if val.IsNil() {
+			return nil
+		}
+		val = val.Elem()
+	}
+
+	// Handle interfaces
+	if val.Kind() == reflect.Interface {
+		if val.IsNil() {
+			return nil
+		}
+		return convertValueWithDepth(val.Elem().Interface(), depth+1)
+	}
+
+	switch val.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return val.Interface()
+
+	case reflect.Func:
+		return fmt.Sprintf("<func:%s>", val.Type().String())
+
+	case reflect.Chan:
+		return fmt.Sprintf("<chan:%s>", val.Type().String())
+
+	case reflect.Slice, reflect.Array:
+		return convertSliceWithDepth(val, depth)
+
+	case reflect.Map:
+		return convertMapWithDepth(val, depth)
+
+	case reflect.Struct:
+		return convertStructWithDepth(val, depth)
+
+	default:
+		// Handle special common types
+		if val.CanInterface() {
+			iface := val.Interface()
+			switch v := iface.(type) {
+			case error:
+				if v == nil {
+					return nil
+				}
+				return v.Error()
+			case time.Time:
+				return v.Format(time.RFC3339)
+			case time.Duration:
+				return v.String()
+			case fmt.Stringer:
+				return v.String()
+			}
+		}
+
+		// Try JSON marshaling as fallback
+		if val.CanInterface() {
+			if data, err := json.Marshal(val.Interface()); err == nil {
+				var result any
+				if json.Unmarshal(data, &result) == nil {
+					return result
+				}
+			}
+		}
+
+		return fmt.Sprintf("<%s:%v>", val.Type().String(), val)
+	}
+}
+
+func convertSliceWithDepth(val reflect.Value, depth int) any {
+	// Check depth before processing
+	if depth > MaxConvertDepth {
+		return "[MAX_DEPTH_EXCEEDED]"
+	}
+
+	length := val.Len()
+	if length == 0 {
+		return []any{}
+	}
+
+	result := make([]any, length)
+	for i := 0; i < length; i++ {
+		result[i] = convertValueWithDepth(val.Index(i).Interface(), depth+1)
+	}
+	return result
+}
+
+func convertMapWithDepth(val reflect.Value, depth int) any {
+	// Check depth before processing
+	if depth > MaxConvertDepth {
+		return "[MAX_DEPTH_EXCEEDED]"
+	}
+
+	if val.IsNil() {
+		return nil
+	}
+
+	result := make(map[string]any)
+	keys := val.MapKeys()
+
+	for _, key := range keys {
+		keyStr := fmt.Sprintf("%v", key.Interface())
+		result[keyStr] = convertValueWithDepth(val.MapIndex(key).Interface(), depth+1)
+	}
+
+	return result
+}
+
+func convertStructWithDepth(val reflect.Value, depth int) any {
+	// Check depth before processing
+	if depth > MaxConvertDepth {
+		return "[MAX_DEPTH_EXCEEDED]"
+	}
+
+	typ := val.Type()
+
+	// Handle special types
+	if val.CanInterface() {
+		iface := val.Interface()
+		switch v := iface.(type) {
+		case error:
+			if v == nil {
+				return nil
+			}
+			return v.Error()
+		case time.Time:
+			return v.Format(time.RFC3339)
+		case time.Duration:
+			return v.String()
+		case fmt.Stringer:
+			return v.String()
+		}
+	}
+
+	result := make(map[string]any)
+
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+		fieldType := typ.Field(i)
+
+		if !field.CanInterface() && !fieldType.IsExported() {
+			continue
+		}
+
+		fieldName := fieldType.Name
+		if tag := fieldType.Tag.Get("json"); tag != "" && tag != "-" {
+			tagName, _, found := strings.Cut(tag, ",")
+			if found && tagName != "" {
+				fieldName = tagName
+			} else if !found && tag != "" {
+				fieldName = tag
+			}
+			if fieldName == "" {
+				fieldName = fieldType.Name
+			}
+		}
+
+		if fieldName != "" {
+			result[fieldName] = convertValueWithDepth(field.Interface(), depth+1)
+		}
+	}
+
+	return result
 }
