@@ -2,31 +2,20 @@ package dd
 
 import "time"
 
-// FilterLevel defines the level of sensitive data filtering.
-//
-// Deprecated: Use NewBasicSensitiveDataFilter() or NewSensitiveDataFilter() directly
-// for more control over filtering behavior.
-type FilterLevel int
+// LogFormat defines the output format for log messages.
+type LogFormat int8
 
 const (
-	// FilterNone disables all sensitive data filtering.
-	FilterNone FilterLevel = iota
-	// FilterBasic enables basic filtering for common sensitive data
-	// (passwords, API keys, credit cards, phone numbers).
-	FilterBasic
-	// FilterFull enables comprehensive filtering including emails,
-	// IP addresses, JWT tokens, and database connection strings.
-	FilterFull
+	FormatText LogFormat = iota
+	FormatJSON
 )
 
-func (f FilterLevel) String() string {
+func (f LogFormat) String() string {
 	switch f {
-	case FilterNone:
-		return "none"
-	case FilterBasic:
-		return "basic"
-	case FilterFull:
-		return "full"
+	case FormatText:
+		return "text"
+	case FormatJSON:
+		return "json"
 	default:
 		return "unknown"
 	}
@@ -68,17 +57,19 @@ const (
 	AutoFlushInterval   = 100 * time.Millisecond
 )
 
+// File system permission constants.
 const (
+	// DirPermissions is the permission mode for creating directories (rwx------).
 	DirPermissions = 0700
 )
+
+// FilePermissions (0600) for log files is defined in the internal package.
 
 const (
 	DefaultFilterTimeout = 50 * time.Millisecond
 	EmptyFilterTimeout   = 10 * time.Millisecond
-)
-
-const (
-	DefaultLogFile = "logs/app.log"
+	// MaxConcurrentFilters limits concurrent regex filtering goroutines.
+	MaxConcurrentFilters = 100
 )
 
 const (
@@ -92,4 +83,10 @@ const (
 	// regex filtering skips chunking and timeout protection.
 	// Small inputs are processed directly for better performance.
 	FastPathThreshold = 100
+)
+
+const (
+	// DebugVisualizationDepth is the caller depth for debug visualization functions.
+	// Value of 2 means: 0 = current function, 1 = caller, 2 = caller's caller.
+	DebugVisualizationDepth = 2
 )

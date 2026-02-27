@@ -5,10 +5,84 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cybergodev/dd/internal"
 )
+
+// Cached default JSON options to avoid repeated allocations
+var defaultJSONOptions = &internal.JSONOptions{
+	PrettyPrint: false,
+	Indent:      DefaultJSONIndent,
+}
+
+// textBuilderPool pools strings.Builder objects for text formatting
+// to reduce memory allocations during high-frequency logging.
+var textBuilderPool = sync.Pool{
+	New: func() any {
+		var buf strings.Builder
+		buf.Grow(256) // typical log message size
+		return &buf
+	},
+}
+
+// cachedTimeEntry stores a single cached timestamp entry
+type cachedTimeEntry struct {
+	sec       int64  // Unix timestamp in seconds
+	formatted string // Cached formatted timestamp
+}
+
+// timeCache stores cached formatted timestamp for high-frequency logging.
+// Uses atomic pointer for lock-free reads with better cache locality.
+// Caches the formatted string within the same second to reduce time formatting overhead.
+type timeCache struct {
+	current    atomic.Pointer[cachedTimeEntry] // Atomic pointer to current cache entry
+	timeFormat string                          // Time format string (immutable after creation)
+}
+
+// newTimeCache creates a new time cache with the given format
+func newTimeCache(timeFormat string) *timeCache {
+	tc := &timeCache{
+		timeFormat: timeFormat,
+	}
+	// Initialize with zero entry to avoid nil checks
+	tc.current.Store(&cachedTimeEntry{sec: -1, formatted: ""})
+	return tc
+}
+
+// getFormattedTime returns the formatted current time.
+// Uses lock-free atomic operations for better concurrency performance.
+// Cache hit path is completely lock-free with no mutex contention.
+func (tc *timeCache) getFormattedTime() string {
+	now := time.Now()
+	currentSec := now.Unix()
+
+	// Fast path: atomic load to check cache (completely lock-free)
+	cached := tc.current.Load()
+	if cached != nil && cached.sec == currentSec {
+		return cached.formatted
+	}
+
+	// Slow path: create new entry and atomically swap
+	// Multiple goroutines may race here, but that's acceptable -
+	// they'll all create the same formatted time for the same second
+	newEntry := &cachedTimeEntry{
+		sec:       currentSec,
+		formatted: now.Format(tc.timeFormat),
+	}
+
+	// Compare-and-swap to avoid unnecessary updates
+	// If another goroutine already updated to the same second, use their value
+	if cached == nil || cached.sec != currentSec {
+		tc.current.Store(newEntry)
+		return newEntry.formatted
+	}
+
+	// Another goroutine won the race, use their cached value
+	return cached.formatted
+}
 
 type MessageFormatter struct {
 	format        LogFormat
@@ -17,45 +91,68 @@ type MessageFormatter struct {
 	includeLevel  bool
 	fullPath      bool
 	dynamicCaller bool
-	jsonConfig    *JSONOptions
+	// Cached JSON options to avoid repeated allocations
+	jsonOpts *internal.JSONOptions
+	// Cached merged field names to avoid allocations during logging
+	cachedFieldNames *internal.JSONFieldNames
+	// Time cache for reducing time formatting overhead
+	timeCache *timeCache
 }
 
 func newMessageFormatter(config *LoggerConfig) *MessageFormatter {
-	return &MessageFormatter{
+	mf := &MessageFormatter{
 		format:        config.Format,
 		timeFormat:    config.TimeFormat,
 		includeTime:   config.IncludeTime,
 		includeLevel:  config.IncludeLevel,
 		fullPath:      config.FullPath,
 		dynamicCaller: config.DynamicCaller,
-		jsonConfig:    config.JSON,
+		timeCache:     newTimeCache(config.TimeFormat),
 	}
+
+	// Pre-compute JSON options to avoid allocations during logging
+	if config.JSON != nil {
+		mf.jsonOpts = &internal.JSONOptions{
+			PrettyPrint: config.JSON.PrettyPrint,
+			Indent:      config.JSON.Indent,
+			FieldNames:  config.JSON.FieldNames,
+		}
+		// Pre-merge field names at creation time
+		mf.cachedFieldNames = internal.MergeWithDefaults(config.JSON.FieldNames)
+	} else {
+		mf.jsonOpts = defaultJSONOptions
+		// Use default field names when no JSON config provided
+		mf.cachedFieldNames = internal.DefaultJSONFieldNames()
+	}
+
+	return mf
 }
 
-func (f *MessageFormatter) formatMessage(level LogLevel, callerDepth int, args ...any) string {
-	// Join multiple arguments with spaces
-	// Complex types (slices, maps, structs) are formatted as JSON for better readability
+// formatArgsToString converts arguments to a single string for filtering.
+// Complex types (slices, maps, structs) are formatted as JSON for better readability.
+func (f *MessageFormatter) formatArgsToString(args ...any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if len(args) == 1 {
+		return f.formatArgToString(args[0])
+	}
+
 	var parts []string
 	for _, arg := range args {
-		if internal.IsComplexValue(arg) {
-			// Use JSON formatting for complex types
-			if jsonData, err := json.Marshal(convertValue(arg)); err == nil {
-				parts = append(parts, string(jsonData))
-			} else {
-				// Fallback to fmt.Sprint if JSON formatting fails
-				parts = append(parts, fmt.Sprint(arg))
-			}
-		} else {
-			// Use simple formatting for basic types
-			parts = append(parts, fmt.Sprint(arg))
-		}
+		parts = append(parts, f.formatArgToString(arg))
 	}
-	message := strings.Join(parts, " ")
-	return f.formatWithMessage(level, callerDepth, message, nil)
+	return strings.Join(parts, " ")
 }
 
-func (f *MessageFormatter) formatMessageWith(level LogLevel, callerDepth int, msg string, fields []Field) string {
-	return f.formatWithMessage(level, callerDepth, msg, fields)
+// formatArgToString converts a single argument to string.
+func (f *MessageFormatter) formatArgToString(arg any) string {
+	if internal.IsComplexValue(arg) {
+		if jsonData, err := json.Marshal(convertValue(arg)); err == nil {
+			return string(jsonData)
+		}
+	}
+	return fmt.Sprint(arg)
 }
 
 func (f *MessageFormatter) formatWithMessage(level LogLevel, callerDepth int, message string, fields []Field) string {
@@ -73,15 +170,25 @@ func (f *MessageFormatter) formatWithMessage(level LogLevel, callerDepth int, me
 }
 
 func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message string, fields []Field) string {
-	var buf strings.Builder
+	// Pre-calculate capacity to reduce memory allocations
+	// Base: timestamp (~35) + level (7) + brackets (2) + caller (~30) + message + fields
+	estimatedLen := 64 + len(message) + len(fields)*EstimatedFieldSize
+
+	// Get strings.Builder from pool
+	buf := textBuilderPool.Get().(*strings.Builder)
+	buf.Reset()
+	// Grow if needed
+	if buf.Cap() < estimatedLen {
+		buf.Grow(estimatedLen - buf.Cap())
+	}
 
 	// Add timestamp and level with brackets
 	if f.includeTime || f.includeLevel {
 		buf.WriteByte('[')
 
-		// Add timestamp
+		// Add timestamp (using cached time for performance)
 		if f.includeTime {
-			buf.WriteString(time.Now().Format(f.timeFormat))
+			buf.WriteString(f.timeCache.getFormattedTime())
 		}
 
 		// Add level with alignment (5 character width, left-padded with spaces)
@@ -125,32 +232,28 @@ func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message s
 		}
 	}
 
-	return buf.String()
+	result := buf.String()
+
+	// Return builder to pool
+	textBuilderPool.Put(buf)
+
+	return result
 }
 
 func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message string, fields []Field) string {
 	fieldNames := f.getJSONFieldNames()
 
-	// Pre-calculate capacity for better performance
-	capacity := 1 // message always included
-	if f.includeTime {
-		capacity++
-	}
-	if f.includeLevel {
-		capacity++
-	}
-	if f.dynamicCaller {
-		capacity++
-	}
-	if len(fields) > 0 {
-		capacity++
-	}
+	// Create new map directly - for typical log entries (4-5 fields),
+	// this is faster than pool + clear due to:
+	// 1. No pool get/put overhead
+	// 2. No clear loop overhead
+	// 3. Better cache locality with exact size
+	// Pre-allocate with expected capacity to avoid growth
+	entry := make(map[string]any, 8)
 
-	entry := make(map[string]any, capacity)
-
-	// Add timestamp if enabled
+	// Add timestamp if enabled (using cached time for performance)
 	if f.includeTime {
-		entry[fieldNames.Timestamp] = time.Now().Format(f.timeFormat)
+		entry[fieldNames.Timestamp] = f.timeCache.getFormattedTime()
 	}
 
 	// Add level if enabled
@@ -170,6 +273,7 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 
 	// Add structured fields if present
 	if len(fields) > 0 {
+		// Create new fields map with exact capacity
 		fieldsMap := make(map[string]any, len(fields))
 		for _, field := range fields {
 			fieldsMap[field.Key] = field.Value
@@ -177,35 +281,36 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 		entry[fieldNames.Fields] = fieldsMap
 	}
 
-	return internal.FormatJSON(entry, f.getJSONOptions())
+	// Format JSON
+	result := internal.FormatJSON(entry, f.getJSONOptions())
+
+	return result
 }
 
-// getJSONFieldNames returns the JSON field names configuration (thread-safe)
+// getJSONFieldNames returns the cached JSON field names configuration.
+// Field names are pre-merged at formatter creation time to avoid allocations.
 func (f *MessageFormatter) getJSONFieldNames() *JSONFieldNames {
-	if f.jsonConfig != nil && f.jsonConfig.FieldNames != nil {
-		return internal.MergeWithDefaults((*internal.JSONFieldNames)(f.jsonConfig.FieldNames))
+	// Return the pre-cached merged field names
+	if f.cachedFieldNames != nil {
+		return f.cachedFieldNames
 	}
+	// Fallback (should never happen if properly initialized)
 	return internal.DefaultJSONFieldNames()
 }
 
-// getJSONOptions returns the JSON formatting options (thread-safe)
+// getJSONOptions returns the JSON formatting options (cached at initialization)
 func (f *MessageFormatter) getJSONOptions() *internal.JSONOptions {
-	if f.jsonConfig == nil {
-		return &internal.JSONOptions{
-			PrettyPrint: false,
-			Indent:      DefaultJSONIndent,
-		}
-	}
-
-	return &internal.JSONOptions{
-		PrettyPrint: f.jsonConfig.PrettyPrint,
-		Indent:      f.jsonConfig.Indent,
-	}
+	return f.jsonOpts
 }
 
 // adjustCallerDepth adjusts the caller depth based on dynamic caller detection.
 // This method looks for the first non-dd package in the call stack.
 // Returns the depth relative to formatText (not relative to this function).
+//
+// Performance note: This function iterates through the call stack (up to 20 frames)
+// to find user code. The iteration stops as soon as non-dd package is found.
+// For most use cases, this overhead is negligible (< 1µs). If performance is critical
+// and caller information is not needed, consider disabling DynamicCaller in config.
 func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 	// Validate base depth
 	if baseDepth < 0 {
@@ -213,7 +318,8 @@ func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 	}
 
 	// Find the first non-dd package
-	var userCodeDepth int
+	// Use -1 to indicate "not found" since 0 is a valid depth value
+	userCodeDepth := -1
 
 	maxDepth := baseDepth + 20
 	for depth := baseDepth; depth < maxDepth; depth++ {
@@ -235,13 +341,13 @@ func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 			strings.HasPrefix(pkgName, "github.com/cybergodev/dd(") ||
 			pkgName == "github.com/cybergodev/dd"
 
-		if !isDDPackage && userCodeDepth == 0 {
+		if !isDDPackage {
 			userCodeDepth = depth
 			break // Found user code, no need to continue
 		}
 	}
 
-	if userCodeDepth == 0 {
+	if userCodeDepth < 0 {
 		return baseDepth
 	}
 

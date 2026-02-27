@@ -77,12 +77,20 @@ func JSONConfig() *LoggerConfig {
 	}
 }
 
-// Clone creates a shallow copy of the configuration.
-// Note: The Writers slice is copied but the Writer instances themselves are shared.
-// SecurityConfig is deep-copied.
+// Clone creates a copy of the configuration.
+//
+// Deep copy:
+//   - SecurityConfig and its SensitiveFilter
+//   - JSON options and FieldNames
+//
+// Shallow copy (shared references):
+//   - Writers slice (Writer instances are shared)
+//   - FatalHandler and WriteErrorHandler functions
+//
+// Returns nil if the receiver is nil.
 func (c *LoggerConfig) Clone() *LoggerConfig {
 	if c == nil {
-		return DefaultConfig()
+		return nil
 	}
 
 	clone := &LoggerConfig{
@@ -135,11 +143,37 @@ func (c *LoggerConfig) Validate() error {
 		return fmt.Errorf("%w: %d (valid: %d=Text, %d=JSON)", ErrInvalidFormat, c.Format, FormatText, FormatJSON)
 	}
 
+	// Validate TimeFormat if time inclusion is enabled
+	if c.IncludeTime && c.TimeFormat != "" {
+		// Test the time format by formatting a sample time
+		if _, err := time.Parse(c.TimeFormat, time.Now().Format(c.TimeFormat)); err != nil {
+			return fmt.Errorf("invalid time format %q: %w", c.TimeFormat, err)
+		}
+	}
+
+	// Validate Writers count
+	if len(c.Writers) > MaxWriterCount {
+		return fmt.Errorf("%w: %d writers configured, maximum is %d", ErrMaxWritersExceeded, len(c.Writers), MaxWriterCount)
+	}
+
+	// Check for nil writers in the slice
+	for i, w := range c.Writers {
+		if w == nil {
+			return fmt.Errorf("writer at index %d is nil", i)
+		}
+	}
+
 	return nil
 }
 
 // ApplyDefaults sets default values for uninitialized config fields.
 // This should be called after validation and before creating the logger.
+//
+// IMPORTANT: This method modifies the receiver in place.
+// If you need to preserve the original config, clone it first:
+//
+//	config = config.Clone()
+//	config.ApplyDefaults()
 func (c *LoggerConfig) ApplyDefaults() {
 	if c == nil {
 		return
@@ -227,6 +261,8 @@ func (c *LoggerConfig) WithWriter(writer io.Writer) *LoggerConfig {
 	return clone
 }
 
+// WithLevel sets the log level. Returns the original config if level is invalid
+// (out of range) to allow safe method chaining. Use Validate() to check for errors.
 func (c *LoggerConfig) WithLevel(level LogLevel) *LoggerConfig {
 	if c == nil {
 		return nil

@@ -149,6 +149,9 @@ func cleanupExcessBackups(basePath string, maxBackups int, compress bool) {
 
 	for i := 0; i < excessCount; i++ {
 		filePath := filepath.Join(bp.dir, backups[i].name)
+		// Intentionally ignore removal errors - this is a cleanup operation
+		// and failure shouldn't affect the main logging functionality.
+		// The file may have been removed by another process or be locked.
 		_ = os.Remove(filePath)
 	}
 }

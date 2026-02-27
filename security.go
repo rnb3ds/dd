@@ -3,8 +3,10 @@ package dd
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,16 +25,16 @@ var allPatterns = []patternDefinition{
 	{`\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b`, true},
 	{`(?i)((?:credit[_-]?card|card)[\s:=]+)[0-9]{13,19}\b`, true},
 	// Credentials and secrets
-	{`(?i)((?:password|passwd|pwd|secret)[\s:=]+)[^\s]{1,32}\b`, true},
-	{`(?i)((?:token|api[_-]?key|bearer)[\s:=]+)[^\s]{1,128}\b`, true},
+	{`(?i)((?:password|passwd|pwd|secret)[\s:=]+)[^\s]{1,128}\b`, true},
+	{`(?i)((?:token|api[_-]?key|bearer)[\s:=]+)[^\s]{1,256}\b`, true},
 	{`\beyJ[A-Za-z0-9_-]{10,100}\.eyJ[A-Za-z0-9_-]{10,100}\.[A-Za-z0-9_-]{10,100}\b`, false},
 	{`-----BEGIN[^-]{1,20}PRIVATE\s+KEY-----[A-Za-z0-9+/=\s]{1,4000}-----END[^-]{1,20}PRIVATE\s+KEY-----`, true},
 	// API keys
 	{`\bAKIA[0-9A-Z]{16}\b`, false},
 	{`\bAIza[A-Za-z0-9_-]{35}\b`, false},
 	{`\bsk-[A-Za-z0-9]{16,48}\b`, true},
-	// Email
-	{`\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,6}\b`, true},
+	// Email - only in full filter mode to avoid false positives on user@host format
+	{`\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,6}\b`, false},
 	// IP addresses
 	{`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`, false},
 	// Database connection strings - preserve protocol name
@@ -53,40 +55,86 @@ var allPatterns = []patternDefinition{
 	{`\+[\d\s\-\(\)]{7,}\b`, true},                              // International phone with + and formatting (7+ chars total)
 	{`\b00[1-9]\d{6,14}\b`, true},                               // 00 prefix international (8-16 digits total)
 	{`\b(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]?\d{4}\b`, true}, // NANP with required separator: (415) 555-2671 or 415-555-2671
-	{`\b\d{3,5}[- ]\d{4,8}\b`, true},                            // Phone numbers with separators (7-13 digits total)
+	{`\b\d{3,5}[- ]\d{4,8}\b`, false},                           // Phone numbers with separators (7-13 digits total) - moved to full filter to avoid false positives on dates
 	{`\b0\d{3,5}[- ]?\d{4,8}\b`, true},                          // Starting with 0 and separators (10+ digits total)
 }
 
+// Pre-compiled regex cache to avoid repeated compilation
+var (
+	compiledFullPatterns  []*regexp.Regexp
+	compiledBasicPatterns []*regexp.Regexp
+	patternsOnce          sync.Once
+)
+
+// initPatterns initializes the pre-compiled regex patterns.
+// This is called once on first use to avoid startup overhead.
+func initPatterns() {
+	patternsOnce.Do(func() {
+		compiledFullPatterns = make([]*regexp.Regexp, 0, len(allPatterns))
+		compiledBasicPatterns = make([]*regexp.Regexp, 0, len(allPatterns))
+
+		for _, pd := range allPatterns {
+			// Skip ReDoS check for built-in patterns (already validated)
+			re, err := regexp.Compile(pd.pattern)
+			if err != nil {
+				// Output warning in debug/test mode for built-in pattern compilation failures
+				if os.Getenv("DD_DEBUG") != "" {
+					fmt.Fprintf(os.Stderr, "dd: warning: failed to compile pattern %q: %v\n", pd.pattern, err)
+				}
+				continue
+			}
+			compiledFullPatterns = append(compiledFullPatterns, re)
+			if pd.basic {
+				compiledBasicPatterns = append(compiledBasicPatterns, re)
+			}
+		}
+	})
+}
+
 type SensitiveDataFilter struct {
-	patterns       []*regexp.Regexp
-	mu             sync.RWMutex
+	// patternsPtr stores an immutable slice of patterns using atomic pointer.
+	// This eliminates slice copying during filter operations (hot path).
+	// The slice is replaced atomically when patterns are added/removed.
+	patternsPtr    atomic.Pointer[[]*regexp.Regexp]
+	mu             sync.RWMutex // protects pattern modifications
 	maxInputLength int
 	timeout        time.Duration
 	enabled        atomic.Bool
+	// semaphore limits concurrent regex filtering goroutines to prevent resource exhaustion
+	semaphore chan struct{}
+	// activeGoroutines tracks the number of currently running filter goroutines
+	activeGoroutines atomic.Int32
 }
 
 func NewSensitiveDataFilter() *SensitiveDataFilter {
+	// Ensure patterns are initialized (only happens once)
+	initPatterns()
+
 	filter := &SensitiveDataFilter{
-		patterns:       make([]*regexp.Regexp, 0, len(allPatterns)),
 		maxInputLength: MaxInputLength,
 		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
 	}
 	filter.enabled.Store(true)
 
-	for _, pd := range allPatterns {
-		_ = filter.addPattern(pd.pattern)
-	}
+	// Create and store patterns slice atomically
+	patterns := make([]*regexp.Regexp, len(compiledFullPatterns))
+	copy(patterns, compiledFullPatterns)
+	filter.patternsPtr.Store(&patterns)
 
 	return filter
 }
 
 func NewEmptySensitiveDataFilter() *SensitiveDataFilter {
 	filter := &SensitiveDataFilter{
-		patterns:       make([]*regexp.Regexp, 0),
 		maxInputLength: MaxInputLength,
 		timeout:        EmptyFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
 	}
 	filter.enabled.Store(true)
+	// Initialize with empty patterns slice
+	emptyPatterns := make([]*regexp.Regexp, 0)
+	filter.patternsPtr.Store(&emptyPatterns)
 	return filter
 }
 
@@ -103,14 +151,12 @@ func NewCustomSensitiveDataFilter(patterns ...string) (*SensitiveDataFilter, err
 }
 
 func (f *SensitiveDataFilter) addPattern(pattern string) error {
-	// Validate pattern length to prevent ReDoS attacks
 	if len(pattern) > MaxPatternLength {
-		return fmt.Errorf("%w: pattern length %d exceeds maximum %d", ErrInvalidPattern, len(pattern), MaxPatternLength)
+		return fmt.Errorf("%w: %d exceeds maximum %d", ErrPatternTooLong, len(pattern), MaxPatternLength)
 	}
 
-	// Check for nested quantifiers that could cause exponential backtracking (ReDoS)
 	if hasNestedQuantifiers(pattern) {
-		return fmt.Errorf("%w: pattern contains dangerous nested quantifiers that may cause ReDoS", ErrInvalidPattern)
+		return ErrReDoSPattern
 	}
 
 	re, err := regexp.Compile(pattern)
@@ -119,8 +165,14 @@ func (f *SensitiveDataFilter) addPattern(pattern string) error {
 	}
 
 	f.mu.Lock()
-	f.patterns = append(f.patterns, re)
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+
+	// Load current patterns, create new slice with added pattern, store atomically
+	currentPatterns := f.patternsPtr.Load()
+	newPatterns := make([]*regexp.Regexp, len(*currentPatterns)+1)
+	copy(newPatterns, *currentPatterns)
+	newPatterns[len(*currentPatterns)] = re
+	f.patternsPtr.Store(&newPatterns)
 
 	return nil
 }
@@ -265,41 +317,29 @@ func parseInt(s string) (int, error) {
 	if s == "" {
 		return 0, fmt.Errorf("empty number")
 	}
-
-	var result int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("invalid character in number")
-		}
-		result = result*10 + int(c-'0')
-		// Early exit for very large numbers
-		if result > MaxQuantifierRange*10 {
-			return result, nil
-		}
-	}
-	return result, nil
+	return strconv.Atoi(s)
 }
 
 func (f *SensitiveDataFilter) AddPattern(pattern string) error {
 	if f == nil {
-		return fmt.Errorf("filter is nil")
+		return ErrNilFilter
 	}
 	if pattern == "" {
-		return fmt.Errorf("pattern cannot be empty")
+		return ErrEmptyPattern
 	}
 	return f.addPattern(pattern)
 }
 
 func (f *SensitiveDataFilter) AddPatterns(patterns ...string) error {
 	if f == nil {
-		return fmt.Errorf("filter is nil")
+		return ErrNilFilter
 	}
 	for _, pattern := range patterns {
 		if pattern == "" {
-			continue // Skip empty patterns
+			continue
 		}
 		if err := f.addPattern(pattern); err != nil {
-			return fmt.Errorf("failed to add pattern %q: %w", pattern, err)
+			return fmt.Errorf("%w: %q", ErrPatternFailed, pattern)
 		}
 	}
 	return nil
@@ -307,14 +347,17 @@ func (f *SensitiveDataFilter) AddPatterns(patterns ...string) error {
 
 func (f *SensitiveDataFilter) ClearPatterns() {
 	f.mu.Lock()
-	f.patterns = make([]*regexp.Regexp, 0)
-	f.mu.Unlock()
+	defer f.mu.Unlock()
+	emptyPatterns := make([]*regexp.Regexp, 0)
+	f.patternsPtr.Store(&emptyPatterns)
 }
 
 func (f *SensitiveDataFilter) PatternCount() int {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	return len(f.patterns)
+	patterns := f.patternsPtr.Load()
+	if patterns == nil {
+		return 0
+	}
+	return len(*patterns)
 }
 
 func (f *SensitiveDataFilter) Enable() {
@@ -336,6 +379,45 @@ func (f *SensitiveDataFilter) IsEnabled() bool {
 	return f.enabled.Load()
 }
 
+// ActiveGoroutineCount returns the number of currently active filter goroutines.
+// This can be used for monitoring and detecting potential goroutine leaks in
+// high-concurrency scenarios. A consistently high count may indicate that
+// filter operations are timing out frequently.
+func (f *SensitiveDataFilter) ActiveGoroutineCount() int32 {
+	if f == nil {
+		return 0
+	}
+	return f.activeGoroutines.Load()
+}
+
+// WaitForGoroutines waits for all active filter goroutines to complete or until
+// the timeout is reached. This is useful for graceful shutdown to ensure all
+// background filtering operations have finished.
+// Returns true if all goroutines completed, false if timeout was reached.
+func (f *SensitiveDataFilter) WaitForGoroutines(timeout time.Duration) bool {
+	if f == nil {
+		return true
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if f.activeGoroutines.Load() == 0 {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return f.activeGoroutines.Load() == 0
+}
+
+// Clone creates a copy of the SensitiveDataFilter.
+//
+// Deep copy:
+//   - patterns slice (but the compiled *regexp.Regexp instances are shared)
+//
+// New instances:
+//   - semaphore channel (new channel with same capacity)
+//
+// Returns nil if the receiver is nil.
 func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	if f == nil {
 		return nil
@@ -344,13 +426,18 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
+	currentPatterns := f.patternsPtr.Load()
 	clone := &SensitiveDataFilter{
-		patterns:       make([]*regexp.Regexp, len(f.patterns)),
 		maxInputLength: f.maxInputLength,
 		timeout:        f.timeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
 	}
 	clone.enabled.Store(f.enabled.Load())
-	copy(clone.patterns, f.patterns)
+
+	// Copy patterns slice and store atomically
+	patterns := make([]*regexp.Regexp, len(*currentPatterns))
+	copy(patterns, *currentPatterns)
+	clone.patternsPtr.Store(&patterns)
 
 	return clone
 }
@@ -365,24 +452,29 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	// Truncate input to prevent resource exhaustion attacks.
+	// Note: Truncation happens BEFORE filtering for performance reasons.
+	// This is a deliberate trade-off: processing extremely large inputs
+	// could cause ReDoS or memory issues. The truncation limit (256KB)
+	// is large enough that most legitimate messages won't be affected.
+	// Sensitive data patterns spanning the truncation boundary may not
+	// be fully redacted, but this edge case is acceptable given the
+	// security benefits of input size limiting.
 	if f.maxInputLength > 0 && inputLen > f.maxInputLength {
 		input = input[:f.maxInputLength] + "... [TRUNCATED FOR SECURITY]"
 	}
 
-	f.mu.RLock()
-	patternCount := len(f.patterns)
-	if patternCount == 0 {
-		f.mu.RUnlock()
+	// Fast path: atomic load of patterns pointer (lock-free read)
+	patternsPtr := f.patternsPtr.Load()
+	if patternsPtr == nil || len(*patternsPtr) == 0 {
 		return input
 	}
 
-	patterns := make([]*regexp.Regexp, patternCount)
-	copy(patterns, f.patterns)
+	patterns := *patternsPtr
 	timeout := f.timeout
-	f.mu.RUnlock()
 
 	result := input
-	for i := range patternCount {
+	for i := range patterns {
 		result = f.filterWithTimeout(result, patterns[i], timeout)
 		// Early exit if result becomes empty or redacted
 		if result == "" || result == "[REDACTED]" {
@@ -393,6 +485,16 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	return result
 }
 
+// filterWithTimeout applies regex filtering with timeout protection for large inputs.
+//
+// The function uses a tiered approach based on input size:
+// - Small inputs (< FastPathThreshold): Direct synchronous processing
+// - Medium inputs (< 10*FastPathThreshold): Synchronous chunked processing with context
+// - Large inputs: Async processing with timeout and semaphore-based concurrency limiting
+//
+// For large inputs, a goroutine is spawned for regex processing. The context is passed
+// to allow early termination on timeout. The semaphore limits concurrent goroutines
+// to prevent resource exhaustion.
 func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Regexp, timeout time.Duration) string {
 	inputLen := len(input)
 
@@ -401,7 +503,16 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	}
 
 	if inputLen < 10*FastPathThreshold {
-		return f.filterInChunks(input, pattern)
+		return f.filterInChunksWithContext(context.Background(), input, pattern)
+	}
+
+	// Try to acquire semaphore with timeout to limit concurrent goroutines
+	select {
+	case f.semaphore <- struct{}{}:
+		defer func() { <-f.semaphore }()
+	case <-time.After(timeout / 2):
+		// Could not acquire semaphore within half the timeout, return [REDACTED] for safety
+		return "[REDACTED]"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -409,19 +520,24 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 
 	type result struct {
 		output string
-		panic  bool
 	}
 	done := make(chan result, 1)
 
+	f.activeGoroutines.Add(1)
 	go func() {
+		defer f.activeGoroutines.Add(-1)
 		defer func() {
 			if r := recover(); r != nil {
-				done <- result{output: "[REDACTED]", panic: true}
+				select {
+				case done <- result{output: "[REDACTED]"}:
+				default:
+				}
 			}
 		}()
-		output := f.filterInChunks(input, pattern)
+
+		output := f.filterInChunksWithContext(ctx, input, pattern)
 		select {
-		case done <- result{output: output, panic: false}:
+		case done <- result{output: output}:
 		case <-ctx.Done():
 		}
 	}()
@@ -430,13 +546,12 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	case res := <-done:
 		return res.output
 	case <-ctx.Done():
-		// Note: The goroutine may continue running in the background.
-		// For safety, we return [REDACTED] to ensure sensitive data is not leaked.
 		return "[REDACTED]"
 	}
 }
 
-func (f *SensitiveDataFilter) filterInChunks(input string, pattern *regexp.Regexp) string {
+// filterInChunksWithContext processes input in chunks with context support for early termination.
+func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, input string, pattern *regexp.Regexp) string {
 	const chunkSize = 4096
 
 	inputLen := len(input)
@@ -445,19 +560,22 @@ func (f *SensitiveDataFilter) filterInChunks(input string, pattern *regexp.Regex
 		return f.replaceWithPattern(input, pattern)
 	}
 
-	// Process input in non-overlapping chunks for efficiency.
-	// Patterns spanning chunk boundaries will be caught by the final pass.
 	var result strings.Builder
 	result.Grow(inputLen)
 
 	for i := 0; i < inputLen; i += chunkSize {
+		select {
+		case <-ctx.Done():
+			return result.String()
+		default:
+		}
+
 		end := min(i+chunkSize, inputLen)
 		chunk := input[i:end]
 		filtered := f.replaceWithPattern(chunk, pattern)
 		result.WriteString(filtered)
 	}
 
-	// Final pass to catch any patterns that might have been split across chunk boundaries
 	resultStr := result.String()
 	return f.replaceWithPattern(resultStr, pattern)
 }
@@ -549,6 +667,42 @@ func isSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
+
+	// Fast path: try exact match with inline ASCII lowercase comparison
+	// This avoids strings.ToLower allocation for exact matches
+	keyLen := len(key)
+
+	// Check exact match in both maps using inline lowercase comparison
+	// For short keys (< 64 bytes), use stack-allocated buffer
+	if keyLen <= 64 {
+		var lowerBuf [64]byte
+		for i := 0; i < keyLen; i++ {
+			c := key[i]
+			if c >= 'A' && c <= 'Z' {
+				c += 32 // ASCII lowercase conversion
+			}
+			lowerBuf[i] = c
+		}
+		lowerKey := string(lowerBuf[:keyLen])
+
+		// Check exact match for all keywords
+		if _, exists := sensitiveKeywords[lowerKey]; exists {
+			return true
+		}
+		if _, exists := exactMatchOnlyKeywords[lowerKey]; exists {
+			return true
+		}
+
+		// Substring match for compound keys like "user_password", "api_key_secret", etc.
+		for keyword := range sensitiveKeywords {
+			if strings.Contains(lowerKey, keyword) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Slow path: for long keys, use strings.ToLower
 	lowerKey := strings.ToLower(key)
 
 	// Check exact match for all keywords
@@ -732,9 +886,15 @@ type SecurityConfig struct {
 	SensitiveFilter *SensitiveDataFilter
 }
 
+// Clone creates a copy of the SecurityConfig.
+//
+// Deep copy:
+//   - SensitiveFilter (via SensitiveDataFilter.Clone())
+//
+// Returns nil if the receiver is nil.
 func (sc *SecurityConfig) Clone() *SecurityConfig {
 	if sc == nil {
-		return DefaultSecurityConfig()
+		return nil
 	}
 
 	clone := &SecurityConfig{
@@ -748,18 +908,20 @@ func (sc *SecurityConfig) Clone() *SecurityConfig {
 }
 
 func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
+	// Ensure patterns are initialized (only happens once)
+	initPatterns()
+
 	filter := &SensitiveDataFilter{
-		patterns:       make([]*regexp.Regexp, 0, 20),
 		maxInputLength: MaxInputLength,
 		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
 	}
 	filter.enabled.Store(true)
 
-	for _, pd := range allPatterns {
-		if pd.basic {
-			_ = filter.addPattern(pd.pattern)
-		}
-	}
+	// Create and store patterns slice atomically
+	patterns := make([]*regexp.Regexp, len(compiledBasicPatterns))
+	copy(patterns, compiledBasicPatterns)
+	filter.patternsPtr.Store(&patterns)
 
 	return filter
 }

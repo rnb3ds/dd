@@ -12,7 +12,7 @@ import (
 //
 // This example covers:
 // 1. Package-level functions (simplest)
-// 2. Convenience constructors
+// 2. Configuration-based logger creation
 // 3. All log levels
 // 4. Formatted and structured logging
 // 5. Dynamic level control
@@ -20,7 +20,7 @@ func main() {
 	fmt.Println("=== DD Logger Quick Start ===\n")
 
 	example1PackageLevelFunctions()
-	example2ConvenienceConstructors()
+	example2LoggerCreation()
 	example3LogLevels()
 	example4FormattedLogging()
 	example5DynamicLevelControl()
@@ -47,22 +47,27 @@ func example1PackageLevelFunctions() {
 	fmt.Println()
 }
 
-// Example 2: Convenience constructors
-func example2ConvenienceConstructors() {
-	fmt.Println("2. Convenience Constructors")
-	fmt.Println("---------------------------")
+// Example 2: Logger creation with configuration
+func example2LoggerCreation() {
+	fmt.Println("2. Logger Creation with Configuration")
+	fmt.Println("--------------------------------------")
 
-	// Console logger (recommended)
-	logger1, err := dd.ConsoleLogger()
+	// Console logger (default)
+	logger1, err := dd.New(dd.DefaultConfig())
 	if err != nil {
-		fmt.Printf("Failed to create console logger: %v\n", err)
+		fmt.Printf("Failed to create logger: %v\n", err)
 		return
 	}
 	defer logger1.Close()
 	logger1.Info("Console only output")
 
 	// File logger
-	logger2, err := dd.FileLogger("logs/custom.log")
+	fileConfig, err := dd.DefaultConfig().WithFileOnly("logs/custom.log", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create file config: %v\n", err)
+		return
+	}
+	logger2, err := dd.New(fileConfig)
 	if err != nil {
 		fmt.Printf("Failed to create file logger: %v\n", err)
 		return
@@ -71,16 +76,26 @@ func example2ConvenienceConstructors() {
 	logger2.Info("File only output → logs/custom.log")
 
 	// JSON file logger
-	logger3, err := dd.JSONFileLogger()
+	jsonConfig, err := dd.JSONConfig().WithFileOnly("logs/app.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create JSON config: %v\n", err)
+		return
+	}
+	logger3, err := dd.New(jsonConfig)
 	if err != nil {
 		fmt.Printf("Failed to create JSON logger: %v\n", err)
 		return
 	}
 	defer logger3.Close()
-	logger3.Info("JSON format → logs/app.log")
+	logger3.Info("JSON format → logs/app.json")
 
 	// Multi-output (console + file)
-	logger4, err := dd.MultiLogger()
+	multiConfig, err := dd.DefaultConfig().WithFile("logs/app.log", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create multi config: %v\n", err)
+		return
+	}
+	logger4, err := dd.New(multiConfig)
 	if err != nil {
 		fmt.Printf("Failed to create multi logger: %v\n", err)
 		return
@@ -96,10 +111,11 @@ func example3LogLevels() {
 	fmt.Println("3. Log Levels")
 	fmt.Println("-------------")
 
-	logger, _ := dd.NewWithOptions(dd.Options{
-		Level:   dd.LevelDebug, // Show all levels
-		Console: true,
-	})
+	logger, err := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
+	if err != nil {
+		fmt.Printf("Failed to create logger: %v\n", err)
+		return
+	}
 	defer logger.Close()
 
 	// Level hierarchy: Debug < Info < Warn < Error < Fatal
@@ -118,9 +134,9 @@ func example4FormattedLogging() {
 	fmt.Println("4. Formatted & Structured Logging")
 	fmt.Println("---------------------------------")
 
-	logger, err := dd.ConsoleLogger()
+	logger, err := dd.New(dd.DefaultConfig())
 	if err != nil {
-		fmt.Printf("Failed to create console logger: %v\n", err)
+		fmt.Printf("Failed to create logger: %v\n", err)
 		return
 	}
 	defer logger.Close()
@@ -149,9 +165,9 @@ func example5DynamicLevelControl() {
 	fmt.Println("5. Dynamic Level Control")
 	fmt.Println("-------------------------")
 
-	logger, err := dd.ConsoleLogger()
+	logger, err := dd.New(dd.DefaultConfig())
 	if err != nil {
-		fmt.Printf("Failed to create console logger: %v\n", err)
+		fmt.Printf("Failed to create logger: %v\n", err)
 		return
 	}
 	defer logger.Close()

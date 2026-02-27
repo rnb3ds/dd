@@ -56,10 +56,7 @@ func example2SetDefault() {
 	fmt.Println("---------------------------------------")
 
 	// Create custom logger with DEBUG level
-	customLogger, err := dd.NewWithOptions(dd.Options{
-		Level:   dd.LevelDebug, // Show all levels
-		Console: true,
-	})
+	customLogger, err := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -143,10 +140,9 @@ func example4BestPractices() {
 	fmt.Println("\nCommon Pitfalls:")
 	fmt.Println("  ❌ Calling dd.Info() before SetDefault()")
 	fmt.Println("  ❌ Forgetting to call Close() on loggers")
-	fmt.Println("  ❌ Using ToFile() in production (panics on error)")
 	fmt.Println("\nRecommended Patterns:")
 	fmt.Println("  ✅ SetDefault() in init() or start of main()")
-	fmt.Println("  ✅ Use FileLogger() instead of ToFile() for production")
+	fmt.Println("  ✅ Use New() with config for production")
 	fmt.Println("  ✅ Use defer logger.Close() for cleanup")
 	fmt.Println()
 }
@@ -173,10 +169,7 @@ func computeExpensiveDebugInfo() string {
 // Uncomment to use:
 /*
 func init() {
-	logger, _ := dd.NewWithOptions(dd.Options{
-		Level:   dd.LevelDebug,
-		Console: true,
-	})
+	logger, _ := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
 	dd.SetDefault(logger)
 }
 */

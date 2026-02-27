@@ -38,11 +38,12 @@ func example1ErrorHandling() {
 	fmt.Println("1. Error Handling & Panic Recovery")
 	fmt.Println("----------------------------------")
 
-	logger, err := dd.NewWithOptions(dd.Options{
-		Format:  dd.FormatJSON,
-		Console: true,
-		File:    "logs/errors.log",
-	})
+	config, err := dd.JSONConfig().WithFile("logs/errors.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -79,11 +80,12 @@ func example2ContextPropagation() {
 	fmt.Println("2. Context Propagation")
 	fmt.Println("----------------------")
 
-	logger, err := dd.NewWithOptions(dd.Options{
-		Format:  dd.FormatJSON,
-		Console: true,
-		File:    "logs/requests.log",
-	})
+	config, err := dd.JSONConfig().WithFile("logs/requests.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -119,11 +121,12 @@ func example3GracefulShutdown() {
 	fmt.Println("3. Graceful Shutdown")
 	fmt.Println("--------------------")
 
-	logger, err := dd.NewWithOptions(dd.Options{
-		Format:  dd.FormatJSON,
-		Console: true,
-		File:    "logs/shutdown.log",
-	})
+	config, err := dd.JSONConfig().WithFile("logs/shutdown.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -175,11 +178,12 @@ func example4BackgroundJobs() {
 	fmt.Println("4. Background Jobs")
 	fmt.Println("------------------")
 
-	logger, err := dd.NewWithOptions(dd.Options{
-		Format:  dd.FormatJSON,
-		Console: true,
-		File:    "logs/jobs.log",
-	})
+	config, err := dd.JSONConfig().WithFile("logs/jobs.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

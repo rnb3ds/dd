@@ -36,17 +36,12 @@ func example1CallerDetection() {
 	fmt.Println("-------------------")
 
 	// No caller (default)
-	logger1, _ := dd.NewWithOptions(dd.Options{
-		Console: true,
-	})
+	logger1, _ := dd.New(dd.DefaultConfig())
 	defer logger1.Close()
 	logger1.Info("No caller: caller information is not shown")
 
 	// Dynamic caller (auto-detects through wrappers)
-	logger2, _ := dd.NewWithOptions(dd.Options{
-		DynamicCaller: true, // Enable dynamic detection
-		Console:       true,
-	})
+	logger2, _ := dd.New(dd.DefaultConfig().WithDynamicCaller(true))
 	defer logger2.Close()
 
 	// Direct call
@@ -85,7 +80,12 @@ func example2CloudLogging() {
 	)
 
 	// Distributed tracing format
-	traceLogger, err := dd.JSONFileLogger("logs/trace.log")
+	traceConfig, err := dd.JSONConfig().WithFileOnly("logs/trace.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	traceLogger, err := dd.New(traceConfig)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -178,9 +178,9 @@ func example4DebugUtilities() {
 	dd.JSONF("Request from %s", "192.168.1.1")
 
 	// Logger methods
-	logger, err := dd.ConsoleLogger()
+	logger, err := dd.New(dd.DefaultConfig())
 	if err != nil {
-		fmt.Printf("Failed to create console logger: %v\n", err)
+		fmt.Printf("Failed to create logger: %v\n", err)
 		return
 	}
 	defer logger.Close()

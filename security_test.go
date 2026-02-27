@@ -892,8 +892,10 @@ func TestPhoneNumberFieldFiltering(t *testing.T) {
 	if strings.Contains(output, "13812345678") {
 		t.Error("Mobile value should be filtered")
 	}
-	if strings.Contains(output, "john@example.com") {
-		t.Error("Email value should be filtered")
+	// Note: Email is NOT filtered in basic mode to avoid false positives on user@host format
+	// Email filtering is only available in full filter mode (NewSensitiveDataFilter)
+	if !strings.Contains(output, "john@example.com") {
+		t.Error("Email should NOT be filtered in basic mode")
 	}
 	if !strings.Contains(output, "[REDACTED]") {
 		t.Error("Sensitive fields should be redacted")

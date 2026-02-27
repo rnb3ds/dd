@@ -6,10 +6,16 @@ import (
 	"time"
 )
 
+// File system and retry configuration constants.
 const (
+	// FilePermissions is the permission mode for creating files (rw-------).
+	// Only the owner has read and write permissions. This is more restrictive
+	// than DirPermissions (0700) because files don't need execute permission.
 	FilePermissions = 0600
-	RetryAttempts   = 3
-	RetryDelay      = 10 * time.Millisecond
+	// RetryAttempts is the number of times to retry file operations before giving up.
+	RetryAttempts = 3
+	// RetryDelay is the duration to wait between retry attempts.
+	RetryDelay = 10 * time.Millisecond
 )
 
 func DefaultJSONFieldNames() *JSONFieldNames {

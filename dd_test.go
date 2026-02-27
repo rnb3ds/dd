@@ -206,8 +206,8 @@ func TestConfigClone(t *testing.T) {
 		var config *LoggerConfig
 		clone := config.Clone()
 
-		if clone == nil {
-			t.Error("Clone() of nil should return default config")
+		if clone != nil {
+			t.Error("Clone() of nil should return nil")
 		}
 	})
 }
@@ -1057,12 +1057,13 @@ func TestMaxWritersExceeded(t *testing.T) {
 	var buf bytes.Buffer
 	logger, _ := New(&LoggerConfig{Writers: []io.Writer{&buf}})
 
-	// Clear default writer and add 99 more
-	logger.writers = nil
+	// Clear default writer and add 99 more using the atomic pointer
+	writers := make([]io.Writer, 0, 100)
 	for i := 0; i < 99; i++ {
 		var b bytes.Buffer
-		logger.writers = append(logger.writers, &b)
+		writers = append(writers, &b)
 	}
+	logger.writersPtr.Store(&writers)
 
 	// The 100th writer should work
 	var buf100 bytes.Buffer
@@ -1196,117 +1197,6 @@ func TestFieldConstructors(t *testing.T) {
 			}
 		})
 	}
-}
-
-// ============================================================================
-// CONVENIENCE CONSTRUCTORS TESTS
-// ============================================================================
-
-func TestConvenienceConstructors(t *testing.T) {
-	t.Run("FileLogger", func(t *testing.T) {
-		logger, err := FileLogger()
-		if err != nil {
-			t.Fatalf("FileLogger should not return error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("FileLogger should return logger")
-		}
-		logger.Close()
-	})
-
-	t.Run("FileLoggerWithPath", func(t *testing.T) {
-		logger, err := FileLogger(t.TempDir() + "/test.log")
-		if err != nil {
-			t.Fatalf("FileLogger should not return error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("FileLogger should return logger")
-		}
-		logger.Close()
-	})
-
-	t.Run("JSONFileLogger", func(t *testing.T) {
-		logger, err := JSONFileLogger()
-		if err != nil {
-			t.Fatalf("JSONFileLogger should not return error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("JSONFileLogger should return logger")
-		}
-		logger.Close()
-	})
-
-	t.Run("ConsoleLogger", func(t *testing.T) {
-		logger, err := ConsoleLogger()
-		if err != nil {
-			t.Fatalf("ConsoleLogger should not return error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("ConsoleLogger should return logger")
-		}
-		logger.Close()
-	})
-
-	t.Run("MultiLogger", func(t *testing.T) {
-		logger, err := MultiLogger(t.TempDir() + "/test.log")
-		if err != nil {
-			t.Fatalf("MultiLogger should not return error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("MultiLogger should return logger")
-		}
-		logger.Close()
-	})
-}
-
-// ============================================================================
-// OPTIONS CONSTRUCTOR TESTS
-// ============================================================================
-
-func TestNewWithOptions(t *testing.T) {
-	var buf bytes.Buffer
-
-	t.Run("BasicOptions", func(t *testing.T) {
-		logger, err := NewWithOptions(Options{
-			Level:   LevelDebug,
-			Format:  FormatJSON,
-			Console: false,
-		})
-		if err != nil {
-			t.Fatalf("NewWithOptions should not error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("Logger should be created")
-		}
-		logger.Close()
-	})
-
-	t.Run("WithAdditionalWriters", func(t *testing.T) {
-		logger, err := NewWithOptions(Options{
-			Level:             LevelInfo,
-			AdditionalWriters: []io.Writer{&buf},
-		})
-		if err != nil {
-			t.Fatalf("NewWithOptions should not error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("Logger should be created")
-		}
-		logger.Close()
-	})
-
-	t.Run("WithFilterLevel", func(t *testing.T) {
-		logger, err := NewWithOptions(Options{
-			FilterLevel: FilterBasic,
-		})
-		if err != nil {
-			t.Fatalf("NewWithOptions should not error: %v", err)
-		}
-		if logger == nil {
-			t.Fatal("Logger should be created")
-		}
-		logger.Close()
-	})
 }
 
 // ============================================================================

@@ -1,9 +1,16 @@
 package dd
 
+// Debug Visualization Functions
+//
+// SECURITY WARNING: These functions output directly to stdout WITHOUT sensitive
+// data filtering. For production logging, use Logger methods (Info, Debug, etc.).
+// Never use these with passwords, tokens, or other sensitive data.
+
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
@@ -13,21 +20,27 @@ import (
 	"github.com/cybergodev/dd/internal"
 )
 
-// JSON outputs data as compact JSON to console for debugging.
+// JSON outputs data as compact JSON to stdout with caller info for debugging.
 func JSON(data ...any) {
 	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), data...)
 }
 
-// JSONF outputs formatted data as compact JSON to console for debugging.
+// JSONF outputs formatted data as compact JSON to stdout with caller info for debugging.
 func JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	outputJSON(internal.GetCaller(DebugVisualizationDepth, false), formatted)
 }
 
-// Text outputs data as pretty-printed format to console for debugging.
+// Text outputs data as pretty-printed format to stdout for debugging.
 func Text(data ...any) {
+	outputTextData(os.Stdout, data...)
+}
+
+// outputTextData is the shared implementation for Text output.
+// It writes formatted data to the specified writer.
+func outputTextData(w io.Writer, data ...any) {
 	if len(data) == 0 {
-		fmt.Fprintln(os.Stdout)
+		fmt.Fprintln(w)
 		return
 	}
 
@@ -42,9 +55,9 @@ func Text(data ...any) {
 		if isSimpleType(item) {
 			output := formatSimpleValue(item)
 			if i < len(data)-1 {
-				fmt.Fprintf(os.Stdout, "%s ", output)
+				fmt.Fprintf(w, "%s ", output)
 			} else {
-				fmt.Fprintf(os.Stdout, "%s\n", output)
+				fmt.Fprintf(w, "%s\n", output)
 			}
 			continue
 		}
@@ -53,9 +66,11 @@ func Text(data ...any) {
 		convertedItem := convertValue(item)
 
 		if err := encoder.Encode(convertedItem); err != nil {
-			fmt.Fprintf(os.Stdout, "[%d] %v", i, item)
+			fmt.Fprintf(w, "[%d] %v", i, item)
 			if i < len(data)-1 {
-				fmt.Fprint(os.Stdout, " ")
+				fmt.Fprint(w, " ")
+			} else {
+				fmt.Fprintln(w)
 			}
 			continue
 		}
@@ -66,26 +81,26 @@ func Text(data ...any) {
 		}
 
 		if i < len(data)-1 {
-			fmt.Fprintf(os.Stdout, "%s ", out)
+			fmt.Fprintf(w, "%s ", out)
 		} else {
-			fmt.Fprintf(os.Stdout, "%s\n", out)
+			fmt.Fprintf(w, "%s\n", out)
 		}
 	}
 }
 
-// Textf outputs formatted data as pretty-printed format to console for debugging.
+// Textf outputs formatted data as pretty-printed format to stdout for debugging.
 func Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	fmt.Fprintln(os.Stdout, formatted)
 }
 
-// Exit outputs data as pretty-printed format to console for debugging and then exits the program.
+// Exit outputs data as pretty-printed JSON to stdout and exits with code 0.
 func Exit(data ...any) {
 	outputText(internal.GetCaller(DebugVisualizationDepth, false), data...)
 	os.Exit(0)
 }
 
-// Exitf outputs formatted data as pretty-printed format to console for debugging and then exits the program.
+// Exitf outputs formatted data to stdout with caller info and exits with code 0.
 func Exitf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
@@ -127,6 +142,8 @@ func formatSimpleValue(v any) string {
 	return fmt.Sprintf("%v", val.Interface())
 }
 
+const MaxDebugBufferSize = 64 * 1024 // 64KB - maximum buffer size to return to pool
+
 var (
 	debugBufPool = sync.Pool{
 		New: func() any {
@@ -146,20 +163,13 @@ func newDebugBuffer() *debugBuffer {
 
 func (b *debugBuffer) Release() {
 	if b.Buffer != nil {
-		b.Reset()
-		debugBufPool.Put(b.Buffer)
+		// Discard buffers that grew too large to prevent unbounded memory growth
+		if b.Buffer.Cap() <= MaxDebugBufferSize {
+			b.Reset()
+			debugBufPool.Put(b.Buffer)
+		}
 		b.Buffer = nil
 	}
-}
-
-// withDebugBuffer is a helper function for buffer pool operations.
-func withDebugBuffer(fn func(*bytes.Buffer)) {
-	buf := debugBufPool.Get().(*bytes.Buffer)
-	defer func() {
-		buf.Reset()
-		debugBufPool.Put(buf)
-	}()
-	fn(buf)
 }
 
 // convertValue converts any value to a JSON-serializable format.

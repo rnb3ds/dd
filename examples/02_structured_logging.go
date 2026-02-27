@@ -36,7 +36,12 @@ func example1CoreFieldTypes() {
 	fmt.Println("1. Core Field Types")
 	fmt.Println("-------------------")
 
-	logger, err := dd.JSONFileLogger("logs/structured.log")
+	config, err := dd.JSONConfig().WithFileOnly("logs/structured.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -66,7 +71,12 @@ func example2HTTPRequestLogging() {
 	fmt.Println("2. HTTP Request Logging")
 	fmt.Println("-----------------------")
 
-	logger, err := dd.JSONFileLogger("logs/http.log")
+	config, err := dd.JSONConfig().WithFileOnly("logs/http.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -98,7 +108,12 @@ func example3ErrorLogging() {
 	fmt.Println("3. Error & Warning Logging")
 	fmt.Println("--------------------------")
 
-	logger, err := dd.JSONFileLogger("logs/errors.log")
+	config, err := dd.JSONConfig().WithFileOnly("logs/errors.json", dd.FileWriterConfig{})
+	if err != nil {
+		fmt.Printf("Failed to create config: %v\n", err)
+		return
+	}
+	logger, err := dd.New(config)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

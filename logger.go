@@ -2,15 +2,14 @@
 package dd
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cybergodev/dd/internal"
 )
@@ -23,6 +22,10 @@ var (
 		},
 	}
 )
+
+// hexChars is a package-level constant for hex digit conversion
+// Avoids allocation in sanitizeControlChars hot path
+const hexChars = "0123456789abcdef"
 
 // Re-export log level types and constants
 type LogLevel = internal.LogLevel
@@ -39,6 +42,13 @@ type FatalHandler func()
 
 type WriteErrorHandler func(writer io.Writer, err error)
 
+// Flusher is an interface for writers that can flush buffered data.
+// Writers implementing this interface will have their Flush method called
+// during Logger.Flush() to ensure all buffered data is written.
+type Flusher interface {
+	Flush() error
+}
+
 type Logger struct {
 	level  atomic.Int32
 	closed atomic.Bool
@@ -48,10 +58,17 @@ type Logger struct {
 	writeErrorHandler atomic.Value // stores WriteErrorHandler
 	formatter         *MessageFormatter
 
-	writers        []io.Writer
-	mu             sync.RWMutex
+	// writersPtr stores an immutable slice of writers using atomic pointer.
+	// This eliminates slice copying during write operations.
+	// The slice is replaced atomically when writers are added/removed.
+	writersPtr     atomic.Pointer[[]io.Writer]
+	writersMu      sync.Mutex // protects AddWriter/RemoveWriter operations
 	securityConfig atomic.Value
 
+	// ctx and cancel provide graceful shutdown for background operations.
+	// When Close() is called, cancel() signals all background goroutines
+	// (compression, cleanup) to stop. This ensures clean shutdown without
+	// leaking goroutines. The context is also used by filter timeout goroutines.
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -74,14 +91,19 @@ func New(configs ...*LoggerConfig) (*Logger, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Pre-allocate writers slice with expected capacity
+	initialWriters := make([]io.Writer, 0, len(config.Writers))
+
 	l := &Logger{
 		callerDepth:  DefaultCallerDepth,
 		fatalHandler: config.FatalHandler,
 		formatter:    newMessageFormatter(config),
-		writers:      make([]io.Writer, 0, len(config.Writers)),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
+
+	// Initialize writers pointer with empty slice
+	l.writersPtr.Store(&initialWriters)
 
 	if config.WriteErrorHandler != nil {
 		l.writeErrorHandler.Store(config.WriteErrorHandler)
@@ -145,6 +167,8 @@ func (l *Logger) SetSecurityConfig(config *SecurityConfig) {
 
 // GetSecurityConfig returns a copy of the current security configuration (thread-safe).
 // Returns DefaultSecurityConfig() if no security config has been set.
+// The returned config is a clone, so modifications do not affect the logger's config.
+// For internal use within the logger, use getSecurityConfig() which returns the original.
 func (l *Logger) GetSecurityConfig() *SecurityConfig {
 	config := l.securityConfig.Load()
 	if config == nil {
@@ -167,14 +191,26 @@ func (l *Logger) AddWriter(writer io.Writer) error {
 		return ErrLoggerClosed
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
 
-	if len(l.writers) >= MaxWriterCount {
+	// Load current writers slice
+	currentWriters := l.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrLoggerClosed
+	}
+
+	if len(*currentWriters) >= MaxWriterCount {
 		return ErrMaxWritersExceeded
 	}
 
-	l.writers = append(l.writers, writer)
+	// Create new slice with the new writer added
+	newWriters := make([]io.Writer, len(*currentWriters)+1)
+	copy(newWriters, *currentWriters)
+	newWriters[len(*currentWriters)] = writer
+
+	// Atomically swap the pointer
+	l.writersPtr.Store(&newWriters)
 	return nil
 }
 
@@ -188,15 +224,25 @@ func (l *Logger) RemoveWriter(writer io.Writer) error {
 		return ErrLoggerClosed
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
 
-	writerCount := len(l.writers)
+	// Load current writers slice
+	currentWriters := l.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrLoggerClosed
+	}
+
+	writerCount := len(*currentWriters)
 	for i := 0; i < writerCount; i++ {
-		if l.writers[i] == writer {
-			l.writers[i] = l.writers[writerCount-1]
-			l.writers[writerCount-1] = nil
-			l.writers = l.writers[:writerCount-1]
+		if (*currentWriters)[i] == writer {
+			// Create new slice without the removed writer
+			newWriters := make([]io.Writer, writerCount-1)
+			copy(newWriters, (*currentWriters)[:i])
+			copy(newWriters[i:], (*currentWriters)[i+1:])
+
+			// Atomically swap the pointer
+			l.writersPtr.Store(&newWriters)
 			return nil
 		}
 	}
@@ -205,6 +251,7 @@ func (l *Logger) RemoveWriter(writer io.Writer) error {
 }
 
 // Close closes the logger and all associated resources (thread-safe).
+// If multiple writers fail to close, all errors are collected and returned.
 func (l *Logger) Close() error {
 	if !l.closed.CompareAndSwap(false, true) {
 		return nil
@@ -212,22 +259,27 @@ func (l *Logger) Close() error {
 
 	l.cancel()
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
 
-	var closeErr error
-	for _, writer := range l.writers {
+	// Load and clear writers atomically
+	currentWriters := l.writersPtr.Swap(nil)
+	if currentWriters == nil {
+		return nil
+	}
+
+	var errs []error
+	for _, writer := range *currentWriters {
 		if closer, ok := writer.(io.Closer); ok {
 			if writer != os.Stdout && writer != os.Stderr && writer != os.Stdin {
-				if err := closer.Close(); err != nil && closeErr == nil {
-					closeErr = fmt.Errorf("failed to close writer: %w", err)
+				if err := closer.Close(); err != nil {
+					errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
 				}
 			}
 		}
 	}
 
-	l.writers = nil
-	return closeErr
+	return errors.Join(errs...)
 }
 
 // shouldLog checks if a message should be logged based on level and logger state
@@ -239,7 +291,9 @@ func (l *Logger) shouldLog(level LogLevel) bool {
 	return !l.closed.Load()
 }
 
-// getSecurityConfig returns the current security configuration
+// getSecurityConfig returns the current security configuration (internal use).
+// This returns the original config pointer, not a clone, for efficiency.
+// For external access, use GetSecurityConfig() which returns a safe clone.
 func (l *Logger) getSecurityConfig() *SecurityConfig {
 	if config := l.securityConfig.Load(); config != nil {
 		if secConfig, ok := config.(*SecurityConfig); ok {
@@ -255,9 +309,10 @@ func (l *Logger) Log(level LogLevel, args ...any) {
 		return
 	}
 
-	// Format message with space-separated arguments
-	message := l.formatter.formatMessage(level, l.callerDepth, args...)
-	message = l.applyMessageSecurity(message)
+	// Format args to string first, then apply security filtering before adding timestamp/level/caller
+	msg := l.formatter.formatArgsToString(args...)
+	msg = l.applyMessageSecurity(msg)
+	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, nil)
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
@@ -271,9 +326,10 @@ func (l *Logger) Logf(level LogLevel, format string, args ...any) {
 		return
 	}
 
+	// Format with sprintf first, then apply security filtering before adding timestamp/level/caller
 	msg := fmt.Sprintf(format, args...)
 	msg = l.applyMessageSecurity(msg)
-	message := l.formatter.formatMessage(level, l.callerDepth, msg)
+	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, nil)
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
@@ -289,7 +345,7 @@ func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
 
 	msg = l.applyMessageSecurity(msg)
 	processedFields := l.processFields(fields)
-	message := l.formatter.formatMessageWith(level, l.callerDepth, msg, processedFields)
+	message := l.formatter.formatWithMessage(level, l.callerDepth, msg, processedFields)
 	l.writeMessage(l.applySizeLimit(message))
 
 	if level == LevelFatal {
@@ -347,16 +403,23 @@ func (l *Logger) applySizeLimit(message string) string {
 	return message
 }
 
-// sanitizeControlChars removes control characters from the message
+// sanitizeControlChars replaces dangerous control characters with visible escape sequences.
+// This preserves debugging information while preventing log injection attacks.
+// Allowed control characters: \n (newline), \r (carriage return), \t (tab)
+// Null bytes (\x00) and DEL (127) are removed entirely for security.
+// Other control characters (0x01-0x1F except \n, \r, \t) are replaced with \xNN format.
 func sanitizeControlChars(message string) string {
-	if len(message) == 0 {
+	msgLen := len(message)
+	if msgLen == 0 {
 		return message
 	}
 
-	// Fast path: check if sanitization is needed
+	// Fast path: check if sanitization is needed using string indexing
+	// Avoids []byte allocation when no sanitization is needed
 	needsSanitization := false
-	for _, r := range message {
-		if r == '\x00' || (r < 32 && r != '\n' && r != '\r' && r != '\t') || r == 127 {
+	for i := 0; i < msgLen; i++ {
+		b := message[i]
+		if b == 0x00 || (b < 32 && b != '\n' && b != '\r' && b != '\t') || b == 127 {
 			needsSanitization = true
 			break
 		}
@@ -366,16 +429,39 @@ func sanitizeControlChars(message string) string {
 		return message
 	}
 
-	// Slow path: remove control characters
-	var builder strings.Builder
-	builder.Grow(len(message))
-	for _, r := range message {
-		if r != '\x00' && (r >= 32 || r == '\n' || r == '\r' || r == '\t') && r != 127 {
-			builder.WriteRune(r)
+	// Slow path: replace control characters with escape sequences
+	// Now we need the byte slice for manipulation
+	msgBytes := []byte(message)
+
+	// Pre-calculate result size to avoid reallocations
+	resultSize := msgLen
+	for _, b := range msgBytes {
+		if b == 0x00 || b == 127 {
+			resultSize-- // These are removed
+		} else if b < 32 && b != '\n' && b != '\r' && b != '\t' {
+			resultSize += 3 // \xNN is 4 bytes, but we already counted 1
 		}
 	}
 
-	return builder.String()
+	result := make([]byte, 0, resultSize)
+
+	for _, b := range msgBytes {
+		switch {
+		case b == 0x00:
+			// Null bytes are removed entirely for security (prevent log truncation)
+			continue
+		case b == 127:
+			// DEL character is removed
+			continue
+		case b < 32 && b != '\n' && b != '\r' && b != '\t':
+			// Replace other control characters with visible escape sequence \xNN
+			result = append(result, '\\', 'x', hexChars[b>>4], hexChars[b&0x0f])
+		default:
+			result = append(result, b)
+		}
+	}
+
+	return string(result)
 }
 
 // handleFatal handles fatal log messages
@@ -413,16 +499,17 @@ func (l *Logger) writeMessage(message string) {
 	buf = append(buf, message...)
 	buf = append(buf, '\n')
 
-	l.mu.RLock()
-	writerCount := len(l.writers)
-	if writerCount == 0 {
-		l.mu.RUnlock()
+	// Load writers slice atomically - no mutex needed for reading
+	writersPtr := l.writersPtr.Load()
+	if writersPtr == nil || len(*writersPtr) == 0 {
 		return
 	}
 
+	writers := *writersPtr
+	writerCount := len(writers)
+
 	if writerCount == 1 {
-		w := l.writers[0]
-		l.mu.RUnlock()
+		w := writers[0]
 		if _, err := w.Write(buf); err != nil {
 			if handler := l.getWriteErrorHandler(); handler != nil {
 				handler(w, err)
@@ -431,10 +518,7 @@ func (l *Logger) writeMessage(message string) {
 		return
 	}
 
-	writers := make([]io.Writer, writerCount)
-	copy(writers, l.writers)
-	l.mu.RUnlock()
-
+	// Iterate directly over the immutable slice - no copy needed
 	for _, writer := range writers {
 		if _, err := writer.Write(buf); err != nil {
 			if handler := l.getWriteErrorHandler(); handler != nil {
@@ -444,7 +528,6 @@ func (l *Logger) writeMessage(message string) {
 	}
 }
 
-// Convenience logging methods
 func (l *Logger) Debug(args ...any) { l.Log(LevelDebug, args...) }
 func (l *Logger) Info(args ...any)  { l.Log(LevelInfo, args...) }
 func (l *Logger) Warn(args ...any)  { l.Log(LevelWarn, args...) }
@@ -470,20 +553,48 @@ func (l *Logger) IsClosed() bool {
 
 // WriterCount returns the number of registered writers (thread-safe).
 func (l *Logger) WriterCount() int {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-	return len(l.writers)
+	writersPtr := l.writersPtr.Load()
+	if writersPtr == nil {
+		return 0
+	}
+	return len(*writersPtr)
+}
+
+// ActiveFilterGoroutines returns the number of currently active filter goroutines
+// in the security filter. This can be used for monitoring and detecting potential
+// goroutine leaks in high-concurrency scenarios. A consistently high count may
+// indicate that filter operations are timing out frequently.
+func (l *Logger) ActiveFilterGoroutines() int32 {
+	secConfig := l.getSecurityConfig()
+	if secConfig == nil || secConfig.SensitiveFilter == nil {
+		return 0
+	}
+	return secConfig.SensitiveFilter.ActiveGoroutineCount()
+}
+
+// WaitForFilterGoroutines waits for all active filter goroutines to complete
+// or until the timeout is reached. This is useful for graceful shutdown to
+// ensure all background filtering operations have finished.
+// Returns true if all goroutines completed, false if timeout was reached.
+func (l *Logger) WaitForFilterGoroutines(timeout time.Duration) bool {
+	secConfig := l.getSecurityConfig()
+	if secConfig == nil || secConfig.SensitiveFilter == nil {
+		return true
+	}
+	return secConfig.SensitiveFilter.WaitForGoroutines(timeout)
 }
 
 // Flush flushes all buffered writers (thread-safe).
-// Writers that implement interface{ Flush() error } will be flushed.
+// Writers that implement Flusher interface will be flushed.
 func (l *Logger) Flush() error {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	writersPtr := l.writersPtr.Load()
+	if writersPtr == nil {
+		return nil
+	}
 
 	var firstErr error
-	for _, w := range l.writers {
-		if flusher, ok := w.(interface{ Flush() error }); ok {
+	for _, w := range *writersPtr {
+		if flusher, ok := w.(Flusher); ok {
 			if err := flusher.Flush(); err != nil && firstErr == nil {
 				firstErr = err
 			}
@@ -493,16 +604,24 @@ func (l *Logger) Flush() error {
 }
 
 // fmt package replacement methods - output via logger's writers with caller info
+//
+// IMPORTANT: These Logger methods are DIFFERENT from the package-level dd.Print functions!
+//
+//	logger.Print()  -> writes to configured writers with security filtering
+//	dd.Print()      -> writes directly to stdout WITHOUT security filtering (debug only)
+//
+// Always use logger.Print/Printf/Println for production logging.
 
 // Print writes to configured writers with caller info and newline.
 // Uses LevelDebug for filtering. Arguments are joined with spaces.
+// Applies sensitive data filtering based on SecurityConfig.
 // Note: Both Print() and Println() behave identically because Log() already adds a newline.
 func (l *Logger) Print(args ...any) {
 	l.Log(LevelDebug, args...)
 }
 
 // Println writes to configured writers with caller info, spaces between operands, and a newline.
-// Uses LevelDebug for filtering.
+// Uses LevelDebug for filtering. Applies sensitive data filtering based on SecurityConfig.
 // Note: Behaves identically to Print() because Log() already adds a newline.
 func (l *Logger) Println(args ...any) {
 	l.Log(LevelDebug, args...)
@@ -516,58 +635,13 @@ func (l *Logger) Printf(format string, args ...any) {
 
 // Debug utilities - Text and JSON output for debugging
 
-// Text These methods output directly to stdout with caller information,
-// matching the behavior of package-level Text() and JSON() functions.
+// Text outputs data as pretty-printed format to stdout for debugging.
+//
+// SECURITY WARNING: This method does NOT apply sensitive data filtering.
+// Do not use with sensitive data in production environments. For secure logging,
+// use logger.Info(), logger.Debug(), etc. which apply sensitive data filtering.
 func (l *Logger) Text(data ...any) {
-	if len(data) == 0 {
-		fmt.Fprintln(os.Stdout)
-		return
-	}
-
-	// Simple types output directly
-	for i, item := range data {
-		if isSimpleType(item) {
-			output := formatSimpleValue(item)
-			if i < len(data)-1 {
-				fmt.Fprintf(os.Stdout, "%s ", output)
-			} else {
-				fmt.Fprintf(os.Stdout, "%s\n", output)
-			}
-			continue
-		}
-		// Complex types - use JSON formatting
-		buf := debugBufPool.Get().(*bytes.Buffer)
-		defer func() {
-			buf.Reset()
-			debugBufPool.Put(buf)
-		}()
-
-		encoder := json.NewEncoder(buf)
-		encoder.SetEscapeHTML(false)
-		encoder.SetIndent("", "  ")
-
-		convertedItem := convertValue(item)
-		if err := encoder.Encode(convertedItem); err != nil {
-			fmt.Fprintf(os.Stdout, "[%d] %v", i, item)
-			if i < len(data)-1 {
-				fmt.Fprint(os.Stdout, " ")
-			} else {
-				fmt.Fprintln(os.Stdout)
-			}
-			continue
-		}
-
-		out := buf.Bytes()
-		if len(out) > 0 && out[len(out)-1] == '\n' {
-			out = out[:len(out)-1]
-		}
-
-		if i < len(data)-1 {
-			fmt.Fprintf(os.Stdout, "%s ", out)
-		} else {
-			fmt.Fprintf(os.Stdout, "%s\n", out)
-		}
-	}
+	outputTextData(os.Stdout, data...)
 }
 
 func (l *Logger) Textf(format string, args ...any) {
@@ -586,7 +660,10 @@ func (l *Logger) JSONF(format string, args ...any) {
 	outputJSON(caller, formatted)
 }
 
-var defaultLogger atomic.Pointer[Logger]
+var (
+	defaultLogger atomic.Pointer[Logger]
+	defaultOnce   sync.Once
+)
 
 // Default returns the default global logger (thread-safe).
 // The logger is created on first call with default configuration.
@@ -597,28 +674,29 @@ func Default() *Logger {
 		return logger
 	}
 
-	// Create default logger
-	logger, err := New(nil)
-	if err != nil {
-		// Create fallback logger with proper initialization if New() fails
-		defaultConfig := DefaultConfig()
-		ctx, cancel := context.WithCancel(context.Background())
-		logger = &Logger{
-			callerDepth: DefaultCallerDepth,
-			formatter:   newMessageFormatter(defaultConfig),
-			writers:     []io.Writer{os.Stderr},
-			ctx:         ctx,
-			cancel:      cancel,
+	defaultOnce.Do(func() {
+		// Only create if not already set by SetDefault()
+		if defaultLogger.Load() == nil {
+			logger, err := New(nil)
+			if err != nil {
+				// Create fallback logger with proper initialization if New() fails
+				defaultConfig := DefaultConfig()
+				ctx, cancel := context.WithCancel(context.Background())
+				fallbackWriters := []io.Writer{os.Stderr}
+				logger = &Logger{
+					callerDepth: DefaultCallerDepth,
+					formatter:   newMessageFormatter(defaultConfig),
+					ctx:         ctx,
+					cancel:      cancel,
+				}
+				logger.writersPtr.Store(&fallbackWriters)
+				logger.level.Store(int32(defaultConfig.Level))
+				logger.securityConfig.Store(defaultConfig.SecurityConfig)
+			}
+			defaultLogger.Store(logger)
 		}
-		logger.level.Store(int32(defaultConfig.Level))
-		logger.securityConfig.Store(defaultConfig.SecurityConfig)
-	}
+	})
 
-	// Use CompareAndSwap for atomic initialization
-	// If another goroutine already set it, use their value
-	if defaultLogger.CompareAndSwap(nil, logger) {
-		return logger
-	}
 	return defaultLogger.Load()
 }
 

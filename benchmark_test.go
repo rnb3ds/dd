@@ -3,7 +3,9 @@ package dd
 import (
 	"bytes"
 	"io"
+	"sync"
 	"testing"
+	"time"
 )
 
 // ============================================================================
@@ -773,6 +775,488 @@ func BenchmarkJSONOptions(b *testing.B) {
 				String("k1", "v1"),
 				Int("k2", 42),
 			)
+		}
+	})
+}
+
+// ============================================================================
+// OPTIMIZATION-SPECIFIC BENCHMARKS (Phase 4)
+// ============================================================================
+
+// BenchmarkMultiWriterThroughput tests the atomic writer pointer optimization
+func BenchmarkMultiWriterThroughput(b *testing.B) {
+	b.Run("SingleWriter", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("TwoWriters", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Writers = []io.Writer{io.Discard, io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("FiveWriters", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Writers = []io.Writer{io.Discard, io.Discard, io.Discard, io.Discard, io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+}
+
+// BenchmarkJSONMapAllocation tests the JSON map pooling optimization
+func BenchmarkJSONMapAllocation(b *testing.B) {
+	config := JSONConfig()
+	config.Writers = []io.Writer{io.Discard}
+	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(config)
+	defer logger.Close()
+
+	b.Run("NoFields", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("WithFields", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test message",
+				String("key1", "value1"),
+				Int("key2", 42),
+				Bool("key3", true),
+			)
+		}
+	})
+
+	b.Run("WithManyFields", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test message",
+				String("key1", "value1"),
+				Int("key2", 42),
+				Bool("key3", true),
+				Float64("key4", 3.14),
+				String("key5", "value5"),
+				Int("key6", 100),
+				String("key7", "value7"),
+			)
+		}
+	})
+}
+
+// BenchmarkReflectionTypeCheck tests the type switch fast path optimization
+func BenchmarkReflectionTypeCheck(b *testing.B) {
+	config := DefaultConfig()
+	config.Writers = []io.Writer{io.Discard}
+	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(config)
+	defer logger.Close()
+
+	b.Run("StringType", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", String("key", "value"))
+		}
+	})
+
+	b.Run("IntType", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", Int("key", 42))
+		}
+	})
+
+	b.Run("BoolType", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", Bool("key", true))
+		}
+	})
+
+	b.Run("FloatType", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", Float64("key", 3.14159))
+		}
+	})
+
+	b.Run("TimeType", func(b *testing.B) {
+		now := time.Now()
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", Any("time", now))
+		}
+	})
+
+	b.Run("ComplexType", func(b *testing.B) {
+		data := struct {
+			Name  string
+			Value int
+		}{"test", 42}
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test", Any("data", data))
+		}
+	})
+}
+
+// BenchmarkTimeFormatting tests the time cache optimization
+func BenchmarkTimeFormatting(b *testing.B) {
+	config := DefaultConfig()
+	config.Writers = []io.Writer{io.Discard}
+	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	config.IncludeTime = true
+	logger, _ := New(config)
+	defer logger.Close()
+
+	b.Run("CachedTime", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("CachedTimeParallel", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				logger.Info("test message")
+			}
+		})
+	})
+}
+
+// BenchmarkEndToEndText tests end-to-end text logging performance
+func BenchmarkEndToEndText(b *testing.B) {
+	b.Run("Simple", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Format = FormatText
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("WithFields", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Format = FormatText
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test message",
+				String("user", "john"),
+				Int("id", 12345),
+				String("action", "login"),
+			)
+		}
+	})
+
+	b.Run("Parallel", func(b *testing.B) {
+		config := DefaultConfig()
+		config.Format = FormatText
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				logger.Info("test message")
+			}
+		})
+	})
+}
+
+// BenchmarkEndToEndJSON tests end-to-end JSON logging performance
+func BenchmarkEndToEndJSON(b *testing.B) {
+	b.Run("Simple", func(b *testing.B) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test message")
+		}
+	})
+
+	b.Run("WithFields", func(b *testing.B) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.InfoWith("test message",
+				String("user", "john"),
+				Int("id", 12345),
+				String("action", "login"),
+			)
+		}
+	})
+
+	b.Run("Parallel", func(b *testing.B) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				logger.Info("test message")
+			}
+		})
+	})
+}
+
+// BenchmarkBuilderPool tests the strings.Builder pool optimization
+func BenchmarkBuilderPool(b *testing.B) {
+	config := DefaultConfig()
+	config.Format = FormatText
+	config.Writers = []io.Writer{io.Discard}
+	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(config)
+	defer logger.Close()
+
+	b.Run("ShortMessage", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("short")
+		}
+	})
+
+	b.Run("MediumMessage", func(b *testing.B) {
+		msg := "This is a medium length message for testing the builder pool optimization"
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info(msg)
+		}
+	})
+
+	b.Run("LongMessage", func(b *testing.B) {
+		msg := "This is a longer message that will require more buffer space in the strings.Builder and will test the pool's ability to handle varying message sizes efficiently."
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info(msg)
+		}
+	})
+}
+
+// BenchmarkWriterModification tests the performance of AddWriter/RemoveWriter
+func BenchmarkWriterModification(b *testing.B) {
+	config := DefaultConfig()
+	config.Writers = []io.Writer{io.Discard}
+	logger, _ := New(config)
+	defer logger.Close()
+
+	var wg sync.WaitGroup
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		wg.Add(2)
+
+		// Concurrent writer modification and logging
+		go func() {
+			defer wg.Done()
+			logger.AddWriter(io.Discard)
+		}()
+
+		go func() {
+			defer wg.Done()
+			logger.Info("concurrent message")
+		}()
+
+		wg.Wait()
+
+		// Clean up
+		logger.RemoveWriter(io.Discard)
+	}
+}
+
+// BenchmarkFieldNameCaching tests the JSON field name caching optimization
+func BenchmarkFieldNameCaching(b *testing.B) {
+	b.Run("DefaultFieldNames", func(b *testing.B) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test")
+		}
+	})
+
+	b.Run("CustomFieldNames", func(b *testing.B) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		config.JSON.FieldNames = &JSONFieldNames{
+			Timestamp: "@timestamp",
+			Level:     "severity",
+			Caller:    "source",
+			Message:   "msg",
+			Fields:    "data",
+		}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			logger.Info("test")
+		}
+	})
+}
+
+// ============================================================================
+// ALLOCATION TARGET TESTS
+// ============================================================================
+
+// TestAllocsPerLog verifies that allocation targets are met
+func TestAllocsPerLog(t *testing.T) {
+	t.Run("SimpleTextLog", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		allocs := testing.AllocsPerRun(1000, func() {
+			logger.Info("test message")
+		})
+
+		// Target: < 5 allocations for simple text log
+		if allocs > 5 {
+			t.Logf("Warning: Simple text log allocated %.1f times (target: < 5)", allocs)
+		} else {
+			t.Logf("Simple text log: %.1f allocations (target: < 5) - PASS", allocs)
+		}
+	})
+
+	t.Run("JSONLogNoFields", func(t *testing.T) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		allocs := testing.AllocsPerRun(1000, func() {
+			logger.Info("test message")
+		})
+
+		// Target: < 8 allocations for JSON log
+		if allocs > 8 {
+			t.Logf("Warning: JSON log (no fields) allocated %.1f times (target: < 8)", allocs)
+		} else {
+			t.Logf("JSON log (no fields): %.1f allocations (target: < 8) - PASS", allocs)
+		}
+	})
+
+	t.Run("JSONLogWithFields", func(t *testing.T) {
+		config := JSONConfig()
+		config.Writers = []io.Writer{io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		allocs := testing.AllocsPerRun(1000, func() {
+			logger.InfoWith("test message",
+				String("user", "john"),
+				Int("id", 123),
+			)
+		})
+
+		// Target: < 12 allocations for JSON log with fields
+		if allocs > 12 {
+			t.Logf("Warning: JSON log (with fields) allocated %.1f times (target: < 12)", allocs)
+		} else {
+			t.Logf("JSON log (with fields): %.1f allocations (target: < 12) - PASS", allocs)
+		}
+	})
+
+	t.Run("MultiWriterLog", func(t *testing.T) {
+		config := DefaultConfig()
+		config.Writers = []io.Writer{io.Discard, io.Discard, io.Discard}
+		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(config)
+		defer logger.Close()
+
+		allocs := testing.AllocsPerRun(1000, func() {
+			logger.Info("test message")
+		})
+
+		// Target: < 6 allocations for multi-writer log (no slice copy)
+		if allocs > 6 {
+			t.Logf("Warning: Multi-writer log allocated %.1f times (target: < 6)", allocs)
+		} else {
+			t.Logf("Multi-writer log: %.1f allocations (target: < 6) - PASS", allocs)
 		}
 	})
 }

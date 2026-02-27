@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cybergodev/dd/internal"
 )
@@ -27,7 +28,47 @@ func Int(key string, value int) Field {
 	return Field{Key: key, Value: value}
 }
 
+func Int8(key string, value int8) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Int16(key string, value int16) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Int32(key string, value int32) Field {
+	return Field{Key: key, Value: value}
+}
+
 func Int64(key string, value int64) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Uint(key string, value uint) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Uint8(key string, value uint8) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Uint16(key string, value uint16) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Uint32(key string, value uint32) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Uint64(key string, value uint64) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Float32(key string, value float32) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Float64(key string, value float64) Field {
 	return Field{Key: key, Value: value}
 }
 
@@ -35,7 +76,11 @@ func Bool(key string, value bool) Field {
 	return Field{Key: key, Value: value}
 }
 
-func Float64(key string, value float64) Field {
+func Duration(key string, value time.Duration) Field {
+	return Field{Key: key, Value: value}
+}
+
+func Time(key string, value time.Time) Field {
 	return Field{Key: key, Value: value}
 }
 
@@ -104,8 +149,26 @@ func formatFields(fields []Field) string {
 			}
 		case int:
 			sb.WriteString(strconv.FormatInt(int64(v), 10))
+		case int8:
+			sb.WriteString(strconv.FormatInt(int64(v), 10))
+		case int16:
+			sb.WriteString(strconv.FormatInt(int64(v), 10))
+		case int32:
+			sb.WriteString(strconv.FormatInt(int64(v), 10))
 		case int64:
 			sb.WriteString(strconv.FormatInt(v, 10))
+		case uint:
+			sb.WriteString(strconv.FormatUint(uint64(v), 10))
+		case uint8:
+			sb.WriteString(strconv.FormatUint(uint64(v), 10))
+		case uint16:
+			sb.WriteString(strconv.FormatUint(uint64(v), 10))
+		case uint32:
+			sb.WriteString(strconv.FormatUint(uint64(v), 10))
+		case uint64:
+			sb.WriteString(strconv.FormatUint(v, 10))
+		case float32:
+			sb.WriteString(strconv.FormatFloat(float64(v), 'g', -1, 32))
 		case float64:
 			sb.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
 		case bool:
@@ -114,10 +177,13 @@ func formatFields(fields []Field) string {
 			} else {
 				sb.WriteString("false")
 			}
+		case time.Duration:
+			sb.WriteString(v.String())
+		case time.Time:
+			sb.WriteString(v.Format(time.RFC3339))
 		case nil:
 			sb.WriteString("<nil>")
 		default:
-			// For complex types (slices, maps, structs), use JSON formatting
 			if internal.IsComplexValue(v) {
 				if jsonData, err := json.Marshal(v); err == nil {
 					sb.Write(jsonData)

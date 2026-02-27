@@ -96,20 +96,42 @@ func validateAndSecurePath(path string) (string, error) {
 		return "", fmt.Errorf("%w (max %d characters)", ErrPathTooLong, MaxPathLength)
 	}
 
-	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
+	// Check for path traversal in the ORIGINAL path before any normalization
+	// This catches patterns like "../secret" or "logs/../../../etc/passwd"
+	// We check both forward and backward slashes for cross-platform safety
+	if strings.Contains(path, "..") {
 		return "", ErrPathTraversal
 	}
 
-	// Convert to absolute path
-	// Note: Symlink checking is done AFTER opening the file in internal.OpenFile
-	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities
-	absPath, err := filepath.Abs(cleanPath)
+	// Convert to absolute path first to normalize
+	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidPath, err)
 	}
 
-	return absPath, nil
+	// Clean the absolute path
+	cleanPath := filepath.Clean(absPath)
+
+	// Additional Windows-specific checks
+	// These checks prevent attacks like:
+	// - UNC path injection: \\?\, \\.\, etc.
+	// - Drive relative paths: C:..\, D:..\ etc.
+	// - Reserved device names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+	cleanPathLower := strings.ToLower(cleanPath)
+	if strings.HasPrefix(cleanPathLower, "\\\\?\\") ||
+		strings.HasPrefix(cleanPathLower, "\\\\.\\") {
+		// Only allow if the original path was already using these prefixes
+		// This prevents attackers from injecting UNC paths
+		origLower := strings.ToLower(path)
+		if !strings.HasPrefix(origLower, "\\\\?\\") &&
+			!strings.HasPrefix(origLower, "\\\\.\\") {
+			return "", ErrPathTraversal
+		}
+	}
+
+	// Note: Symlink checking is done AFTER opening the file in internal.OpenFile
+	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities
+	return cleanPath, nil
 }
 
 func validateFileWriterConfig(config *FileWriterConfig) error {
@@ -241,8 +263,8 @@ func (fw *FileWriter) cleanupRoutine() {
 			return
 		case <-ticker.C:
 			if err := internal.CleanupOldFiles(fw.path, fw.maxAge); err != nil {
-				// Log the error but continue running
-				// The cleanup is a background task, errors shouldn't stop the logger
+				// Log to stderr as fallback - cleanup errors should not be silent
+				fmt.Fprintf(os.Stderr, "dd: cleanup old files %s: %v\n", fw.path, err)
 			}
 		}
 	}
@@ -350,17 +372,21 @@ func (bw *BufferedWriter) Close() error {
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
 
+	var errs []error
+
 	if bw.buffer != nil {
 		if err := bw.buffer.Flush(); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("flush: %w", err))
 		}
 	}
 
 	if closer, ok := bw.writer.(io.Closer); ok {
-		return closer.Close()
+		if err := closer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close writer: %w", err))
+		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (bw *BufferedWriter) autoFlushRoutine() {
@@ -377,7 +403,6 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 			bw.mu.Lock()
 			if bw.buffer.Buffered() > 0 && time.Since(bw.lastFlush) >= bw.flushTime {
 				if err := bw.buffer.Flush(); err != nil {
-					// Log to stderr as fallback - buffered writer errors should not be silent
 					fmt.Fprintf(os.Stderr, "dd: autoflush error: %v\n", err)
 				}
 				bw.lastFlush = time.Now()
@@ -388,8 +413,11 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 }
 
 type MultiWriter struct {
-	writers []io.Writer
-	mu      sync.RWMutex
+	// writersPtr stores an immutable slice of writers using atomic pointer.
+	// This eliminates slice copying during write operations (hot path).
+	// The slice is replaced atomically when writers are added/removed.
+	writersPtr atomic.Pointer[[]io.Writer]
+	mu         sync.Mutex // protects AddWriter/RemoveWriter operations
 }
 
 func NewMultiWriter(writers ...io.Writer) *MultiWriter {
@@ -400,9 +428,9 @@ func NewMultiWriter(writers ...io.Writer) *MultiWriter {
 		}
 	}
 
-	return &MultiWriter{
-		writers: validWriters,
-	}
+	mw := &MultiWriter{}
+	mw.writersPtr.Store(&validWriters)
+	return mw
 }
 
 func (mw *MultiWriter) Write(p []byte) (int, error) {
@@ -411,24 +439,21 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	mw.mu.RLock()
-	writerCount := len(mw.writers)
-	if writerCount == 0 {
-		mw.mu.RUnlock()
+	// Fast path: atomic load of writers pointer (lock-free read)
+	writersPtr := mw.writersPtr.Load()
+	if writersPtr == nil || len(*writersPtr) == 0 {
 		return pLen, nil
 	}
 
+	writers := *writersPtr
+	writerCount := len(writers)
+
 	// Fast path: single writer optimization
 	if writerCount == 1 {
-		w := mw.writers[0]
-		mw.mu.RUnlock()
-		return w.Write(p)
+		return writers[0].Write(p)
 	}
 
-	writers := make([]io.Writer, writerCount)
-	copy(writers, mw.writers)
-	mw.mu.RUnlock()
-
+	// Iterate directly over the immutable slice - no copy needed
 	var firstErr error
 	successCount := 0
 
@@ -464,7 +489,7 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 
 func (mw *MultiWriter) AddWriter(w io.Writer) error {
 	if mw == nil {
-		return fmt.Errorf("multiwriter is nil")
+		return fmt.Errorf("%w", ErrNilWriter)
 	}
 	if w == nil {
 		return ErrNilWriter
@@ -473,18 +498,30 @@ func (mw *MultiWriter) AddWriter(w io.Writer) error {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
+	// Load current writers slice
+	currentWriters := mw.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrNilWriter
+	}
+
 	// Check for duplicates
-	for _, existing := range mw.writers {
+	for _, existing := range *currentWriters {
 		if existing == w {
 			return nil // Already exists, not an error
 		}
 	}
 
-	if len(mw.writers) >= MaxWriterCount {
+	if len(*currentWriters) >= MaxWriterCount {
 		return ErrMaxWritersExceeded
 	}
 
-	mw.writers = append(mw.writers, w)
+	// Create new slice with the new writer added
+	newWriters := make([]io.Writer, len(*currentWriters)+1)
+	copy(newWriters, *currentWriters)
+	newWriters[len(*currentWriters)] = w
+
+	// Atomically swap the pointer
+	mw.writersPtr.Store(&newWriters)
 	return nil
 }
 
@@ -496,22 +533,34 @@ func (mw *MultiWriter) RemoveWriter(w io.Writer) {
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
-	for i := 0; i < len(mw.writers); i++ {
-		if mw.writers[i] == w {
-			// Prevent memory leak by clearing reference
-			mw.writers[i] = mw.writers[len(mw.writers)-1]
-			mw.writers[len(mw.writers)-1] = nil
-			mw.writers = mw.writers[:len(mw.writers)-1]
-			break
+	// Load current writers slice
+	currentWriters := mw.writersPtr.Load()
+	if currentWriters == nil {
+		return
+	}
+
+	writerCount := len(*currentWriters)
+	for i := 0; i < writerCount; i++ {
+		if (*currentWriters)[i] == w {
+			// Create new slice without the removed writer
+			newWriters := make([]io.Writer, writerCount-1)
+			copy(newWriters, (*currentWriters)[:i])
+			copy(newWriters[i:], (*currentWriters)[i+1:])
+
+			// Atomically swap the pointer
+			mw.writersPtr.Store(&newWriters)
+			return
 		}
 	}
 }
 
 func (mw *MultiWriter) Close() error {
-	mw.mu.RLock()
-	writers := make([]io.Writer, len(mw.writers))
-	copy(writers, mw.writers)
-	mw.mu.RUnlock()
+	// Load writers atomically
+	writersPtr := mw.writersPtr.Load()
+	if writersPtr == nil {
+		return nil
+	}
+	writers := *writersPtr
 
 	var errs []error
 	for _, w := range writers {

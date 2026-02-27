@@ -92,10 +92,12 @@ func example3CustomFiltering() {
 	fmt.Println("-------------------")
 
 	// Create empty filter and add custom patterns
+	// Note: The + quantifier must be after the character class [:\s=], not after the group
+	// This allows matching "key=value" format (not requiring "key=key=..." repetition)
 	filter := dd.NewEmptySensitiveDataFilter()
-	filter.AddPattern(`(?i)(internal[_-]?token[:\s=])+[^\s]+`)
-	filter.AddPattern(`(?i)(session[_-]?id[:\s=])+[^\s]+`)
-	filter.AddPattern(`(?i)(secret[_-]?code[:\s=])+[^\s]+`)
+	filter.AddPattern(`(?i)(internal[_-]?token[:\s=]+)[^\s]+`)
+	filter.AddPattern(`(?i)(session[_-]?id[:\s=]+)[^\s]+`)
+	filter.AddPattern(`(?i)(secret[_-]?code[:\s=]+)[^\s]+`)
 
 	config := dd.DefaultConfig().WithFilter(filter)
 	logger, _ := dd.New(config)
