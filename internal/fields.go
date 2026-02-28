@@ -123,10 +123,12 @@ func FormatFields(fields []Field) string {
 				if jsonData, err := json.Marshal(v); err == nil {
 					sb.Write(jsonData)
 				} else {
-					sb.WriteString(fmt.Sprintf("%v", v))
+					// Use fmt.Fprint to avoid intermediate string allocation
+					fmt.Fprint(sb, v)
 				}
 			} else {
-				sb.WriteString(fmt.Sprintf("%v", v))
+				// Use fmt.Fprint to avoid intermediate string allocation
+				fmt.Fprint(sb, v)
 			}
 		}
 	}

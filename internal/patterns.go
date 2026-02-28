@@ -27,13 +27,23 @@ var AllPatterns = []PatternDefinition{
 	{`\beyJ[A-Za-z0-9_-]{10,100}\.eyJ[A-Za-z0-9_-]{10,100}\.[A-Za-z0-9_-]{10,100}\b`, false},
 	{`-----BEGIN[^-]{1,20}PRIVATE\s+KEY-----[A-Za-z0-9+/=\s]{1,4000}-----END[^-]{1,20}PRIVATE\s+KEY-----`, true},
 	// API keys
-	{`\bAKIA[0-9A-Z]{16}\b`, false},
+	// Merged AWS Access Key patterns (AKIA for permanent, ASIA for temporary)
+	{`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`, true},
 	{`\bAIza[A-Za-z0-9_-]{35}\b`, false},
 	{`\bsk-[A-Za-z0-9]{16,48}\b`, true},
 	// Email - only in full filter mode to avoid false positives on user@host format
 	{`\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,6}\b`, false},
 	// IP addresses
 	{`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`, false},
+	// IPv6 addresses (full and compressed formats)
+	{`\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b`, false},                               // Full IPv6
+	{`\b(?:[0-9a-fA-F]{1,4}:){1,7}:\b`, false},                                            // Trailing ::
+	{`\b::(?:[0-9a-fA-F]{1,4}:){0,5}[0-9a-fA-F]{1,4}\b`, false},                           // Leading ::
+	{`\b(?:[0-9a-fA-F]{1,4}:){1,4}::(?:[0-9a-fA-F]{1,4}:){0,3}[0-9a-fA-F]{1,4}\b`, false}, // Mixed :: in middle
+	{`\b(?:[0-9a-fA-F]{1,4}:){1,5}::[0-9a-fA-F]{1,4}\b`, false},                           // :: with 5 groups before
+	{`\b(?:[0-9a-fA-F]{1,4}:){1,6}::\b`, false},                                           // :: with 6 groups before
+	{`\b::(?:[0-9a-fA-F]{1,4}:){1,6}[0-9a-fA-F]{1,4}\b`, false},                           // :: with groups after
+	{`\b(?:[0-9a-fA-F]{1,4}:){6}(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`, false},                  // IPv6 with IPv4 suffix
 	// Database connection strings - preserve protocol name
 	{`(?i)((?:mysql|postgresql|mongodb|redis|sqlite|cassandra|influx|cockroach|timescale|postgres)://)[^\s]{1,200}\b`, true},
 	// JDBC connection strings - preserve jdbc:prefix
@@ -44,11 +54,106 @@ var AllPatterns = []PatternDefinition{
 	// Phone numbers - global patterns
 	{`(?i)((?:phone|mobile|tel|telephone|cell|cellular|fax|contact|number)[\s:=]+)[\+]?[(]?\d{1,4}[)]?[-\s.]?\(?\d{1,4}\)?[-\s.]?\d{1,9}[-\s.]?\d{0,9}\b`, true},
 	{`\+\d{1,3}[- ]?\d{6,14}\b`, true},                          // International: +XXXXXXXXXXXX (7-15 digits after +)
-	{`\+[\d\s\-\(\)]{7,}\b`, true},                              // International phone with + and formatting (7+ chars total)
+	{`\+[\d\s\-\(\)]{7,20}\b`, true},                            // International phone with + and formatting (7-20 chars total, bounded)
 	{`\b00[1-9]\d{6,14}\b`, true},                               // 00 prefix international (8-16 digits total)
 	{`\b(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]?\d{4}\b`, true}, // NANP with required separator: (415) 555-2671 or 415-555-2671
 	{`\b\d{3,5}[- ]\d{4,8}\b`, false},                           // Phone numbers with separators (7-13 digits total) - moved to full filter to avoid false positives on dates
 	{`\b0\d{3,5}[- ]?\d{4,8}\b`, true},                          // Starting with 0 and separators (10+ digits total)
+
+	// ===== Enterprise Patterns =====
+
+	// Financial Services (PCI-DSS compliance)
+	// SWIFT/BIC codes (8 or 11 characters: BBBBCCLLbbb)
+	// BBBB = bank code (4 letters), CC = country code (2 letters), LL = location code (2 alphanumeric), bbb = branch code (optional 3 alphanumeric)
+	// Use negative lookahead to avoid matching common words like "REDACTED"
+	{`\b(?!REDACTED|REDACT|REMOVED|FILTERED)[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`, false},
+	// IBAN (International Bank Account Number) - generic pattern
+	{`\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7,30}\b`, false},
+	// CVV/CVC codes with context
+	{`(?i)(?:cvv|cvc|cv2|security[_-]?code|card[_-]?verification)[\s:=]+[0-9]{3,4}\b`, true},
+
+	// Healthcare (HIPAA compliance)
+	// ICD-10 Diagnosis codes (e.g., A00.0, Z99.9)
+	{`\b[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`, false},
+	// US National Provider Identifier (NPI) - 10 digits starting with 1 or 2
+	// Context-aware pattern to reduce false positives from random 10-digit numbers
+	{`(?i)(?:npi|national[_-]?provider[_-]?identifier|provider[_-]?id)[\s:=]+[12][0-9]{9}\b`, true},
+	// Medical Record Numbers (MRN) with context
+	{`(?i)(?:mrn|medical[_-]?record[_-]?number|patient[_-]?id|health[_-]?record)[\s:=]+[A-Za-z0-9]{6,20}\b`, true},
+	// Health Insurance Claim Number (HICN) - Medicare format
+	{`\b[0-9]{9}[A-Z]{1,2}\b`, false},
+
+	// Government/Identity
+	// US Passport numbers (9 digits, or 8 digits for older)
+	{`(?i)(?:passport[_-]?number|passport[_-]?no|passport[_-]?id)[\s:=]+[0-9]{8,9}\b`, true},
+	// US Driver's License with context (state-specific, generic)
+	{`(?i)(?:driver[_-]?license|dl[_-]?number|license[_-]?number|drivers[_-]?license)[\s:=]+[A-Za-z0-9]{5,20}\b`, true},
+	// US Tax ID / Employer Identification Number (EIN)
+	{`\b[0-9]{2}-[0-9]{7}\b`, false},
+	// UK National Insurance Number
+	{`\b[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z][0-9]{6}[A-D]\b`, false},
+	// Canadian Social Insurance Number (SIN) - with context to avoid false positives on phone numbers
+	{`(?i)(?:sin|social[_-]?insurance[_-]?number|canadian[_-]?sin)[\s:=]+[0-9]{3}[- ]?[0-9]{3}[- ]?[0-9]{3}\b`, true},
+
+	// Cloud Provider Tokens
+	// GitHub tokens (merged: p=personal, o=oauth, u=user-to-server, s=server-to-server, r=refresh)
+	{`\b(?:ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{36}\b`, true},
+	// Slack tokens
+	{`\bxox[baprs]-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24}\b`, true},
+	// Stripe keys (merged: sk=secret, rk=restricted, stk=connect token)
+	{`\b(?:sk|rk|stk)_live_[0-9a-zA-Z]{24,64}\b`, true},
+	// GCP Service Account (JSON key structure indicator)
+	{`"private_key"\s*:\s*"[^"]{100,4000}"`, true}, // Bounded max
+	// Azure Connection String
+	{`(?i)(?:connection[_-]?string|connstr|azure[_-]?connection)[\s:=]+[^\s]{50,500}`, true},
+	// Generic OAuth/Refresh tokens with context
+	{`(?i)(?:refresh[_-]?token|access[_-]?token|auth[_-]?token|bearer)[\s:=]+[A-Za-z0-9_\-\.]{20,256}\b`, true}, // Bounded max
+
+	// ===== Log4Shell and JNDI Injection Patterns =====
+	// CVE-2021-44228 - Log4Shell vulnerability patterns
+	{`\$\{jndi:[^}]{0,200}\}`, true},                  // Basic JNDI lookup (bounded)
+	{`\$\{(?:lower|upper) *: *j[a-z]{0,10}\}`, false}, // Obfuscated JNDI (bounded)
+	{`\$\{[^}]{0,100}jndi[^}]{0,100}\}`, true},        // Any JNDI in expression (bounded)
+	// Suspicious protocols in logs (potential JNDI/RMI/LDAP injection)
+	{`(?i)(?:ldap|ldaps|rmi|dns|iiop|corba)://[^\s]{1,200}`, false},
+
+	// ===== Modern Authentication Tokens =====
+	// Anthropic and OpenAI API keys (merged: sk-ant, sk-proj)
+	{`\bsk-(?:ant|proj)-[A-Za-z0-9_-]{32,128}\b`, true},
+	// GitLab Personal Access Tokens
+	{`\bglpat-[A-Za-z0-9_-]{20,128}\b`, true}, // Bounded max
+	// Google OAuth tokens
+	{`\b(?:ya29\.|1//)[A-Za-z0-9_\-\.]{20,256}\b`, true}, // Bounded max
+	// AWS STS Session Tokens
+	{`\bFwoGZXIvYXdz[ A-Za-z0-9/+=]{40,256}\b`, false}, // Bounded max
+
+	// ===== Message Queue and Streaming =====
+	// RabbitMQ connection strings
+	{`(?i)(?:amqp|amqps)://[^\s]{1,200}\b`, true},
+	// NATS connection strings
+	{`(?i)nats://[^\s]{1,200}\b`, false},
+	// Kafka connection strings (bootstrap servers)
+	{`(?i)(?:kafka|bootstrap[_-]?server)[\s:=]+[a-z0-9._-]+:\d{1,5}`, false},
+
+	// ===== International Identifiers =====
+	// Australia ABN (Australian Business Number) - requires separator to avoid matching generic 11-digit numbers
+	{`\b\d{2}[- ]\d{3}[- ]?\d{3}[- ]?\d{3}\b`, false},
+	// New Zealand IRD (Inland Revenue Department) Number
+	{`\b\d{8,9}\b`, false},
+	// Chile RUT (Rol Único Tributario)
+	{`\b\d{1,2}\.\d{3}\.\d{3}-[\dKk]\b`, false},
+	// Brazil CPF
+	{`\b\d{3}\.\d{3}\.\d{3}-\d{2}\b`, false},
+	// Mexico RFC (Registro Federal de Contribuyentes)
+	{`\b[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{3}\b`, false},
+
+	// ===== Biometric and Identity =====
+	// Fingerprint template identifiers
+	{`(?i)(?:fingerprint[_-]?template|fp[_-]?id)[\s:=]+[A-Za-z0-9_-]{10,128}\b`, true}, // Bounded max
+	// Face recognition template identifiers
+	{`(?i)(?:face[_-]?template|face[_-]?id)[\s:=]+[A-Za-z0-9_-]{10,128}\b`, true}, // Bounded max
+	// Biometric data indicators
+	{`(?i)(?:biometric[_-]?data|bio[_-]?hash)[\s:=]+[A-Za-z0-9+/=]{20,256}\b`, true}, // Bounded max
 }
 
 // Pre-compiled regex cache to avoid repeated compilation.
@@ -232,9 +337,11 @@ func ParseInt(s string) (int, error) {
 // use ExactMatchOnlyKeywords instead.
 //
 // Categories:
-//   - Credentials: password, passwd, pwd, secret, token, bearer, auth, authorization
-//   - API Keys: api_key, apikey, api-key, access_key, accesskey, access-key
-//   - Secrets: secret_key, secretkey, secret-key, private_key, privatekey, private-key
+//   - Credentials: password, passwd, pwd, secret, token, bearer, auth, authorization, credential
+//   - API Keys: api_key, apikey, api-key, access_key, accesskey, access-key, client_id, client_secret
+//   - Secrets: secret_key, secretkey, secret-key, private_key, privatekey, private-key, private_key_id
+//   - Tokens: session_id, session_token, refresh_token, access_token, oauth_token
+//   - OAuth: consumer_key, consumer_secret
 //   - PII: credit_card, creditcard, ssn, social_security
 //   - Contact: phone, telephone, mobile, cell, cellular, tel, fax, contact
 var SensitiveKeywords = map[string]struct{}{
@@ -247,22 +354,44 @@ var SensitiveKeywords = map[string]struct{}{
 	"bearer":        {},
 	"auth":          {},
 	"authorization": {},
+	"credential":    {},
+	"credentials":   {},
 
 	// API Keys
-	"api_key":    {},
-	"apikey":     {},
-	"api-key":    {},
-	"access_key": {},
-	"accesskey":  {},
-	"access-key": {},
+	"api_key":       {},
+	"apikey":        {},
+	"api-key":       {},
+	"access_key":    {},
+	"accesskey":     {},
+	"access-key":    {},
+	"client_id":     {},
+	"clientid":      {},
+	"client_secret": {},
 
 	// Secrets
-	"secret_key":  {},
-	"secretkey":   {},
-	"secret-key":  {},
-	"private_key": {},
-	"privatekey":  {},
-	"private-key": {},
+	"secret_key":     {},
+	"secretkey":      {},
+	"secret-key":     {},
+	"private_key":    {},
+	"privatekey":     {},
+	"private-key":    {},
+	"private_key_id": {},
+
+	// Session and Tokens
+	"session_id":    {},
+	"sessionid":     {},
+	"session_token": {},
+	"refresh_token": {},
+	"refreshtoken":  {},
+	"access_token":  {},
+	"accesstoken":   {},
+	"oauth_token":   {},
+	"auth_token":    {},
+	"authtoken":     {},
+
+	// OAuth Consumer
+	"consumer_key":    {},
+	"consumer_secret": {},
 
 	// Personal Identifiable Information (PII)
 	"credit_card":     {},

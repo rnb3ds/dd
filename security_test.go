@@ -1375,3 +1375,229 @@ func TestTruncationWithNoSensitiveDataAtBoundary(t *testing.T) {
 		t.Error("Non-sensitive data should not be redacted")
 	}
 }
+
+// ============================================================================
+// SECURITY PRESET CONFIGURATION TESTS
+// ============================================================================
+
+func TestHealthcareConfig(t *testing.T) {
+	config := HealthcareConfig()
+
+	if config == nil {
+		t.Fatal("HealthcareConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("HealthcareConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("HealthcareConfig filter should be enabled")
+	}
+
+	// Test healthcare-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// NPI with context
+		{
+			name:             "NPI with context",
+			input:            "provider_id=1234567890",
+			shouldNotContain: "1234567890",
+		},
+		// Medical Record Number with context
+		{
+			name:             "MRN with context",
+			input:            "mrn=PATIENT123456",
+			shouldNotContain: "PATIENT123456",
+		},
+		// Patient ID with context
+		{
+			name:             "Patient ID with context",
+			input:            "patient_id=AB12345678",
+			shouldNotContain: "AB12345678",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in healthcare",
+			input:            "password=healthsecret123",
+			shouldNotContain: "healthsecret123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("HealthcareConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestFinancialConfig(t *testing.T) {
+	config := FinancialConfig()
+
+	if config == nil {
+		t.Fatal("FinancialConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("FinancialConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("FinancialConfig filter should be enabled")
+	}
+
+	// Test financial-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// CVV with context
+		{
+			name:             "CVV with context",
+			input:            "cvv=123",
+			shouldNotContain: "123",
+		},
+		// Account number with context
+		{
+			name:             "account number with context",
+			input:            "account_number=12345678901",
+			shouldNotContain: "12345678901",
+		},
+		// Bank account with context
+		{
+			name:             "bank account with context",
+			input:            "bank_account=98765432100",
+			shouldNotContain: "98765432100",
+		},
+		// Standard credit card
+		{
+			name:             "credit card in financial",
+			input:            "card=4532-0151-1283-0366",
+			shouldNotContain: "4532-0151-1283-0366",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in financial",
+			input:            "password=financesecret",
+			shouldNotContain: "financesecret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("FinancialConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestGovernmentConfig(t *testing.T) {
+	config := GovernmentConfig()
+
+	if config == nil {
+		t.Fatal("GovernmentConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("GovernmentConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("GovernmentConfig filter should be enabled")
+	}
+
+	// Test government-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// Passport number with context
+		{
+			name:             "passport with context",
+			input:            "passport_number=123456789",
+			shouldNotContain: "123456789",
+		},
+		// Driver's license with context
+		{
+			name:             "driver license with context",
+			input:            "driver_license=AB1234567",
+			shouldNotContain: "AB1234567",
+		},
+		// Case number with context
+		{
+			name:             "case number with context",
+			input:            "case_number=CASE12345",
+			shouldNotContain: "CASE12345",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in government",
+			input:            "password=govsecret",
+			shouldNotContain: "govsecret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("GovernmentConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestSecurityConfigCloning(t *testing.T) {
+	original := HealthcareConfig()
+	clone := original.Clone()
+
+	if clone == nil {
+		t.Fatal("Clone should not return nil")
+	}
+
+	if clone.SensitiveFilter == nil {
+		t.Fatal("Cloned config should have a sensitive filter")
+	}
+
+	// Modify clone
+	clone.SensitiveFilter.AddPattern(`test_pattern=\w+`)
+
+	// Original should not be affected
+	if original.SensitiveFilter.PatternCount() == clone.SensitiveFilter.PatternCount() {
+		t.Error("Modifying clone should not affect original")
+	}
+}
+
+func TestPresetConfigsHaveMaxWriters(t *testing.T) {
+	configs := []struct {
+		name   string
+		config *SecurityConfig
+	}{
+		{"HealthcareConfig", HealthcareConfig()},
+		{"FinancialConfig", FinancialConfig()},
+		{"GovernmentConfig", GovernmentConfig()},
+		{"DefaultSecureConfig", DefaultSecureConfig()},
+		{"DefaultSecurityConfig", DefaultSecurityConfig()},
+	}
+
+	for _, tc := range configs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.config.MaxWriters <= 0 {
+				t.Errorf("%s should have MaxWriters > 0", tc.name)
+			}
+			if tc.config.MaxMessageSize <= 0 {
+				t.Errorf("%s should have MaxMessageSize > 0", tc.name)
+			}
+		})
+	}
+}

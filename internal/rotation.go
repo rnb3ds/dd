@@ -16,7 +16,9 @@ import (
 const MaxDecompressSize = 100 * 1024 * 1024 // 100MB
 
 func OpenFile(path string) (*os.File, int64, error) {
-	// Open file first with O_EXCL if creating new file to prevent TOCTOU
+	// Open file first to get a file handle, then validate the handle (not the path)
+	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities.
+	// We use O_APPEND to ensure atomic appends on POSIX systems.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, FilePermissions)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open file: %w", err)
@@ -34,6 +36,19 @@ func OpenFile(path string) (*os.File, int64, error) {
 	if fileInfo.Mode()&os.ModeSymlink != 0 {
 		file.Close()
 		return nil, 0, fmt.Errorf("symlinks not allowed")
+	}
+
+	// Check if the file has multiple hard links
+	// Attackers can create hard links to redirect log output to sensitive files
+	// or to bypass log rotation by having the same file accessible from multiple paths
+	isHardlinked, err := isHardlink(file)
+	if err != nil {
+		file.Close()
+		return nil, 0, fmt.Errorf("check hardlink: %w", err)
+	}
+	if isHardlinked {
+		file.Close()
+		return nil, 0, fmt.Errorf("hardlinks not allowed")
 	}
 
 	return file, fileInfo.Size(), nil

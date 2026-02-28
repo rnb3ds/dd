@@ -484,9 +484,9 @@ func (mw *MultiWriter) AddWriter(w io.Writer) error {
 	return nil
 }
 
-func (mw *MultiWriter) RemoveWriter(w io.Writer) {
+func (mw *MultiWriter) RemoveWriter(w io.Writer) error {
 	if mw == nil {
-		return
+		return ErrNilWriter
 	}
 
 	mw.mu.Lock()
@@ -495,7 +495,7 @@ func (mw *MultiWriter) RemoveWriter(w io.Writer) {
 	// Load current writers slice
 	currentWriters := mw.writersPtr.Load()
 	if currentWriters == nil {
-		return
+		return ErrWriterNotFound
 	}
 
 	writerCount := len(*currentWriters)
@@ -508,9 +508,11 @@ func (mw *MultiWriter) RemoveWriter(w io.Writer) {
 
 			// Atomically swap the pointer
 			mw.writersPtr.Store(&newWriters)
-			return
+			return nil
 		}
 	}
+
+	return ErrWriterNotFound
 }
 
 func (mw *MultiWriter) Close() error {

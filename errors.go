@@ -25,6 +25,8 @@ const (
 	ErrCodeNullByte           = "NULL_BYTE"
 	ErrCodeInvalidPath        = "INVALID_PATH"
 	ErrCodeSymlinkNotAllowed  = "SYMLINK_NOT_ALLOWED"
+	ErrCodeHardlinkNotAllowed = "HARDLINK_NOT_ALLOWED"
+	ErrCodeOverlongEncoding   = "OVERLONG_ENCODING"
 	ErrCodeMaxSizeExceeded    = "MAX_SIZE_EXCEEDED"
 	ErrCodeMaxBackupsExceeded = "MAX_BACKUPS_EXCEEDED"
 	ErrCodeBufferSizeTooLarge = "BUFFER_SIZE_TOO_LARGE"
@@ -92,6 +94,8 @@ var errorCodeToSentinel = map[string]error{
 	ErrCodeNullByte:           ErrNullByte,
 	ErrCodeInvalidPath:        ErrInvalidPath,
 	ErrCodeSymlinkNotAllowed:  ErrSymlinkNotAllowed,
+	ErrCodeHardlinkNotAllowed: ErrHardlinkNotAllowed,
+	ErrCodeOverlongEncoding:   ErrOverlongEncoding,
 	ErrCodeMaxSizeExceeded:    ErrMaxSizeExceeded,
 	ErrCodeMaxBackupsExceeded: ErrMaxBackupsExceeded,
 	ErrCodeBufferSizeTooLarge: ErrBufferSizeTooLarge,
@@ -179,6 +183,8 @@ var (
 	ErrNullByte           = errors.New("null byte in input")
 	ErrInvalidPath        = errors.New("invalid file path")
 	ErrSymlinkNotAllowed  = errors.New("symlinks not allowed")
+	ErrHardlinkNotAllowed = errors.New("hardlinks not allowed")
+	ErrOverlongEncoding   = errors.New("UTF-8 overlong encoding detected")
 	ErrMaxSizeExceeded    = errors.New("maximum size exceeded")
 	ErrMaxBackupsExceeded = errors.New("maximum backup count exceeded")
 	ErrBufferSizeTooLarge = errors.New("buffer size too large")

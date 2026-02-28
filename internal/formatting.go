@@ -36,6 +36,24 @@ var argsBuilderPool = sync.Pool{
 	},
 }
 
+// jsonEntryMapPool pools map[string]any objects for JSON formatting
+// to reduce memory allocations during high-frequency JSON logging.
+var jsonEntryMapPool = sync.Pool{
+	New: func() any {
+		m := make(map[string]any, 8)
+		return &m
+	},
+}
+
+// jsonFieldsMapPool pools map[string]any objects for JSON fields
+// to reduce memory allocations when logging with structured fields.
+var jsonFieldsMapPool = sync.Pool{
+	New: func() any {
+		m := make(map[string]any, 4)
+		return &m
+	},
+}
+
 // cachedTimeEntry stores a single cached timestamp entry
 type cachedTimeEntry struct {
 	sec       int64  // Unix timestamp in seconds
@@ -271,13 +289,13 @@ func (f *MessageFormatter) formatText(level LogLevel, callerDepth int, message s
 func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message string, fields []Field) string {
 	fieldNames := f.getJSONFieldNames()
 
-	// Create new map directly - for typical log entries (4-5 fields),
-	// this is faster than pool + clear due to:
-	// 1. No pool get/put overhead
-	// 2. No clear loop overhead
-	// 3. Better cache locality with exact size
-	// Pre-allocate with expected capacity to avoid growth
-	entry := make(map[string]any, 8)
+	// Use pooled entry map for better performance
+	entryPtr := jsonEntryMapPool.Get().(*map[string]any)
+	entry := *entryPtr
+	// Clear the map for reuse
+	for k := range entry {
+		delete(entry, k)
+	}
 
 	// Add timestamp if enabled (using cached time for performance)
 	if f.includeTime {
@@ -301,8 +319,13 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 
 	// Add structured fields if present
 	if len(fields) > 0 {
-		// Create new fields map with exact capacity
-		fieldsMap := make(map[string]any, len(fields))
+		// Use pooled fields map
+		fieldsMapPtr := jsonFieldsMapPool.Get().(*map[string]any)
+		fieldsMap := *fieldsMapPtr
+		// Clear the map for reuse
+		for k := range fieldsMap {
+			delete(fieldsMap, k)
+		}
 		for _, field := range fields {
 			fieldsMap[field.Key] = field.Value
 		}
@@ -311,6 +334,21 @@ func (f *MessageFormatter) formatJSON(level LogLevel, callerDepth int, message s
 
 	// Format JSON
 	result := FormatJSON(entry, f.getJSONOptions())
+
+	// Clean up and return maps to pool
+	if fields, ok := entry[fieldNames.Fields].(map[string]any); ok {
+		// Return fields map to pool
+		for k := range fields {
+			delete(fields, k)
+		}
+		jsonFieldsMapPool.Put(&fields)
+	}
+
+	// Return entry map to pool
+	for k := range entry {
+		delete(entry, k)
+	}
+	jsonEntryMapPool.Put(entryPtr)
 
 	return result
 }

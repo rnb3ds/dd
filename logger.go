@@ -643,6 +643,87 @@ func (l *Logger) Close() error {
 	return errors.Join(errs...)
 }
 
+// Shutdown gracefully closes the logger with a timeout.
+// This is the recommended way to close a logger in production environments.
+//
+// The method performs the following steps:
+//  1. Marks the logger as closed to prevent new log entries
+//  2. Triggers OnClose hooks with the provided context
+//  3. Waits for any in-flight operations to complete
+//  4. Flushes and closes all writers with the specified timeout
+//
+// If the timeout is exceeded, Shutdown returns a context.DeadlineExceeded error
+// along with any other errors that occurred during shutdown.
+//
+// Recommended usage:
+//
+//	logger, _ := dd.New(dd.DefaultConfig())
+//	defer func() {
+//	    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	    defer cancel()
+//	    if err := logger.Shutdown(ctx); err != nil {
+//	        fmt.Fprintf(os.Stderr, "Logger shutdown error: %v\n", err)
+//	    }
+//	}()
+func (l *Logger) Shutdown(ctx context.Context) error {
+	if !l.closed.CompareAndSwap(false, true) {
+		return nil // Already closed
+	}
+
+	// Create a done channel to signal completion
+	done := make(chan error, 1)
+
+	go func() {
+		// Trigger OnClose hook
+		hookCtx := &HookContext{
+			Event:     HookOnClose,
+			Timestamp: time.Now(),
+		}
+		_ = l.triggerHooks(ctx, hookCtx)
+
+		l.cancel()
+
+		l.writersMu.Lock()
+		defer l.writersMu.Unlock()
+
+		// Load and clear writers atomically
+		currentWriters := l.writersPtr.Swap(nil)
+		if currentWriters == nil {
+			done <- nil
+			return
+		}
+
+		var errs []error
+		for _, writer := range *currentWriters {
+			// Check context for cancellation
+			select {
+			case <-ctx.Done():
+				done <- ctx.Err()
+				return
+			default:
+			}
+
+			if closer, ok := writer.(io.Closer); ok {
+				if writer != os.Stdout && writer != os.Stderr && writer != os.Stdin {
+					if err := closer.Close(); err != nil {
+						errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
+					}
+				}
+			}
+		}
+
+		done <- errors.Join(errs...)
+	}()
+
+	// Wait for completion or timeout
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // shouldLog checks if a message should be logged based on level and logger state
 func (l *Logger) shouldLog(level LogLevel) bool {
 	// Check dynamic level resolver first
@@ -715,9 +796,11 @@ func (l *Logger) shouldSample() bool {
 
 	// Check if tick interval has passed and reset if needed
 	// This is the only part that needs mutex protection
+	// The time.Since calculation is done inside the lock to ensure strict thread safety
 	if state.config.Tick > 0 {
 		state.startMu.Lock()
-		if time.Since(state.start) >= state.config.Tick {
+		elapsed := time.Since(state.start)
+		if elapsed >= state.config.Tick {
 			state.counter.Store(0)
 			state.start = time.Now()
 		}

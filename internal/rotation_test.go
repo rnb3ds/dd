@@ -42,6 +42,115 @@ func TestOpenFile(t *testing.T) {
 	}
 }
 
+func TestOpenFileRejectsHardlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalFile := filepath.Join(tmpDir, "original.log")
+	hardlinkFile := filepath.Join(tmpDir, "hardlink.log")
+
+	// Create the original file
+	err := os.WriteFile(originalFile, []byte("test data"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create a hard link to the original file
+	err = os.Link(originalFile, hardlinkFile)
+	if err != nil {
+		// On some systems (like Windows without admin rights), hard links may not be supported
+		// Skip the test in this case
+		t.Skipf("Cannot create hard link (may not be supported on this system): %v", err)
+	}
+
+	// Attempt to open the hardlinked file - should be rejected
+	file, _, err := OpenFile(hardlinkFile)
+	if file != nil {
+		file.Close()
+	}
+	if err == nil {
+		t.Error("OpenFile() should reject hardlinked files")
+	}
+	// The error should mention hardlinks
+	if err != nil && !containsString(err.Error(), "hardlink") {
+		t.Errorf("OpenFile() error should mention 'hardlink', got: %v", err)
+	}
+}
+
+func TestIsHardlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	testFile := filepath.Join(tmpDir, "test.log")
+
+	// Create a normal file
+	err := os.WriteFile(testFile, []byte("test data"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	// Open the file
+	file, err := os.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to open file: %v", err)
+	}
+	defer file.Close()
+
+	// A normal file should not be detected as a hardlink
+	isHardlinked, err := isHardlink(file)
+	if err != nil {
+		t.Fatalf("isHardlink() error = %v", err)
+	}
+	if isHardlinked {
+		t.Error("Normal file should not be detected as hardlinked")
+	}
+}
+
+func TestIsHardlinkWithHardlink(t *testing.T) {
+	tmpDir := t.TempDir()
+	originalFile := filepath.Join(tmpDir, "original.log")
+	hardlinkFile := filepath.Join(tmpDir, "hardlink.log")
+
+	// Create the original file
+	err := os.WriteFile(originalFile, []byte("test data"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create original file: %v", err)
+	}
+
+	// Create a hard link
+	err = os.Link(originalFile, hardlinkFile)
+	if err != nil {
+		t.Skipf("Cannot create hard link: %v", err)
+	}
+
+	// Open the hardlinked file
+	file, err := os.Open(hardlinkFile)
+	if err != nil {
+		t.Fatalf("Failed to open hardlinked file: %v", err)
+	}
+	defer file.Close()
+
+	// A hardlinked file should be detected
+	isHardlinked, err := isHardlink(file)
+	if err != nil {
+		t.Fatalf("isHardlink() error = %v", err)
+	}
+	if !isHardlinked {
+		t.Error("Hardlinked file should be detected as having multiple links")
+	}
+}
+
+// Helper function to check if a string contains a substring
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNeedsRotation(t *testing.T) {
 	tests := []struct {
 		name        string

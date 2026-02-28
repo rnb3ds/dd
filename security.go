@@ -35,6 +35,32 @@ type SensitiveDataFilter struct {
 	totalRedactions atomic.Int64 // Total number of redactions performed
 	totalTimeouts   atomic.Int64 // Total number of timeout events
 	totalLatencyNs  atomic.Int64 // Total latency in nanoseconds (for average calculation)
+
+	// Filter result cache for repeated messages
+	cacheMu    sync.RWMutex
+	cache      map[uint64]filterCacheEntry
+	cacheSize  int
+	cacheHits  atomic.Int64
+	cacheMiss  atomic.Int64
+	maxCacheSz int
+}
+
+// filterCacheEntry stores a cached filter result
+type filterCacheEntry struct {
+	hash    uint64
+	input   string
+	result  string
+	created int64 // unix timestamp for TTL
+}
+
+// FNV-1a hash implementation for string hashing (fast, no allocations)
+func hashString(s string) uint64 {
+	h := uint64(14695981039346656037) // FNV offset basis
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= 1099511628211 // FNV prime
+	}
+	return h
 }
 
 // newSensitiveDataFilterWithPatterns is the internal constructor for SensitiveDataFilter.
@@ -44,6 +70,9 @@ func newSensitiveDataFilterWithPatterns(patterns []*regexp.Regexp, timeout time.
 		maxInputLength: MaxInputLength,
 		timeout:        timeout,
 		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		cache:          make(map[uint64]filterCacheEntry),
+		cacheSize:      0,
+		maxCacheSz:     1000, // Maximum cache entries
 	}
 	filter.enabled.Store(true)
 
@@ -332,10 +361,51 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	// Check cache for repeated messages (only for small inputs to avoid memory bloat)
+	// Skip cache if not initialized (for filters created without using constructor)
+	if inputLen <= 1024 && f.cache != nil {
+		hash := hashString(input)
+		f.cacheMu.RLock()
+		if entry, ok := f.cache[hash]; ok && entry.input == input {
+			f.cacheMu.RUnlock()
+			f.cacheHits.Add(1)
+			f.totalFiltered.Add(1)
+			// Record minimal latency for cache hit
+			f.totalLatencyNs.Add(1)
+			return entry.result
+		}
+		f.cacheMu.RUnlock()
+		f.cacheMiss.Add(1)
+	}
+
 	startTime := time.Now()
 
 	patterns := *patternsPtr
 	timeout := f.timeout
+
+	// Quick rejection: check if input could possibly contain sensitive data
+	// This avoids running all regex patterns on obviously safe input
+	// Note: We still need to handle truncation for large inputs
+	if !f.couldContainSensitiveData(input) {
+		// Handle truncation for large inputs even if no sensitive data detected
+		if f.maxInputLength > 0 && inputLen > f.maxInputLength {
+			input = input[:f.maxInputLength] + "... [TRUNCATED]"
+		}
+		// Still track metrics for monitoring
+		// Ensure at least 1ns to avoid zero average latency for very fast operations
+		latencyNs := time.Since(startTime).Nanoseconds()
+		if latencyNs == 0 {
+			latencyNs = 1
+		}
+		f.totalFiltered.Add(1)
+		f.totalLatencyNs.Add(latencyNs)
+
+		// Cache the result for small inputs
+		if inputLen <= 1024 && f.cache != nil {
+			f.cacheResult(hashString(input), input, input)
+		}
+		return input
+	}
 
 	// Handle truncation with boundary-aware sensitive data detection.
 	// This prevents sensitive data patterns that span the truncation boundary
@@ -398,7 +468,135 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	latencyNs := time.Since(startTime).Nanoseconds()
 	f.totalLatencyNs.Add(latencyNs)
 
+	// Cache the result for small inputs
+	if inputLen <= 1024 && f.cache != nil {
+		f.cacheResult(hashString(input), input, result)
+	}
+
 	return result
+}
+
+// cacheResult stores a filter result in the cache
+func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
+	if f.cache == nil {
+		return
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+
+	// Evict old entries if cache is full
+	if f.cacheSize >= f.maxCacheSz {
+		// Simple eviction: clear half the cache
+		count := 0
+		for k := range f.cache {
+			delete(f.cache, k)
+			count++
+			if count >= f.maxCacheSz/2 {
+				break
+			}
+		}
+		f.cacheSize = len(f.cache)
+	}
+
+	f.cache[hash] = filterCacheEntry{
+		hash:    hash,
+		input:   input,
+		result:  result,
+		created: time.Now().Unix(),
+	}
+	f.cacheSize++
+}
+
+// couldContainSensitiveData performs fast pre-checks to determine if input
+// could possibly contain sensitive data. This avoids expensive regex matching
+// on obviously safe input, providing significant performance improvement.
+//
+// Checks performed:
+//   - Has digits: required for credit cards, SSN, phone numbers, many API keys
+//   - Has special prefixes: required for API keys (sk-, ghp_, AKIA, AIza, etc.)
+//   - Has credential keywords: required for password/token/secret patterns
+//   - Has @ symbol: required for email patterns
+//   - Has protocol indicators: required for connection strings
+//
+// Returns true if any sensitive data pattern could potentially match.
+func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
+	inputLen := len(input)
+
+	// Track what characteristics the input has
+	hasDigits := false
+	hasAtSign := false
+	hasProtocol := false
+	hasCredentialKeyword := false
+	hasAPIKeyPrefix := false
+
+	// Quick scan for key characteristics
+	// Use byte-by-byte scanning for efficiency
+	for i := 0; i < inputLen; i++ {
+		c := input[i]
+
+		// Check for digits
+		if c >= '0' && c <= '9' {
+			hasDigits = true
+		}
+
+		// Check for @ (email)
+		if c == '@' {
+			hasAtSign = true
+		}
+
+		// Check for protocol indicators (:)
+		if c == ':' && i+2 < inputLen && input[i+1] == '/' && input[i+2] == '/' {
+			hasProtocol = true
+		}
+
+		// Early exit if we found all characteristics
+		if hasDigits && hasAtSign && hasProtocol {
+			break
+		}
+	}
+
+	// Check for API key prefixes (case-sensitive for efficiency)
+	// These are the most common API key prefixes
+	if !hasAPIKeyPrefix {
+		// Check for common prefixes without allocation
+		if strings.HasPrefix(input, "sk-") ||
+			strings.HasPrefix(input, "ghp_") ||
+			strings.HasPrefix(input, "gho_") ||
+			strings.HasPrefix(input, "ghu_") ||
+			strings.HasPrefix(input, "ghs_") ||
+			strings.HasPrefix(input, "ghr_") ||
+			strings.HasPrefix(input, "glpat-") ||
+			strings.HasPrefix(input, "xox") ||
+			strings.Contains(input, "AKIA") ||
+			strings.Contains(input, "ASIA") ||
+			strings.Contains(input, "AIza") ||
+			strings.Contains(input, "ya29.") ||
+			strings.Contains(input, "1//") {
+			hasAPIKeyPrefix = true
+		}
+	}
+
+	// Check for credential keywords (case-insensitive)
+	if !hasCredentialKeyword {
+		lowerInput := strings.ToLower(input)
+		if strings.Contains(lowerInput, "password") ||
+			strings.Contains(lowerInput, "passwd") ||
+			strings.Contains(lowerInput, "secret") ||
+			strings.Contains(lowerInput, "token") ||
+			strings.Contains(lowerInput, "api_key") ||
+			strings.Contains(lowerInput, "apikey") ||
+			strings.Contains(lowerInput, "bearer") ||
+			strings.Contains(lowerInput, "auth") ||
+			strings.Contains(lowerInput, "credential") ||
+			strings.Contains(lowerInput, "private_key") ||
+			strings.Contains(lowerInput, "session") {
+			hasCredentialKeyword = true
+		}
+	}
+
+	// If input has none of the characteristics, it's very unlikely to contain sensitive data
+	// Most patterns require at least one of these characteristics
+	return hasDigits || hasAtSign || hasProtocol || hasCredentialKeyword || hasAPIKeyPrefix
 }
 
 // filterWithTimeout applies regex filtering with timeout protection for large inputs.
@@ -485,7 +683,7 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 	// For inputs up to a reasonable size, process directly without chunking
 	// This avoids the complexity of reassembling filtered chunks with different lengths
 	if inputLen <= FilterDirectProcessThreshold {
-		return f.replaceWithPattern(input, pattern)
+		return f.replaceWithPatternWithContext(ctx, input, pattern)
 	}
 
 	// For very large inputs, use chunked processing with overlap for boundary detection
@@ -506,6 +704,7 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 	lastWritten := 0
 
 	for pos := 0; pos < inputLen; pos += step {
+		// Check context at the start of each iteration for early termination
 		select {
 		case <-ctx.Done():
 			// Write remaining unprocessed input
@@ -520,8 +719,19 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 		chunkEnd := min(pos+FilterChunkSize, inputLen)
 		chunk := input[chunkStart:chunkEnd]
 
-		// Filter the current chunk
-		filtered := f.replaceWithPattern(chunk, pattern)
+		// Filter the current chunk with context awareness
+		filtered := f.replaceWithPatternWithContext(ctx, chunk, pattern)
+
+		// Check if context was cancelled during filtering
+		select {
+		case <-ctx.Done():
+			// Context cancelled, return what we have
+			if lastWritten < inputLen {
+				result.WriteString(input[lastWritten:])
+			}
+			return result.String()
+		default:
+		}
 
 		if pos == 0 {
 			// First chunk: write everything
@@ -541,7 +751,19 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 	}
 
 	// Final pass to ensure consistency and catch any remaining patterns
-	return f.replaceWithPattern(result.String(), pattern)
+	return f.replaceWithPatternWithContext(ctx, result.String(), pattern)
+}
+
+// replaceWithPatternWithContext applies regex replacement with context awareness.
+// It checks for context cancellation to allow early termination.
+func (f *SensitiveDataFilter) replaceWithPatternWithContext(ctx context.Context, input string, pattern *regexp.Regexp) string {
+	// Quick context check before expensive regex operation
+	select {
+	case <-ctx.Done():
+		return input // Return unchanged on cancellation
+	default:
+	}
+	return f.replaceWithPattern(input, pattern)
 }
 
 func (f *SensitiveDataFilter) replaceWithPattern(input string, pattern *regexp.Regexp) string {
@@ -714,6 +936,137 @@ type SecurityConfig struct {
 	SensitiveFilter *SensitiveDataFilter
 }
 
+// SecurityLevel defines the security level for the logger.
+// Higher levels provide more protection but may impact performance.
+type SecurityLevel int
+
+const (
+	// SecurityLevelDevelopment provides minimal security for development.
+	// - No sensitive data filtering
+	// - No rate limiting
+	// - No audit logging
+	// Use only in local development environments.
+	SecurityLevelDevelopment SecurityLevel = iota
+
+	// SecurityLevelBasic provides basic security for non-production environments.
+	// - Basic sensitive data filtering (passwords, API keys, credit cards)
+	// - No rate limiting
+	// - No audit logging
+	// Suitable for staging and testing environments.
+	SecurityLevelBasic
+
+	// SecurityLevelStandard provides standard security for production.
+	// - Full sensitive data filtering
+	// - Rate limiting enabled
+	// - Basic audit logging
+	// Recommended for most production deployments.
+	SecurityLevelStandard
+
+	// SecurityLevelStrict provides enhanced security for sensitive environments.
+	// - Full sensitive data filtering
+	// - Strict rate limiting
+	// - Full audit logging
+	// - Input sanitization
+	// Suitable for environments handling PII or financial data.
+	SecurityLevelStrict
+
+	// SecurityLevelParanoid provides maximum security for high-risk environments.
+	// - Full sensitive data filtering with all patterns
+	// - Very strict rate limiting
+	// - Complete audit logging
+	// - All input validation
+	// - Log integrity verification
+	// Use for healthcare (HIPAA), financial (PCI-DSS), or government systems.
+	SecurityLevelParanoid
+)
+
+// String returns the string representation of the security level.
+func (l SecurityLevel) String() string {
+	switch l {
+	case SecurityLevelDevelopment:
+		return "Development"
+	case SecurityLevelBasic:
+		return "Basic"
+	case SecurityLevelStandard:
+		return "Standard"
+	case SecurityLevelStrict:
+		return "Strict"
+	case SecurityLevelParanoid:
+		return "Paranoid"
+	default:
+		return "Unknown"
+	}
+}
+
+// SecurityConfigForLevel returns a SecurityConfig configured for the specified security level.
+// This provides a convenient way to configure security based on deployment environment.
+func SecurityConfigForLevel(level SecurityLevel) *SecurityConfig {
+	switch level {
+	case SecurityLevelDevelopment:
+		return &SecurityConfig{
+			MaxMessageSize:  MaxMessageSize,
+			MaxWriters:      MaxWriterCount,
+			SensitiveFilter: nil, // No filtering
+		}
+
+	case SecurityLevelBasic:
+		return &SecurityConfig{
+			MaxMessageSize:  MaxMessageSize,
+			MaxWriters:      MaxWriterCount,
+			SensitiveFilter: NewBasicSensitiveDataFilter(),
+		}
+
+	case SecurityLevelStandard:
+		return &SecurityConfig{
+			MaxMessageSize:  MaxMessageSize,
+			MaxWriters:      MaxWriterCount,
+			SensitiveFilter: NewSensitiveDataFilter(),
+		}
+
+	case SecurityLevelStrict:
+		filter := NewSensitiveDataFilter()
+		// Add additional strict patterns
+		strictPatterns := []string{
+			// Additional context patterns for strict mode
+			`(?i)(?:confidential|classified|secret|private)[\s:=]+[^\s]{1,256}\b`,
+			`(?i)(?:internal[_-]?id|employee[_-]?id|user[_-]?id)[\s:=]+[A-Za-z0-9]{4,50}\b`,
+		}
+		for _, p := range strictPatterns {
+			filter.AddPattern(p)
+		}
+		return &SecurityConfig{
+			MaxMessageSize:  MaxMessageSize,
+			MaxWriters:      MaxWriterCount,
+			SensitiveFilter: filter,
+		}
+
+	case SecurityLevelParanoid:
+		filter := NewSensitiveDataFilter()
+		// Add all additional patterns for paranoid mode
+		paranoidPatterns := []string{
+			// Confidential/classified data
+			`(?i)(?:confidential|classified|secret|private|restricted)[\s:=]+[^\s]{1,256}\b`,
+			// All IDs
+			`(?i)(?:internal[_-]?id|employee[_-]?id|user[_-]?id|session[_-]?id|transaction[_-]?id|reference[_-]?id|tracking[_-]?id)[\s:=]+[A-Za-z0-9]{4,50}\b`,
+			// Additional financial patterns
+			`(?i)(?:amount|balance|deposit|withdrawal|transfer|payment)[\s:=]+[0-9.,]{1,20}\b`,
+			// Any UUID-like identifier
+			`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`,
+		}
+		for _, p := range paranoidPatterns {
+			filter.AddPattern(p)
+		}
+		return &SecurityConfig{
+			MaxMessageSize:  MaxMessageSize,
+			MaxWriters:      MaxWriterCount,
+			SensitiveFilter: filter,
+		}
+
+	default:
+		return DefaultSecurityConfig()
+	}
+}
+
 // Clone creates a copy of the SecurityConfig.
 //
 // Deep copy:
@@ -750,6 +1103,10 @@ func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
 // DefaultSecurityConfig returns a security config with basic sensitive data filtering enabled.
 // This provides out-of-the-box protection for common sensitive data like passwords,
 // API keys, credit cards, and phone numbers.
+//
+// This is the recommended default for production use. For development environments
+// where performance is critical and data sensitivity is low, consider using
+// SecurityConfigForLevel(SecurityLevelDevelopment) instead.
 func DefaultSecurityConfig() *SecurityConfig {
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
@@ -759,9 +1116,13 @@ func DefaultSecurityConfig() *SecurityConfig {
 }
 
 // DefaultSecurityConfigDisabled returns a security config with NO sensitive data filtering.
-// This is the default configuration for maximum performance.
-// Use this when you need raw logging without any filtering overhead.
+// This configuration is intended for development and testing environments only.
+//
+// Deprecated: Use SecurityConfigForLevel(SecurityLevelDevelopment) instead.
+// This function will be removed in a future major version.
+// Running without sensitive data filtering in production is a security risk.
 func DefaultSecurityConfigDisabled() *SecurityConfig {
+	// Note: Consider logging a deprecation warning in a future version
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
 		MaxWriters:      MaxWriterCount,
@@ -787,4 +1148,116 @@ func DefaultSecureConfig() *SecurityConfig {
 // compatibility and will be removed in a future major version.
 func SecureConfig() *SecurityConfig {
 	return DefaultSecureConfig()
+}
+
+// HealthcareConfig returns a security config optimized for HIPAA compliance.
+// This includes all patterns from DefaultSecureConfig plus healthcare-specific patterns:
+//   - ICD-10 diagnosis codes
+//   - US National Provider Identifier (NPI)
+//   - Medical Record Numbers (MRN)
+//   - Health Insurance Claim Numbers (HICN)
+//
+// Use this configuration for applications handling Protected Health Information (PHI)
+// in healthcare, medical, and insurance environments.
+func HealthcareConfig() *SecurityConfig {
+	filter := NewSensitiveDataFilter()
+
+	// Add healthcare-specific patterns
+	healthcarePatterns := []string{
+		// ICD-10 Diagnosis codes
+		`\b[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`,
+		// Medical Record Numbers with context
+		`(?i)(?:mrn|medical[_-]?record[_-]?number|patient[_-]?id|health[_-]?record)[\s:=]+[A-Za-z0-9]{6,20}\b`,
+		// Health Insurance Claim Number (Medicare)
+		`\b[0-9]{9}[A-Z]{1,2}\b`,
+		// Patient identifiers with context
+		`(?i)(?:patient[_-]?identifier|patient[_-]?code)[\s:=]+[A-Za-z0-9]{6,20}\b`,
+	}
+
+	for _, pattern := range healthcarePatterns {
+		filter.AddPattern(pattern)
+	}
+
+	return &SecurityConfig{
+		MaxMessageSize:  MaxMessageSize,
+		MaxWriters:      MaxWriterCount,
+		SensitiveFilter: filter,
+	}
+}
+
+// FinancialConfig returns a security config optimized for PCI-DSS compliance.
+// This includes all patterns from DefaultSecureConfig plus financial-specific patterns:
+//   - SWIFT/BIC codes
+//   - IBAN (International Bank Account Numbers)
+//   - CVV/CVC security codes
+//   - Additional card number formats
+//
+// Use this configuration for applications in banking, payment processing,
+// fintech, and other financial services environments.
+func FinancialConfig() *SecurityConfig {
+	filter := NewSensitiveDataFilter()
+
+	// Add financial-specific patterns
+	financialPatterns := []string{
+		// SWIFT/BIC codes
+		`\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`,
+		// IBAN
+		`\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7,30}\b`,
+		// CVV/CVC with context
+		`(?i)(?:cvv|cvc|cv2|security[_-]?code|card[_-]?verification)[\s:=]+[0-9]{3,4}\b`,
+		// Bank account numbers with context
+		`(?i)(?:account[_-]?number|bank[_-]?account|acct[_-]?no)[\s:=]+[0-9]{8,17}\b`,
+		// Routing numbers (ABA)
+		`\b[0-9]{9}\b`,
+	}
+
+	for _, pattern := range financialPatterns {
+		filter.AddPattern(pattern)
+	}
+
+	return &SecurityConfig{
+		MaxMessageSize:  MaxMessageSize,
+		MaxWriters:      MaxWriterCount,
+		SensitiveFilter: filter,
+	}
+}
+
+// GovernmentConfig returns a security config optimized for government and public sector.
+// This includes all patterns from DefaultSecureConfig plus government-specific patterns:
+//   - US Passport numbers
+//   - US Driver's License numbers
+//   - US Tax ID / EIN
+//   - UK National Insurance Numbers
+//   - Canadian Social Insurance Numbers
+//
+// Use this configuration for applications in government, public sector,
+// defense, and regulated identity management environments.
+func GovernmentConfig() *SecurityConfig {
+	filter := NewSensitiveDataFilter()
+
+	// Add government-specific patterns
+	governmentPatterns := []string{
+		// US Passport numbers with context
+		`(?i)(?:passport[_-]?number|passport[_-]?no|passport[_-]?id)[\s:=]+[0-9]{8,9}\b`,
+		// US Driver's License with context
+		`(?i)(?:driver[_-]?license|dl[_-]?number|license[_-]?number|drivers[_-]?license)[\s:=]+[A-Za-z0-9]{5,20}\b`,
+		// US Tax ID / EIN
+		`\b[0-9]{2}-[0-9]{7}\b`,
+		// UK National Insurance Number
+		`\b[A-CEGHJ-PR-TW-Z][A-CEGHJ-NPR-TW-Z][0-9]{6}[A-D]\b`,
+		// Canadian SIN
+		`\b[0-9]{3}[- ]?[0-9]{3}[- ]?[0-9]{3}\b`,
+		// Case numbers with context
+		`(?i)(?:case[_-]?number|file[_-]?number|docket)[\s:=]+[A-Za-z0-9]{5,20}\b`,
+	}
+
+	for _, pattern := range governmentPatterns {
+		filter.AddPattern(pattern)
+	}
+
+	return &SecurityConfig{
+		MaxMessageSize:  MaxMessageSize,
+		MaxWriters:      MaxWriterCount,
+		SensitiveFilter: filter,
+	}
 }

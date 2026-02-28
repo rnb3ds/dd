@@ -18,6 +18,24 @@ var jsonBufPool = sync.Pool{
 	},
 }
 
+// jsonEncoderPool pools json.Encoder objects for JSON encoding.
+// Each encoder is paired with a buffer and reused across calls.
+var jsonEncoderPool = sync.Pool{
+	New: func() any {
+		buf := &bytes.Buffer{}
+		buf.Grow(512)
+		enc := json.NewEncoder(buf)
+		enc.SetEscapeHTML(false)
+		return &pooledEncoder{buf: buf, enc: enc}
+	},
+}
+
+// pooledEncoder holds a buffer and encoder pair for reuse.
+type pooledEncoder struct {
+	buf *bytes.Buffer
+	enc *json.Encoder
+}
+
 // File system and retry configuration constants.
 const (
 	// FilePermissions is the permission mode for creating files (rw-------).
@@ -82,24 +100,24 @@ func FormatJSON(entry map[string]any, opts *JSONOptions) string {
 		opts = &JSONOptions{PrettyPrint: false, Indent: "  "}
 	}
 
-	// Use pooled buffer and encoder for better performance
-	buf := jsonBufPool.Get().(*bytes.Buffer)
-	buf.Reset()
-	defer jsonBufPool.Put(buf)
+	// Use pooled encoder (includes buffer) for better performance
+	pe := jsonEncoderPool.Get().(*pooledEncoder)
+	pe.buf.Reset()
+	defer jsonEncoderPool.Put(pe)
 
-	enc := json.NewEncoder(buf)
-	enc.SetEscapeHTML(false)
-
+	// Reset encoder settings (escape HTML is already false from pool init)
 	if opts.PrettyPrint {
-		enc.SetIndent("", opts.Indent)
+		pe.enc.SetIndent("", opts.Indent)
+	} else {
+		pe.enc.SetIndent("", "") // Reset indent for non-pretty mode
 	}
 
-	if err := enc.Encode(entry); err != nil {
+	if err := pe.enc.Encode(entry); err != nil {
 		return fmt.Sprintf(`{"error":"json marshal failed: %v"}`, err)
 	}
 
 	// json.Encoder adds a trailing newline, remove it
-	result := buf.String()
+	result := pe.buf.String()
 	if len(result) > 0 && result[len(result)-1] == '\n' {
 		result = result[:len(result)-1]
 	}

@@ -93,13 +93,15 @@ func defaultConfig() *Config {
 		IncludeLevel:  true,
 		FullPath:      false,
 		DynamicCaller: false,
-		Security:      DefaultSecurityConfigDisabled(),
+		Security:      DefaultSecurityConfig(), // Security enabled by default
 		FatalHandler:  defaultFatalHandler,
 	}
 }
 
 // DevelopmentConfig creates a Config with development-friendly settings.
 // Enables DEBUG level and dynamic caller detection.
+// Note: Security filtering is enabled by default even in development mode
+// to catch accidental logging of sensitive data early in the development cycle.
 //
 // Example:
 //
@@ -115,12 +117,14 @@ func DevelopmentConfig() *Config {
 		IncludeLevel:  true,
 		FullPath:      false,
 		DynamicCaller: true,
-		Security:      DefaultSecurityConfigDisabled(),
+		Security:      DefaultSecurityConfig(), // Security enabled by default
 		FatalHandler:  defaultFatalHandler,
 	}
 }
 
 // JSONConfig creates a Config with JSON output settings.
+// Note: Security filtering is enabled by default to prevent sensitive data
+// from being logged in JSON format which is often shipped to external systems.
 //
 // Example:
 //
@@ -136,7 +140,7 @@ func JSONConfig() *Config {
 		IncludeLevel:  true,
 		FullPath:      false,
 		DynamicCaller: true,
-		Security:      DefaultSecurityConfigDisabled(),
+		Security:      DefaultSecurityConfig(), // Security enabled by default
 		FatalHandler:  defaultFatalHandler,
 		JSON: &internal.JSONOptions{
 			PrettyPrint: false,

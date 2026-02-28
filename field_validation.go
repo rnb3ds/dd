@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/cybergodev/dd/internal"
 )
 
 // FieldValidationMode determines how field key validation is performed.
@@ -93,6 +95,11 @@ type FieldValidationConfig struct {
 	// AllowCommonAbbreviations allows common abbreviations like ID, URL, HTTP
 	// even when they don't strictly match the naming convention.
 	AllowCommonAbbreviations bool
+
+	// EnableSecurityValidation enables strict security validation including
+	// Log4Shell detection, homograph attack detection, and overlong UTF-8 checks.
+	// Default: true when Mode is not FieldValidationNone
+	EnableSecurityValidation bool
 }
 
 // DefaultFieldValidationConfig returns the default field validation configuration
@@ -102,6 +109,7 @@ func DefaultFieldValidationConfig() *FieldValidationConfig {
 		Mode:                     FieldValidationNone,
 		Convention:               NamingConventionAny,
 		AllowCommonAbbreviations: true,
+		EnableSecurityValidation: true,
 	}
 }
 
@@ -111,6 +119,7 @@ func StrictSnakeCaseConfig() *FieldValidationConfig {
 		Mode:                     FieldValidationStrict,
 		Convention:               NamingConventionSnakeCase,
 		AllowCommonAbbreviations: true,
+		EnableSecurityValidation: true,
 	}
 }
 
@@ -120,18 +129,32 @@ func StrictCamelCaseConfig() *FieldValidationConfig {
 		Mode:                     FieldValidationStrict,
 		Convention:               NamingConventionCamelCase,
 		AllowCommonAbbreviations: true,
+		EnableSecurityValidation: true,
 	}
 }
 
 // ValidateFieldKey validates a field key against the configured naming convention.
 // Returns an error describing the validation failure, or nil if valid.
+// Security validation is always performed when Mode is not FieldValidationNone.
 func (c *FieldValidationConfig) ValidateFieldKey(key string) error {
-	if c == nil || c.Mode == FieldValidationNone || c.Convention == NamingConventionAny {
+	if c == nil || c.Mode == FieldValidationNone {
 		return nil
 	}
 
 	if key == "" {
 		return fmt.Errorf("field key cannot be empty")
+	}
+
+	// Always run security validation first when enabled
+	if c.EnableSecurityValidation {
+		if err := internal.ValidateFieldKeyStrict(key); err != nil {
+			return err
+		}
+	}
+
+	// Skip naming convention check if Any convention is specified
+	if c.Convention == NamingConventionAny {
+		return nil
 	}
 
 	// Check if it's a common abbreviation
