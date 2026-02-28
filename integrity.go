@@ -68,13 +68,36 @@ type IntegrityConfig struct {
 // DefaultIntegrityConfig returns an IntegrityConfig with sensible defaults.
 // Note: A cryptographically secure random key is generated but should be replaced for production use.
 // IMPORTANT: Store the generated key securely if you need to verify logs across restarts.
+//
+// For production environments where panic is unacceptable, use DefaultIntegrityConfigSafe() instead.
 func DefaultIntegrityConfig() *IntegrityConfig {
+	cfg, err := DefaultIntegrityConfigSafe()
+	if err != nil {
+		// This should never happen with crypto/rand, but panic if it does
+		// as we cannot safely continue without a secure key.
+		// Use DefaultIntegrityConfigSafe() for panic-free initialization.
+		panic("dd: failed to generate secure random key for integrity config: " + err.Error())
+	}
+	return cfg
+}
+
+// DefaultIntegrityConfigSafe returns an IntegrityConfig with sensible defaults.
+// Unlike DefaultIntegrityConfig, this function returns an error instead of panicking
+// if the secure random key generation fails.
+// This is the recommended function for production environments.
+//
+// Example:
+//
+//	cfg, err := dd.DefaultIntegrityConfigSafe()
+//	if err != nil {
+//	    // Handle error gracefully
+//	    log.Fatal(err)
+//	}
+func DefaultIntegrityConfigSafe() (*IntegrityConfig, error) {
 	// Generate a cryptographically secure random key
 	defaultKey := make([]byte, 32)
 	if _, err := rand.Read(defaultKey); err != nil {
-		// This should never happen with crypto/rand, but panic if it does
-		// as we cannot safely continue without a secure key
-		panic("dd: failed to generate secure random key for integrity config: " + err.Error())
+		return nil, fmt.Errorf("failed to generate secure random key: %w", err)
 	}
 
 	return &IntegrityConfig{
@@ -83,16 +106,15 @@ func DefaultIntegrityConfig() *IntegrityConfig {
 		IncludeTimestamp: true,
 		IncludeSequence:  true,
 		SignaturePrefix:  "[SIG:",
-	}
+	}, nil
 }
 
 // IntegritySigner signs log entries for integrity verification.
 // It uses a sync.Pool for hashers to ensure thread-safe concurrent access.
 type IntegritySigner struct {
-	config     *IntegrityConfig
-	secretKey  []byte // Store key for creating new hashers
-	sequence   atomic.Uint64
-	keyWarning atomic.Bool // Warns if using auto-generated key
+	config    *IntegrityConfig
+	secretKey []byte // Store key for creating new hashers
+	sequence  atomic.Uint64
 }
 
 // NewIntegritySigner creates a new IntegritySigner with the given configuration.

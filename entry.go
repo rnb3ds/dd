@@ -36,18 +36,23 @@ func (e *LoggerEntry) WithFields(fields ...Field) *LoggerEntry {
 		return e
 	}
 
+	// Fast path: no existing fields
+	if len(e.fields) == 0 {
+		return newLoggerEntry(e.logger, fields)
+	}
+
 	// Merge fields: start with existing, add new (allowing override)
 	merged := make([]Field, 0, len(e.fields)+len(fields))
 
 	// Track which keys have been set by new fields
-	newKeys := make(map[string]bool, len(fields))
+	newKeys := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
-		newKeys[f.Key] = true
+		newKeys[f.Key] = struct{}{}
 	}
 
 	// Add existing fields that aren't overridden
 	for _, f := range e.fields {
-		if !newKeys[f.Key] {
+		if _, exists := newKeys[f.Key]; !exists {
 			merged = append(merged, f)
 		}
 	}
@@ -81,14 +86,14 @@ func (e *LoggerEntry) mergeFields(fields []Field) []Field {
 	merged := make([]Field, 0, len(e.fields)+len(fields))
 
 	// Track which keys are in method fields
-	methodKeys := make(map[string]bool, len(fields))
+	methodKeys := make(map[string]struct{}, len(fields))
 	for _, f := range fields {
-		methodKeys[f.Key] = true
+		methodKeys[f.Key] = struct{}{}
 	}
 
 	// Add entry fields that aren't overridden
 	for _, f := range e.fields {
-		if !methodKeys[f.Key] {
+		if _, exists := methodKeys[f.Key]; !exists {
 			merged = append(merged, f)
 		}
 	}

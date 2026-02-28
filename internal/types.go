@@ -44,21 +44,20 @@ const (
 	LevelFatal
 )
 
+// Pre-cached level strings to avoid allocations in hot path
+var levelStrings = [6]string{
+	"DEBUG",
+	"INFO",
+	"WARN",
+	"ERROR",
+	"FATAL",
+}
+
 func (l LogLevel) String() string {
-	switch l {
-	case LevelDebug:
-		return "DEBUG"
-	case LevelInfo:
-		return "INFO"
-	case LevelWarn:
-		return "WARN"
-	case LevelError:
-		return "ERROR"
-	case LevelFatal:
-		return "FATAL"
-	default:
-		return "UNKNOWN"
+	if l >= 0 && int(l) < len(levelStrings) {
+		return levelStrings[l]
 	}
+	return "UNKNOWN"
 }
 
 func (l LogLevel) IsValid() bool {

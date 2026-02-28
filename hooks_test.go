@@ -379,3 +379,92 @@ func TestHookRegistry_NilContext(t *testing.T) {
 	}
 	_ = err // We don't check the error as behavior with nil context may vary
 }
+
+func TestHookRegistry_PanicRecovery(t *testing.T) {
+	registry := NewHookRegistry()
+
+	// Add a hook that panics
+	registry.Add(HookBeforeLog, func(ctx context.Context, hc *HookContext) error {
+		panic("intentional test panic")
+	})
+
+	hookCtx := &HookContext{Event: HookBeforeLog}
+
+	// Trigger should not panic - it should recover and return an error
+	err := registry.Trigger(context.Background(), HookBeforeLog, hookCtx)
+
+	// Should return an error from the panic
+	if err == nil {
+		t.Error("expected error from panicked hook")
+	}
+
+	// Verify error message contains panic info
+	if err != nil && err.Error() == "" {
+		t.Error("error message should not be empty")
+	}
+}
+
+func TestHookRegistry_PanicRecovery_ContinuesWithErrorHandler(t *testing.T) {
+	secondHookCalled := false
+	var recordedErrors []error
+
+	registry := NewHookRegistryWithErrorHandler(func(event HookEvent, hc *HookContext, err error) {
+		recordedErrors = append(recordedErrors, err)
+	})
+
+	// Add a hook that panics
+	registry.Add(HookBeforeLog, func(ctx context.Context, hc *HookContext) error {
+		panic("intentional test panic")
+	})
+
+	// Add a hook that should be called after the panic (because we have an error handler)
+	registry.Add(HookBeforeLog, func(ctx context.Context, hc *HookContext) error {
+		secondHookCalled = true
+		return nil
+	})
+
+	hookCtx := &HookContext{Event: HookBeforeLog}
+
+	// Trigger should not panic - it should recover and continue
+	err := registry.Trigger(context.Background(), HookBeforeLog, hookCtx)
+
+	// Should return an error from the panic
+	if err == nil {
+		t.Error("expected error from panicked hook")
+	}
+
+	// Error should have been recorded
+	if len(recordedErrors) != 1 {
+		t.Errorf("expected 1 recorded error, got %d", len(recordedErrors))
+	}
+
+	// Second hook should be called (because we have an error handler)
+	if !secondHookCalled {
+		t.Error("expected second hook to be called after panic recovery when error handler is set")
+	}
+}
+
+func TestHookRegistry_PanicRecovery_WithErrorHandler(t *testing.T) {
+	var recordedErrors []error
+	registry := NewHookRegistryWithErrorHandler(func(event HookEvent, hc *HookContext, err error) {
+		recordedErrors = append(recordedErrors, err)
+	})
+
+	// Add a hook that panics
+	registry.Add(HookBeforeLog, func(ctx context.Context, hc *HookContext) error {
+		panic("intentional test panic")
+	})
+
+	hookCtx := &HookContext{Event: HookBeforeLog}
+	err := registry.Trigger(context.Background(), HookBeforeLog, hookCtx)
+
+	// Should return an error from the panic
+	if err == nil {
+		t.Error("expected error from panicked hook")
+	}
+
+	// Error should have been recorded
+	if len(recordedErrors) != 1 {
+		t.Errorf("expected 1 recorded error, got %d", len(recordedErrors))
+	}
+}

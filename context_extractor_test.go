@@ -281,3 +281,58 @@ func TestContextExtractorRegistry_ConcurrentAccess(t *testing.T) {
 		t.Errorf("expected %d extractors, got %d", numGoroutines, registry.Count())
 	}
 }
+
+func TestContextExtractorRegistry_PanicRecovery(t *testing.T) {
+	registry := NewContextExtractorRegistry()
+
+	// Add an extractor that panics
+	registry.Add(func(ctx context.Context) []Field {
+		panic("intentional test panic")
+	})
+
+	// Add an extractor that should still be called
+	registry.Add(func(ctx context.Context) []Field {
+		return []Field{String("key1", "value1")}
+	})
+
+	ctx := context.Background()
+
+	// Extract should not panic - it should recover and continue
+	fields := registry.Extract(ctx)
+
+	// Should still get fields from the second extractor
+	if len(fields) != 1 {
+		t.Errorf("expected 1 field from non-panicking extractor, got %d", len(fields))
+	}
+
+	if fields[0].Key != "key1" || fields[0].Value != "value1" {
+		t.Errorf("unexpected field: %v", fields[0])
+	}
+}
+
+func TestContextExtractorRegistry_MultiplePanics(t *testing.T) {
+	registry := NewContextExtractorRegistry()
+
+	// Add multiple extractors that panic
+	registry.Add(func(ctx context.Context) []Field {
+		panic("panic 1")
+	})
+	registry.Add(func(ctx context.Context) []Field {
+		panic("panic 2")
+	})
+
+	// Add a working extractor
+	registry.Add(func(ctx context.Context) []Field {
+		return []Field{String("success", "true")}
+	})
+
+	ctx := context.Background()
+
+	// Extract should not panic
+	fields := registry.Extract(ctx)
+
+	// Should still get fields from the working extractor
+	if len(fields) != 1 {
+		t.Errorf("expected 1 field, got %d", len(fields))
+	}
+}

@@ -21,7 +21,7 @@ const (
 	// FieldBuilderCapacity is the initial capacity for field builder
 	FieldBuilderCapacity = 256
 	// EstimatedFieldSize is the estimated size per field in bytes
-	EstimatedFieldSize = 24
+	EstimatedFieldSize = 32
 )
 
 // fieldPool pools strings.Builder objects for field formatting
@@ -51,89 +51,89 @@ func FormatFields(fields []Field) string {
 		sb.Grow(estimatedSize - sb.Cap())
 	}
 
-	written := false
-
-	for _, field := range fields {
+	for i, field := range fields {
 		if field.Key == "" {
 			continue
 		}
 
-		if written {
+		if i > 0 {
 			sb.WriteByte(' ')
 		}
-		written = true
 
 		sb.WriteString(field.Key)
 		sb.WriteByte('=')
 
-		switch v := field.Value.(type) {
-		case string:
-			if NeedsQuoting(v) {
-				sb.WriteByte('"')
-				vLen := len(v)
-				for j := 0; j < vLen; j++ {
-					c := v[j]
-					if c == '"' || c == '\\' {
-						sb.WriteByte('\\')
-					}
-					sb.WriteByte(c)
-				}
-				sb.WriteByte('"')
-			} else {
-				sb.WriteString(v)
-			}
-		case int:
-			sb.WriteString(strconv.FormatInt(int64(v), 10))
-		case int8:
-			sb.WriteString(strconv.FormatInt(int64(v), 10))
-		case int16:
-			sb.WriteString(strconv.FormatInt(int64(v), 10))
-		case int32:
-			sb.WriteString(strconv.FormatInt(int64(v), 10))
-		case int64:
-			sb.WriteString(strconv.FormatInt(v, 10))
-		case uint:
-			sb.WriteString(strconv.FormatUint(uint64(v), 10))
-		case uint8:
-			sb.WriteString(strconv.FormatUint(uint64(v), 10))
-		case uint16:
-			sb.WriteString(strconv.FormatUint(uint64(v), 10))
-		case uint32:
-			sb.WriteString(strconv.FormatUint(uint64(v), 10))
-		case uint64:
-			sb.WriteString(strconv.FormatUint(v, 10))
-		case float32:
-			sb.WriteString(strconv.FormatFloat(float64(v), 'g', -1, 32))
-		case float64:
-			sb.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
-		case bool:
-			if v {
-				sb.WriteString("true")
-			} else {
-				sb.WriteString("false")
-			}
-		case time.Duration:
-			sb.WriteString(v.String())
-		case time.Time:
-			sb.WriteString(v.Format(time.RFC3339))
-		case nil:
-			sb.WriteString("<nil>")
-		default:
-			if IsComplexValue(v) {
-				if jsonData, err := json.Marshal(v); err == nil {
-					sb.Write(jsonData)
-				} else {
-					// Use fmt.Fprint to avoid intermediate string allocation
-					fmt.Fprint(sb, v)
-				}
-			} else {
-				// Use fmt.Fprint to avoid intermediate string allocation
-				fmt.Fprint(sb, v)
-			}
-		}
+		formatFieldValue(sb, field.Value)
 	}
 
 	return sb.String()
+}
+
+// formatFieldValue formats a single field value to the builder.
+// This is separated to allow for better inlining and reduce code complexity.
+func formatFieldValue(sb *strings.Builder, v any) {
+	switch val := v.(type) {
+	case string:
+		if NeedsQuoting(val) {
+			sb.WriteByte('"')
+			for j := 0; j < len(val); j++ {
+				c := val[j]
+				if c == '"' || c == '\\' {
+					sb.WriteByte('\\')
+				}
+				sb.WriteByte(c)
+			}
+			sb.WriteByte('"')
+		} else {
+			sb.WriteString(val)
+		}
+	case int:
+		sb.WriteString(strconv.FormatInt(int64(val), 10))
+	case int64:
+		sb.WriteString(strconv.FormatInt(val, 10))
+	case int32:
+		sb.WriteString(strconv.FormatInt(int64(val), 10))
+	case int16:
+		sb.WriteString(strconv.FormatInt(int64(val), 10))
+	case int8:
+		sb.WriteString(strconv.FormatInt(int64(val), 10))
+	case uint:
+		sb.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint64:
+		sb.WriteString(strconv.FormatUint(val, 10))
+	case uint32:
+		sb.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint16:
+		sb.WriteString(strconv.FormatUint(uint64(val), 10))
+	case uint8:
+		sb.WriteString(strconv.FormatUint(uint64(val), 10))
+	case float64:
+		sb.WriteString(strconv.FormatFloat(val, 'g', -1, 64))
+	case float32:
+		sb.WriteString(strconv.FormatFloat(float64(val), 'g', -1, 32))
+	case bool:
+		if val {
+			sb.WriteString("true")
+		} else {
+			sb.WriteString("false")
+		}
+	case time.Duration:
+		sb.WriteString(val.String())
+	case time.Time:
+		sb.WriteString(val.Format(time.RFC3339))
+	case nil:
+		sb.WriteString("<nil>")
+	default:
+		if IsComplexValue(v) {
+			if jsonData, err := json.Marshal(v); err == nil {
+				sb.Write(jsonData)
+			} else {
+				fmt.Fprint(sb, v)
+			}
+		} else {
+			fmt.Fprint(sb, v)
+		}
+	}
 }
 
 // NeedsQuoting checks if a string needs to be quoted in log output.

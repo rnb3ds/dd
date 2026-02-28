@@ -116,11 +116,13 @@ func FormatJSON(entry map[string]any, opts *JSONOptions) string {
 		return fmt.Sprintf(`{"error":"json marshal failed: %v"}`, err)
 	}
 
+	// Get bytes and convert to string
 	// json.Encoder adds a trailing newline, remove it
-	result := pe.buf.String()
-	if len(result) > 0 && result[len(result)-1] == '\n' {
-		result = result[:len(result)-1]
+	data := pe.buf.Bytes()
+	if len(data) > 0 && data[len(data)-1] == '\n' {
+		data = data[:len(data)-1]
 	}
 
-	return result
+	// Convert to string - this is the only allocation in the hot path
+	return string(data)
 }

@@ -299,6 +299,47 @@ func TestDefaultIntegrityConfig(t *testing.T) {
 	}
 }
 
+func TestDefaultIntegrityConfigSafe(t *testing.T) {
+	config, err := DefaultIntegrityConfigSafe()
+
+	if err != nil {
+		t.Fatalf("DefaultIntegrityConfigSafe should not return error, got: %v", err)
+	}
+
+	if config == nil {
+		t.Fatal("DefaultIntegrityConfigSafe should not return nil config")
+	}
+
+	if len(config.SecretKey) != 32 {
+		t.Errorf("Default SecretKey length should be 32, got %d", len(config.SecretKey))
+	}
+
+	if config.HashAlgorithm != HashAlgorithmSHA256 {
+		t.Errorf("Default HashAlgorithm should be SHA256")
+	}
+
+	if config.SignaturePrefix != "[SIG:" {
+		t.Errorf("Default SignaturePrefix should be [SIG:")
+	}
+}
+
+func TestDefaultIntegrityConfigSafe_UniqueKeys(t *testing.T) {
+	config1, err := DefaultIntegrityConfigSafe()
+	if err != nil {
+		t.Fatalf("DefaultIntegrityConfigSafe error: %v", err)
+	}
+
+	config2, err := DefaultIntegrityConfigSafe()
+	if err != nil {
+		t.Fatalf("DefaultIntegrityConfigSafe error: %v", err)
+	}
+
+	// Keys should be different (randomly generated)
+	if string(config1.SecretKey) == string(config2.SecretKey) {
+		t.Error("Two calls to DefaultIntegrityConfigSafe should generate different keys")
+	}
+}
+
 func TestHashAlgorithm_String(t *testing.T) {
 	tests := []struct {
 		algorithm HashAlgorithm

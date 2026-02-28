@@ -254,13 +254,16 @@ func (r *HookRegistry) Remove(event HookEvent) {
 //
 // Error Handling Behavior:
 //   - If no error handler is set (default): hooks are executed in order;
-//     if any hook returns an error, execution stops and that error is returned.
-//   - If an error handler is set: all hooks are executed regardless of errors;
+//     if any hook returns an error or panics, execution stops and that error is returned.
+//   - If an error handler is set: all hooks are executed regardless of errors or panics;
 //     each error is passed to the error handler, and the first error is returned.
 //
 // For BeforeLog events, an error prevents the log from being written
 // regardless of whether an error handler is set.
-func (r *HookRegistry) Trigger(ctx context.Context, event HookEvent, hookCtx *HookContext) error {
+//
+// Panic Recovery: If a hook panics, the panic is recovered and converted to an error.
+// This ensures that a misbehaving hook cannot crash the application.
+func (r *HookRegistry) Trigger(ctx context.Context, event HookEvent, hookCtx *HookContext) (err error) {
 	if r == nil {
 		return nil
 	}
@@ -277,22 +280,40 @@ func (r *HookRegistry) Trigger(ctx context.Context, event HookEvent, hookCtx *Ho
 	var firstErr error
 
 	for _, hook := range hooks {
-		if err := hook(ctx, hookCtx); err != nil {
+		// Execute hook with panic recovery
+		hookErr := r.executeHookWithRecovery(ctx, hook, hookCtx, event)
+		if hookErr != nil {
 			if handler != nil {
-				// Call the error handler
-				handler(event, hookCtx, err)
+				// Call the error handler and continue to next hook
+				handler(event, hookCtx, hookErr)
 				// Record first error to return later
 				if firstErr == nil {
-					firstErr = err
+					firstErr = hookErr
 				}
 			} else {
-				// Default behavior: stop on first error
-				return err
+				// Default behavior: stop on first error (including panic)
+				return hookErr
 			}
 		}
 	}
 
 	return firstErr
+}
+
+// executeHookWithRecovery executes a hook with panic recovery.
+// If the hook panics, the panic is recovered, logged to stderr, and converted to an error.
+func (r *HookRegistry) executeHookWithRecovery(ctx context.Context, hook Hook, hookCtx *HookContext, event HookEvent) (err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			// Convert panic to error
+			panicErr := fmt.Errorf("hook panic for event %s: %v", event, rec)
+			// Log to stderr as a fallback
+			fmt.Fprintf(os.Stderr, "dd: %v\n", panicErr)
+			err = panicErr
+		}
+	}()
+
+	return hook(ctx, hookCtx)
 }
 
 // Clone creates a copy of the registry with the same hooks.
