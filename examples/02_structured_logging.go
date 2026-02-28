@@ -10,130 +10,136 @@ import (
 	"github.com/cybergodev/dd"
 )
 
-// Structured Logging - Production-Ready Patterns
+// Structured Logging - Type-Safe Fields and Chaining
 //
-// This example demonstrates:
-// 1. Core field types (String, Int, Float64, Bool, Err, Any)
-// 2. Real-world logging templates
-// 3. Best practices for structured logging
+// Topics covered:
+// 1. All field types (String, Int, Bool, Float64, Time, Duration, Err)
+// 2. WithFields() chaining for reusable context
+// 3. LoggerEntry for contextual logging
+// 4. Best practices for production
 func main() {
 	fmt.Println("=== DD Structured Logging ===\n")
 
-	example1CoreFieldTypes()
-	example2HTTPRequestLogging()
-	example3ErrorLogging()
+	section1FieldTypes()
+	section2WithFields()
+	section3BestPractices()
 
 	fmt.Println("\n✅ Structured logging examples completed!")
-	fmt.Println("\nBest Practices:")
-	fmt.Println("  • Use type-safe fields (String, Int, Bool) over Any for better performance")
-	fmt.Println("  • Keep 5-10 fields per log entry")
-	fmt.Println("  • Use consistent field names across your application")
-	fmt.Println("  • JSON format for production, Text format for development")
 }
 
-// Example 1: Core field types
-func example1CoreFieldTypes() {
-	fmt.Println("1. Core Field Types")
-	fmt.Println("-------------------")
+// Section 1: All field types
+func section1FieldTypes() {
+	fmt.Println("1. Field Types")
+	fmt.Println("---------------")
 
-	// Use File config for file-only JSON output
+	logger, _ := dd.New()
+	defer logger.Close()
+
+	// Type-safe fields (recommended for performance)
+	logger.InfoWith("All field types",
+		// Strings and numbers
+		dd.String("user", "alice"),
+		dd.Int("count", 42),
+		dd.Int64("id", 9876543210),
+		dd.Float64("score", 98.5),
+
+		// Boolean and time
+		dd.Bool("active", true),
+		dd.Time("created_at", time.Now()),
+		dd.Duration("elapsed", 150*time.Millisecond),
+
+		// Error handling
+		dd.Err(errors.New("connection failed")),
+
+		// Complex types (use Any)
+		dd.Any("tags", []string{"vip", "premium"}),
+		dd.Any("meta", map[string]int{"requests": 100}),
+	)
+
+	fmt.Println()
+}
+
+// Section 2: WithFields() chaining
+func section2WithFields() {
+	fmt.Println("2. WithFields() Chaining")
+	fmt.Println("-------------------------")
+
+	logger, _ := dd.New()
+	defer logger.Close()
+
+	// Create logger entry with persistent fields
+	userLogger := logger.WithFields(
+		dd.String("service", "user-api"),
+		dd.String("version", "1.0.0"),
+	)
+
+	// All logs from userLogger include service and version
+	userLogger.Info("User authenticated")
+	userLogger.InfoWith("Profile loaded",
+		dd.String("user_id", "123"),
+		dd.Int("roles", 3),
+	)
+
+	// Chain more fields - creates new entry, doesn't modify original
+	requestLogger := userLogger.WithFields(
+		dd.String("request_id", "req-abc-123"),
+	)
+	requestLogger.Info("Processing request")
+	requestLogger.InfoWith("Request completed",
+		dd.Int("status", 200),
+		dd.Duration("latency", 45*time.Millisecond),
+	)
+
+	// Single field shorthand
+	txLogger := logger.WithField("transaction_id", "tx-789")
+	txLogger.Info("Transaction started")
+
+	// Original logger is unchanged
+	logger.Info("This has no preset fields")
+
+	fmt.Println()
+}
+
+// Section 3: Best practices
+func section3BestPractices() {
+	fmt.Println("3. Best Practices")
+	fmt.Println("------------------")
+
 	cfg := dd.DefaultConfig()
 	cfg.Format = dd.FormatJSON
 	cfg.File = &dd.FileConfig{Path: "logs/structured.log"}
 
-	logger, err := dd.New(cfg)
-	if err != nil {
-		fmt.Printf("Failed to create logger: %v\n", err)
-		return
-	}
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	logger.InfoWith("All field types",
-		// Type-safe fields (recommended - best performance)
-		dd.String("name", "John Doe"),
-		dd.Int("age", 30),
-		dd.Int64("user_id", 9876543210),
-		dd.Float64("score", 98.5),
-		dd.Bool("active", true),
-		dd.Err(errors.New("example error")),
-
-		// Complex types (use Any)
-		dd.Any("tags", []string{"vip", "premium"}),
-		dd.Any("metadata", map[string]int{"count": 100}),
-		dd.Any("timestamp", time.Now()),
-	)
-
-	fmt.Println("✓ Logged with all field types\n")
-}
-
-// Example 2: HTTP request logging template
-func example2HTTPRequestLogging() {
-	fmt.Println("2. HTTP Request Logging")
-	fmt.Println("-----------------------")
-
-	cfg := dd.DefaultConfig()
-	cfg.Format = dd.FormatJSON
-	cfg.File = &dd.FileConfig{Path: "logs/http.log"}
-
-	logger, err := dd.New(cfg)
-	if err != nil {
-		fmt.Printf("Failed to create logger: %v\n", err)
-		return
-	}
-	defer logger.Close()
-
-	// Request received
+	// ✅ DO: Use consistent field names
 	logger.InfoWith("HTTP request",
-		dd.String("request_id", "req-abc-123"),
-		dd.String("method", "POST"),
-		dd.String("path", "/api/v1/users"),
-		dd.String("client_ip", "192.168.1.100"),
-		dd.Int("user_id", 12345),
+		dd.String("http_method", "POST"),
+		dd.String("http_path", "/api/users"),
+		dd.Int("http_status", 201),
+		dd.Float64("http_duration_ms", 125.7),
 	)
 
-	// Response sent
-	logger.InfoWith("HTTP response",
-		dd.String("request_id", "req-abc-123"),
-		dd.Int("status", 201),
-		dd.Float64("duration_ms", 125.7),
-		dd.Int("response_size", 512),
-	)
-
-	fmt.Println("✓ HTTP request/response logged\n")
-}
-
-// Example 3: Error logging template
-func example3ErrorLogging() {
-	fmt.Println("3. Error & Warning Logging")
-	fmt.Println("--------------------------")
-
-	cfg := dd.DefaultConfig()
-	cfg.Format = dd.FormatJSON
-	cfg.File = &dd.FileConfig{Path: "logs/errors.log"}
-
-	logger, err := dd.New(cfg)
-	if err != nil {
-		fmt.Printf("Failed to create logger: %v\n", err)
-		return
-	}
-	defer logger.Close()
-
-	// Application error with context
-	err = errors.New("connection timeout")
+	// ✅ DO: Include error context
+	err := errors.New("database timeout")
 	logger.ErrorWith("Operation failed",
 		dd.Err(err),
-		dd.String("operation", "user_query"),
+		dd.String("operation", "db_query"),
 		dd.String("host", "db.example.com"),
 		dd.Int("retry_count", 3),
 	)
 
-	// Resource warning
-	logger.WarnWith("Resource alert",
-		dd.String("alert_type", "high_memory"),
-		dd.Float64("memory_percent", 85.5),
-		dd.Float64("threshold", 80.0),
-		dd.String("host", "app-server-01"),
+	// ✅ DO: Keep 5-10 fields per entry
+	logger.InfoWith("User action",
+		dd.String("user_id", "user-123"),
+		dd.String("action", "login"),
+		dd.String("ip_address", "192.168.1.100"),
+		dd.Time("timestamp", time.Now()),
 	)
 
-	fmt.Println("✓ Errors and alerts logged\n")
+	fmt.Println("\nBest Practices:")
+	fmt.Println("  • Use type-safe fields (String, Int) over Any")
+	fmt.Println("  • Use consistent field naming (snake_case recommended)")
+	fmt.Println("  • Keep 5-10 fields per entry for readability")
+	fmt.Println("  • Use WithFields for request/transaction context")
 }

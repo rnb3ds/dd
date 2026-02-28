@@ -69,10 +69,10 @@
 // Using presets:
 //
 //	// Development preset
-//	logger := dd.Must(dd.ConfigDevelopment())
+//	logger := dd.Must(dd.DevelopmentConfig())
 //
 //	// JSON preset
-//	logger := dd.Must(dd.ConfigJSON())
+//	logger := dd.Must(dd.JSONConfig())
 //
 // # Structured Logging
 //

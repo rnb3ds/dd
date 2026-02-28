@@ -117,6 +117,13 @@ func ErrWithKey(key string, err error) Field {
 	return Field{Key: key, Value: err.Error()}
 }
 
+// NamedErr creates a field from an error with a custom key name.
+// This is an alias for ErrWithKey, provided for naming consistency
+// with other field constructors like NamedError.
+func NamedErr(key string, err error) Field {
+	return ErrWithKey(key, err)
+}
+
 // ErrWithStack creates a field from an error including its stack trace.
 // Note: Stack trace capture has a small performance overhead.
 func ErrWithStack(err error) Field {
@@ -179,6 +186,26 @@ func WarnCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelWarn
 // ErrorCtx logs an error message with context support using the default logger.
 func ErrorCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelError, args...) }
 
+// DebugfCtx logs a formatted debug message with context support using the default logger.
+func DebugfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelDebug, format, args...)
+}
+
+// InfofCtx logs a formatted info message with context support using the default logger.
+func InfofCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelInfo, format, args...)
+}
+
+// WarnfCtx logs a formatted warning message with context support using the default logger.
+func WarnfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelWarn, format, args...)
+}
+
+// ErrorfCtx logs a formatted error message with context support using the default logger.
+func ErrorfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelError, format, args...)
+}
+
 // DebugWithCtx logs a structured debug message with context support using the default logger.
 func DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
 	Default().LogWithCtx(ctx, LevelDebug, msg, fields...)
@@ -197,4 +224,17 @@ func WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
 // ErrorWithCtx logs a structured error message with context support using the default logger.
 func ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
 	Default().LogWithCtx(ctx, LevelError, msg, fields...)
+}
+
+// FatalCtx logs a fatal message with context support using the default logger.
+func FatalCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelFatal, args...) }
+
+// FatalfCtx logs a formatted fatal message with context support using the default logger.
+func FatalfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelFatal, format, args...)
+}
+
+// FatalWithCtx logs a structured fatal message with context support using the default logger.
+func FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelFatal, msg, fields...)
 }

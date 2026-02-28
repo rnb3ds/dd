@@ -22,19 +22,50 @@ const (
 )
 
 const (
+	// DefaultBufferSize is the initial capacity for message buffers.
+	// 1024 bytes covers most typical log messages without reallocation.
 	DefaultBufferSize = 1024
-	MaxBufferSize     = 4 * 1024
+
+	// MaxBufferSize is the maximum buffer capacity returned to the pool.
+	// Buffers larger than 4KB are replaced with default-sized buffers to
+	// prevent memory bloat from occasional large messages. This value
+	// balances memory efficiency with performance for typical workloads.
+	MaxBufferSize = 4 * 1024
+
 	// FieldBuilderCapacity and EstimatedFieldSize are defined in internal/fields.go
 )
 
 const (
-	MaxPathLength      = 4096
-	MaxMessageSize     = 5 * 1024 * 1024
-	MaxInputLength     = 256 * 1024
-	MaxWriterCount     = 100
-	MaxPatternLength   = 1000
+	// MaxPathLength limits file paths to 4096 bytes (POSIX PATH_MAX).
+	// Prevents path traversal attacks and memory exhaustion from malicious paths.
+	MaxPathLength = 4096
+
+	// MaxMessageSize limits formatted log messages to 5MB.
+	// This prevents memory exhaustion from extremely large log entries while
+	// allowing substantial content (e.g., stack traces with context).
+	MaxMessageSize = 5 * 1024 * 1024
+
+	// MaxInputLength limits input for sensitive data filtering to 256KB.
+	// Beyond this size, filtering becomes CPU-intensive. The boundary-aware
+	// truncation ensures sensitive data is still detected at the edges.
+	MaxInputLength = 256 * 1024
+
+	// MaxWriterCount limits concurrent writers to 100.
+	// This prevents resource exhaustion from misconfigured loggers while
+	// allowing reasonable multi-output scenarios (file + stdout + network).
+	MaxWriterCount = 100
+
+	// MaxPatternLength limits regex patterns to 1000 characters.
+	// Longer patterns are rarely needed and may indicate ReDoS attempts.
+	MaxPatternLength = 1000
+
+	// MaxQuantifierRange limits regex quantifier ranges (e.g., {1,1000}).
+	// Prevents ReDoS attacks with patterns like (a{1,1000000})+.
 	MaxQuantifierRange = 1000
-	MaxRecursionDepth  = 100
+
+	// MaxRecursionDepth limits recursive filtering of nested structures.
+	// Prevents stack overflow from deeply nested or circular data.
+	MaxRecursionDepth = 100
 )
 
 const (
@@ -74,6 +105,18 @@ const (
 	// MaxConcurrentFilters limits concurrent regex filtering goroutines.
 	// Prevents resource exhaustion in high-concurrency scenarios.
 	MaxConcurrentFilters = 100
+
+	// FilterMediumInputThreshold is the input size threshold for synchronous chunked processing.
+	// Inputs between FastPathThreshold and this value use synchronous chunked processing.
+	// Inputs larger than this use async processing with timeout protection.
+	FilterMediumInputThreshold = 100 * FastPathThreshold // 10KB
+
+	// FilterDirectProcessThreshold is the maximum input size for direct processing
+	// without chunking during timeout-protected filtering.
+	FilterDirectProcessThreshold = 32 * 1024 // 32KB
+
+	// FilterChunkSize is the size of chunks for processing large inputs.
+	FilterChunkSize = 4096 // 4KB
 )
 
 const (
@@ -86,6 +129,11 @@ const (
 	// during fatal log handling. This ensures the program can exit even if
 	// the underlying writer is blocked or unresponsive.
 	DefaultFatalFlushTimeout = 5 * time.Second
+
+	// DefaultLoggerCloseDelay is the delay before closing an old logger
+	// when SetDefault() is called with a new logger. This allows in-flight
+	// log operations to complete before the old logger is closed.
+	DefaultLoggerCloseDelay = 100 * time.Millisecond
 )
 
 const (

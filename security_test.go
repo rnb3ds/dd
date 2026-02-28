@@ -563,7 +563,7 @@ func TestConcurrentFilterAccess(t *testing.T) {
 
 func TestSecurityIntegrationWithLogger(t *testing.T) {
 	var buf strings.Builder
-	config := NewConfig()
+	config := DefaultConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		MaxMessageSize:  1024,
@@ -591,7 +591,7 @@ func TestSecurityIntegrationWithLogger(t *testing.T) {
 
 func TestSecurityMessageSizeLimit(t *testing.T) {
 	var buf strings.Builder
-	config := NewConfig()
+	config := DefaultConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		MaxMessageSize: 100, // Small limit for testing
@@ -620,7 +620,7 @@ func TestSecurityMessageSizeLimit(t *testing.T) {
 
 func TestSecurityFieldFiltering(t *testing.T) {
 	var buf strings.Builder
-	config := ConfigJSON()
+	config := JSONConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
@@ -864,7 +864,7 @@ func TestPhoneNumberFiltering(t *testing.T) {
 
 func TestPhoneNumberFieldFiltering(t *testing.T) {
 	var buf strings.Builder
-	config := ConfigJSON()
+	config := JSONConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
@@ -1103,7 +1103,7 @@ func TestDatabaseConnectionFiltering(t *testing.T) {
 
 func TestDatabaseConnectionFieldFiltering(t *testing.T) {
 	var buf strings.Builder
-	config := ConfigJSON()
+	config := JSONConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
@@ -1143,7 +1143,7 @@ func TestDatabaseConnectionFieldFiltering(t *testing.T) {
 
 func TestDatabaseConnectionInMessage(t *testing.T) {
 	var buf strings.Builder
-	config := ConfigJSON()
+	config := JSONConfig()
 	config.Output = &buf
 	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),

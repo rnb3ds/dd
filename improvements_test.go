@@ -24,7 +24,7 @@ func TestFatalTimeout(t *testing.T) {
 		exited := false
 		var mu sync.Mutex
 
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.FatalHandler = func() {
 			mu.Lock()
 			exited = true
@@ -187,7 +187,7 @@ func TestDefaultLoggerWarning(t *testing.T) {
 func TestWithFields(t *testing.T) {
 	t.Run("WithFields creates entry with fields", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -206,7 +206,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("WithField creates entry with single field", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -222,7 +222,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("nested WithFields merges fields", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -245,7 +245,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("WithFields override", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -268,7 +268,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("entry immutability", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -299,7 +299,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("entry WithField method", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -319,7 +319,7 @@ func TestWithFields(t *testing.T) {
 
 	t.Run("entry LogWith merges fields", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		logger, _ := New(cfg)
@@ -341,7 +341,7 @@ func TestWithFields(t *testing.T) {
 func TestSampling(t *testing.T) {
 	t.Run("disabled sampling logs everything", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		logger, _ := New(cfg)
 
@@ -357,7 +357,7 @@ func TestSampling(t *testing.T) {
 
 	t.Run("sampling with Initial only", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Sampling = &SamplingConfig{Enabled: true, Initial: 10, Thereafter: 0}
 		logger, _ := New(cfg)
@@ -375,7 +375,7 @@ func TestSampling(t *testing.T) {
 	t.Run("sampling with Thereafter", func(t *testing.T) {
 		var buf bytes.Buffer
 		// Initial=5, Thereafter=5 means: first 5 always, then 1 out of every 5
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Sampling = &SamplingConfig{Enabled: true, Initial: 5, Thereafter: 5}
 		logger, _ := New(cfg)
@@ -393,7 +393,7 @@ func TestSampling(t *testing.T) {
 
 	t.Run("SetSampling at runtime", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		logger, _ := New(cfg)
 
@@ -426,7 +426,7 @@ func TestSampling(t *testing.T) {
 	})
 
 	t.Run("GetSampling returns config", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Sampling = &SamplingConfig{Enabled: true, Initial: 10, Thereafter: 5, Tick: time.Minute}
 		logger, _ := New(cfg)
 
@@ -447,7 +447,7 @@ func TestSampling(t *testing.T) {
 
 	t.Run("SetSampling nil disables sampling", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Sampling = &SamplingConfig{Enabled: true, Initial: 1, Thereafter: 100}
 		logger, _ := New(cfg)
@@ -472,7 +472,7 @@ func TestHookContextOriginalFields(t *testing.T) {
 		var capturedOriginal []Field
 		var capturedFiltered []Field
 
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Security = DefaultSecurityConfig()
 		cfg.Hooks = NewHookRegistry()
@@ -579,6 +579,368 @@ func TestFilterPerformanceMetrics(t *testing.T) {
 
 		if stats.AverageLatency == 0 {
 			t.Error("Expected AverageLatency > 0")
+		}
+	})
+}
+
+// TestLevelResolver tests the dynamic level resolver functionality
+func TestLevelResolver(t *testing.T) {
+	t.Run("SetLevelResolver stores resolver", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelDebug
+		logger, _ := New(cfg)
+
+		resolver := func(ctx context.Context) LogLevel {
+			return LevelWarn
+		}
+		logger.SetLevelResolver(resolver)
+
+		if logger.GetLevelResolver() == nil {
+			t.Error("Expected resolver to be set")
+		}
+	})
+
+	t.Run("resolver affects logging without context", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelDebug
+		logger, _ := New(cfg)
+
+		// Set resolver that only allows Warn and above
+		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+			return LevelWarn
+		})
+
+		logger.Debug("debug message") // Should be filtered
+		logger.Info("info message")   // Should be filtered
+		logger.Warn("warn message")   // Should appear
+		logger.Error("error message") // Should appear
+
+		output := buf.String()
+		if strings.Contains(output, "debug message") {
+			t.Error("Debug should be filtered by resolver")
+		}
+		if strings.Contains(output, "info message") {
+			t.Error("Info should be filtered by resolver")
+		}
+		if !strings.Contains(output, "warn message") {
+			t.Error("Warn should appear")
+		}
+		if !strings.Contains(output, "error message") {
+			t.Error("Error should appear")
+		}
+	})
+
+	t.Run("resolver with context", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelDebug
+		logger, _ := New(cfg)
+
+		// Resolver that uses context to determine level
+		// When no context value is set, defaults to Info level
+		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+			if level, ok := ctx.Value("log_level").(LogLevel); ok {
+				return level
+			}
+			return LevelInfo // Default when no context value is set
+		})
+
+		// Without context - uses resolver's default (Info)
+		logger.Debug("no context debug") // Should be filtered (resolver returns Info)
+
+		// With context specifying Debug level
+		ctx := context.WithValue(context.Background(), "log_level", LevelDebug)
+		logger.DebugCtx(ctx, "with context debug") // Should appear
+
+		// With context specifying Warn level
+		ctxWarn := context.WithValue(context.Background(), "log_level", LevelWarn)
+		logger.InfoCtx(ctxWarn, "with context info") // Should be filtered
+
+		output := buf.String()
+		if strings.Contains(output, "no context debug") {
+			t.Error("Debug without context should be filtered")
+		}
+		if !strings.Contains(output, "with context debug") {
+			t.Error("Debug with context should appear")
+		}
+		if strings.Contains(output, "with context info") {
+			t.Error("Info with Warn context should be filtered")
+		}
+	})
+
+	t.Run("nil resolver uses static level", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		logger, _ := New(cfg)
+
+		// Set resolver then clear it
+		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+			return LevelWarn
+		})
+		logger.SetLevelResolver(nil)
+
+		logger.Debug("debug message") // Should be filtered (static level is Info)
+		logger.Info("info message")   // Should appear
+
+		output := buf.String()
+		if strings.Contains(output, "debug message") {
+			t.Error("Debug should be filtered by static level")
+		}
+		if !strings.Contains(output, "info message") {
+			t.Error("Info should appear")
+		}
+	})
+
+	t.Run("dynamic level changes at runtime", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelDebug
+		logger, _ := New(cfg)
+
+		highLoad := false
+
+		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+			if highLoad {
+				return LevelWarn
+			}
+			return LevelDebug
+		})
+
+		// Normal load - debug should work
+		logger.Debug("debug 1")
+		if !strings.Contains(buf.String(), "debug 1") {
+			t.Error("Debug should appear under normal load")
+		}
+
+		buf.Reset()
+
+		// Simulate high load
+		highLoad = true
+		logger.Debug("debug 2") // Should be filtered
+		logger.Warn("warn 1")   // Should appear
+
+		output := buf.String()
+		if strings.Contains(output, "debug 2") {
+			t.Error("Debug should be filtered under high load")
+		}
+		if !strings.Contains(output, "warn 1") {
+			t.Error("Warn should appear under high load")
+		}
+	})
+
+	t.Run("LogWithCtx uses resolver", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelDebug
+		cfg.Format = FormatJSON
+		logger, _ := New(cfg)
+
+		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+			return LevelWarn
+		})
+
+		ctx := context.Background()
+		logger.InfoWithCtx(ctx, "info with ctx", String("key", "value")) // Should be filtered
+		logger.WarnWithCtx(ctx, "warn with ctx", String("key", "value")) // Should appear
+
+		output := buf.String()
+		if strings.Contains(output, "info with ctx") {
+			t.Error("Info should be filtered by resolver")
+		}
+		if !strings.Contains(output, "warn with ctx") {
+			t.Error("Warn should appear")
+		}
+	})
+}
+
+// TestFieldValidation tests the field key validation functionality
+func TestFieldValidation(t *testing.T) {
+	t.Run("naming convention validators", func(t *testing.T) {
+		tests := []struct {
+			convention FieldNamingConvention
+			valid      []string
+			invalid    []string
+		}{
+			{
+				convention: NamingConventionSnakeCase,
+				valid:      []string{"user_id", "first_name", "created_at", "id", "url"},
+				invalid:    []string{"userId", "UserID", "user-id", "user__id", "_user_id", "user_id_"},
+			},
+			{
+				convention: NamingConventionCamelCase,
+				valid:      []string{"userId", "firstName", "createdAt", "id", "url"},
+				invalid:    []string{"user_id", "UserID", "user-id", "user__id"},
+			},
+			{
+				convention: NamingConventionPascalCase,
+				valid:      []string{"UserId", "FirstName", "CreatedAt", "ID", "URL"},
+				invalid:    []string{"user_id", "userId", "user-id", "user__id"},
+			},
+			{
+				convention: NamingConventionKebabCase,
+				valid:      []string{"user-id", "first-name", "created-at", "id", "url"},
+				invalid:    []string{"userId", "user_id", "UserID", "user--id", "-user-id", "user-id-"},
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.convention.String(), func(t *testing.T) {
+				config := &FieldValidationConfig{
+					Mode:                     FieldValidationWarn,
+					Convention:               tt.convention,
+					AllowCommonAbbreviations: true,
+				}
+
+				for _, key := range tt.valid {
+					err := config.ValidateFieldKey(key)
+					if err != nil {
+						t.Errorf("Expected %q to be valid for %s, got error: %v", key, tt.convention, err)
+					}
+				}
+
+				for _, key := range tt.invalid {
+					// Skip common abbreviations
+					if isCommonAbbreviation(key) {
+						continue
+					}
+					err := config.ValidateFieldKey(key)
+					if err == nil {
+						t.Errorf("Expected %q to be invalid for %s", key, tt.convention)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("empty key is always invalid", func(t *testing.T) {
+		config := &FieldValidationConfig{
+			Mode:       FieldValidationWarn,
+			Convention: NamingConventionSnakeCase,
+		}
+		err := config.ValidateFieldKey("")
+		if err == nil {
+			t.Error("Expected empty key to be invalid")
+		}
+	})
+
+	t.Run("none mode skips validation", func(t *testing.T) {
+		config := &FieldValidationConfig{
+			Mode:       FieldValidationNone,
+			Convention: NamingConventionSnakeCase,
+		}
+		// Any key should be valid when validation is disabled
+		for _, key := range []string{"userId", "user_id", "user-id", "UserID"} {
+			err := config.ValidateFieldKey(key)
+			if err != nil {
+				t.Errorf("Expected %q to be valid when validation is disabled", key)
+			}
+		}
+	})
+
+	t.Run("any convention accepts all keys", func(t *testing.T) {
+		config := &FieldValidationConfig{
+			Mode:       FieldValidationWarn,
+			Convention: NamingConventionAny,
+		}
+		for _, key := range []string{"userId", "user_id", "user-id", "UserID"} {
+			err := config.ValidateFieldKey(key)
+			if err != nil {
+				t.Errorf("Expected %q to be valid with any convention", key)
+			}
+		}
+	})
+
+	t.Run("common abbreviations allowed", func(t *testing.T) {
+		config := &FieldValidationConfig{
+			Mode:                     FieldValidationStrict,
+			Convention:               NamingConventionSnakeCase,
+			AllowCommonAbbreviations: true,
+		}
+		for _, key := range []string{"id", "ID", "url", "URL", "api", "API", "user_id", "request_url"} {
+			err := config.ValidateFieldKey(key)
+			if err != nil {
+				t.Errorf("Expected common abbreviation %q to be valid", key)
+			}
+		}
+	})
+
+	t.Run("validation with logger", func(t *testing.T) {
+		// Capture stderr
+		oldStderr := os.Stderr
+		r, w, _ := os.Pipe()
+		os.Stderr = w
+
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Format = FormatJSON
+		cfg.FieldValidation = &FieldValidationConfig{
+			Mode:                     FieldValidationWarn,
+			Convention:               NamingConventionSnakeCase,
+			AllowCommonAbbreviations: true,
+		}
+		logger, _ := New(cfg)
+
+		// Valid key - should not produce warning
+		logger.InfoWith("test", String("user_id", "123"))
+
+		// Invalid key - should produce warning on stderr
+		logger.InfoWith("test", String("userId", "123"))
+
+		w.Close()
+		os.Stderr = oldStderr
+
+		var stderrBuf bytes.Buffer
+		io.Copy(&stderrBuf, r)
+		stderrOutput := stderrBuf.String()
+
+		// Should have warning for invalid key
+		if !strings.Contains(stderrOutput, "userId") {
+			t.Errorf("Expected warning for 'userId' in stderr, got: %s", stderrOutput)
+		}
+
+		// Log output should still contain both fields
+		output := buf.String()
+		if !strings.Contains(output, "user_id") {
+			t.Error("Expected user_id in output")
+		}
+		if !strings.Contains(output, "userId") {
+			t.Error("Expected userId in output (validation doesn't block logging)")
+		}
+	})
+
+	t.Run("SetFieldValidation at runtime", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		logger, _ := New(cfg)
+
+		// No validation initially
+		logger.InfoWith("test", String("userId", "123"))
+
+		// Enable validation
+		logger.SetFieldValidation(&FieldValidationConfig{
+			Mode:       FieldValidationWarn,
+			Convention: NamingConventionSnakeCase,
+		})
+
+		if logger.GetFieldValidation() == nil {
+			t.Error("Expected field validation to be set")
+		}
+
+		// Clear validation
+		logger.SetFieldValidation(nil)
+		if logger.GetFieldValidation() != nil {
+			t.Error("Expected field validation to be nil after clearing")
 		}
 	})
 }

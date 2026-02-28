@@ -17,7 +17,7 @@ import (
 
 func TestConfigChainMethods(t *testing.T) {
 	t.Run("DisableFiltering", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
 		cfg.Security.SensitiveFilter = nil
 		if cfg.Security.SensitiveFilter != nil {
@@ -26,7 +26,7 @@ func TestConfigChainMethods(t *testing.T) {
 	})
 
 	t.Run("EnableBasicFiltering", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
 		if cfg.Security.SensitiveFilter == nil {
 			t.Error("EnableBasicFiltering() should add filter")
@@ -34,7 +34,7 @@ func TestConfigChainMethods(t *testing.T) {
 	})
 
 	t.Run("EnableFullFiltering", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Security = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
 		if cfg.Security.SensitiveFilter == nil {
 			t.Error("EnableFullFiltering() should add filter")
@@ -42,7 +42,7 @@ func TestConfigChainMethods(t *testing.T) {
 	})
 
 	t.Run("ChainMultiple", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
 
 		if cfg.Security.SensitiveFilter == nil {
@@ -58,7 +58,7 @@ func TestConfigChainMethods(t *testing.T) {
 func TestLoggerPrintMethods(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelDebug
 
@@ -81,7 +81,7 @@ func TestLoggerPrintMethods(t *testing.T) {
 func TestLoggerPrintlnMethod(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelDebug
 
@@ -104,7 +104,7 @@ func TestLoggerPrintlnMethod(t *testing.T) {
 func TestLoggerPrintfMethod(t *testing.T) {
 	var buf bytes.Buffer
 
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelDebug
 
@@ -294,7 +294,7 @@ func TestSecurityFilterEnableDisable(t *testing.T) {
 
 func TestComplexTypeFormatting(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	logger, _ := New(cfg)
@@ -356,7 +356,7 @@ func TestComplexTypeFormatting(t *testing.T) {
 
 func TestStructuredLoggingComplexTypes(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	logger, _ := New(cfg)
@@ -522,7 +522,7 @@ func TestFileCompressionTrigger(t *testing.T) {
 
 func TestJSONOptionsCustomization(t *testing.T) {
 	var buf bytes.Buffer
-	config := NewConfig()
+	config := DefaultConfig()
 	config.Level = LevelInfo
 	config.Format = FormatJSON
 	config.Output = &buf
@@ -569,7 +569,7 @@ func TestJSONOptionsCustomization(t *testing.T) {
 
 func TestDynamicCallerDetection(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	cfg.DynamicCaller = true
@@ -586,7 +586,7 @@ func TestDynamicCallerDetection(t *testing.T) {
 
 func TestFullPathCaller(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	cfg.DynamicCaller = true
@@ -665,8 +665,8 @@ func TestLevelHierarchy(t *testing.T) {
 // SECURITY CONFIG VALIDATION TESTS
 // ============================================================================
 
-func TestSecureSecurityConfig(t *testing.T) {
-	config := SecureSecurityConfig()
+func TestSecureConfig(t *testing.T) {
+	config := SecureConfig()
 
 	if config == nil {
 		t.Fatal("SecureSecurityConfig should not return nil")
@@ -691,7 +691,7 @@ func TestSecureSecurityConfig(t *testing.T) {
 
 func TestEmptyStructuredFields(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	logger, _ := New(cfg)
@@ -705,7 +705,7 @@ func TestEmptyStructuredFields(t *testing.T) {
 
 func TestVeryLongFieldName(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	logger, _ := New(cfg)
@@ -720,7 +720,7 @@ func TestVeryLongFieldName(t *testing.T) {
 
 func TestSpecialCharactersInMessage(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	logger, _ := New(cfg)
@@ -747,7 +747,7 @@ func TestFatalWithLoggingIntegration(t *testing.T) {
 	var buf bytes.Buffer
 	exited := false
 
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	cfg.FatalHandler = func() { exited = true }

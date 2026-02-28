@@ -35,6 +35,7 @@ const (
 	ErrCodePatternFailed      = "PATTERN_FAILED"
 	ErrCodeConfigValidation   = "CONFIG_VALIDATION"
 	ErrCodeWriterAdd          = "WRITER_ADD"
+	ErrCodeMultipleConfigs    = "MULTIPLE_CONFIGS"
 )
 
 // LoggerError represents a structured error with additional context.
@@ -99,6 +100,9 @@ var errorCodeToSentinel = map[string]error{
 	ErrCodePatternTooLong:     ErrPatternTooLong,
 	ErrCodeReDoSPattern:       ErrReDoSPattern,
 	ErrCodePatternFailed:      ErrPatternFailed,
+	ErrCodeConfigValidation:   ErrConfigValidation,
+	ErrCodeWriterAdd:          ErrWriterAdd,
+	ErrCodeMultipleConfigs:    ErrMultipleConfigs,
 }
 
 // Is enables matching against sentinel errors using errors.Is().
@@ -150,6 +154,12 @@ func (e *LoggerError) WithContext(key string, value any) *LoggerError {
 	}
 }
 
+// WithField adds a field to the LoggerError context.
+// This is an alias for WithContext for naming consistency with Logger.
+func (e *LoggerError) WithField(key string, value any) *LoggerError {
+	return e.WithContext(key, value)
+}
+
 // Sentinel errors for backward compatibility.
 // These can be used with errors.Is() for simple error matching.
 var (
@@ -177,6 +187,9 @@ var (
 	ErrPatternTooLong     = errors.New("pattern length exceeds maximum")
 	ErrReDoSPattern       = errors.New("pattern contains dangerous nested quantifiers that may cause ReDoS")
 	ErrPatternFailed      = errors.New("failed to add pattern")
+	ErrConfigValidation   = errors.New("configuration validation failed")
+	ErrWriterAdd          = errors.New("failed to add writer")
+	ErrMultipleConfigs    = errors.New("multiple configs provided, expected 0 or 1")
 )
 
 // WriterError represents an error from a single writer in a MultiWriter.
@@ -189,7 +202,7 @@ type WriterError struct {
 // Error implements the error interface.
 func (e *WriterError) Error() string {
 	if e == nil {
-		return ""
+		return "<nil WriterError>"
 	}
 	if e.Err != nil {
 		return fmt.Sprintf("writer[%d]: %v", e.Index, e.Err)
@@ -270,4 +283,45 @@ func (e *MultiWriterError) AddError(index int, writer io.Writer, err error) {
 		Writer: writer,
 		Err:    err,
 	})
+}
+
+// ============================================================================
+// Generic Must Helper
+// ============================================================================
+
+// MustVal is a generic helper that panics if err is not nil, otherwise returns val.
+// This is useful for simplifying initialization code where errors should be fatal.
+// For creating loggers, prefer using dd.Must() or dd.MustToFile() instead.
+//
+// Example:
+//
+//	// Instead of:
+//	writer, err := dd.NewBufferedWriter(file, 4096)
+//	if err != nil {
+//	    panic(err)
+//	}
+//
+//	// Use:
+//	writer := dd.MustVal(dd.NewBufferedWriter(file, 4096))
+//
+//	// Also works with other return-value-and-error functions:
+//	file := dd.MustVal(os.Open("file.txt"))
+func MustVal[T any](val T, err error) T {
+	if err != nil {
+		panic("dd: unexpected error: " + err.Error())
+	}
+	return val
+}
+
+// Must2 is a generic helper for functions returning two values and an error.
+// Panics if err is not nil, otherwise returns both values.
+//
+// Example:
+//
+//	file, writer := dd.Must2(dd.SomeFunctionReturningTwoValues())
+func Must2[T1 any, T2 any](val1 T1, val2 T2, err error) (T1, T2) {
+	if err != nil {
+		panic("dd: unexpected error: " + err.Error())
+	}
+	return val1, val2
 }

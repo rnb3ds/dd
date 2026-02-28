@@ -22,6 +22,7 @@ type SensitiveDataFilter struct {
 	maxInputLength int
 	timeout        time.Duration
 	enabled        atomic.Bool
+	closed         atomic.Bool // prevents new goroutines when true
 	// semaphore limits concurrent regex filtering goroutines to prevent resource exhaustion
 	semaphore chan struct{}
 	// activeGoroutines tracks the number of currently running filter goroutines
@@ -36,38 +37,37 @@ type SensitiveDataFilter struct {
 	totalLatencyNs  atomic.Int64 // Total latency in nanoseconds (for average calculation)
 }
 
-func NewSensitiveDataFilter() *SensitiveDataFilter {
-	// Ensure patterns are initialized (only happens once)
-	internal.InitPatterns()
-
+// newSensitiveDataFilterWithPatterns is the internal constructor for SensitiveDataFilter.
+// It creates a filter with the specified patterns and timeout.
+func newSensitiveDataFilterWithPatterns(patterns []*regexp.Regexp, timeout time.Duration) *SensitiveDataFilter {
 	filter := &SensitiveDataFilter{
 		maxInputLength: MaxInputLength,
-		timeout:        DefaultFilterTimeout,
+		timeout:        timeout,
 		semaphore:      make(chan struct{}, MaxConcurrentFilters),
 	}
 	filter.enabled.Store(true)
 
-	// Create and store patterns slice atomically
-	patterns := make([]*regexp.Regexp, len(internal.CompiledFullPatterns))
-	copy(patterns, internal.CompiledFullPatterns)
-	filter.patternsPtr.Store(&patterns)
-	filter.patternCount.Store(int32(len(patterns)))
+	if patterns != nil {
+		copiedPatterns := make([]*regexp.Regexp, len(patterns))
+		copy(copiedPatterns, patterns)
+		filter.patternsPtr.Store(&copiedPatterns)
+		filter.patternCount.Store(int32(len(copiedPatterns)))
+	} else {
+		emptyPatterns := make([]*regexp.Regexp, 0)
+		filter.patternsPtr.Store(&emptyPatterns)
+		filter.patternCount.Store(0)
+	}
 
 	return filter
 }
 
+func NewSensitiveDataFilter() *SensitiveDataFilter {
+	internal.InitPatterns()
+	return newSensitiveDataFilterWithPatterns(internal.CompiledFullPatterns, DefaultFilterTimeout)
+}
+
 func NewEmptySensitiveDataFilter() *SensitiveDataFilter {
-	filter := &SensitiveDataFilter{
-		maxInputLength: MaxInputLength,
-		timeout:        EmptyFilterTimeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
-	}
-	filter.enabled.Store(true)
-	// Initialize with empty patterns slice
-	emptyPatterns := make([]*regexp.Regexp, 0)
-	filter.patternsPtr.Store(&emptyPatterns)
-	filter.patternCount.Store(0)
-	return filter
+	return newSensitiveDataFilterWithPatterns(nil, EmptyFilterTimeout)
 }
 
 func NewCustomSensitiveDataFilter(patterns ...string) (*SensitiveDataFilter, error) {
@@ -99,7 +99,6 @@ func (f *SensitiveDataFilter) addPattern(pattern string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// Load current patterns, create new slice with added pattern, store atomically
 	currentPatterns := f.patternsPtr.Load()
 	newPatterns := make([]*regexp.Regexp, len(*currentPatterns)+1)
 	copy(newPatterns, *currentPatterns)
@@ -235,8 +234,21 @@ func (f *SensitiveDataFilter) GetFilterStats() FilterStats {
 }
 
 // WaitForGoroutines waits for all active filter goroutines to complete or until
-// the timeout is reached. This is useful for graceful shutdown to ensure all
-// background filtering operations have finished.
+// the timeout is reached.
+//
+// IMPORTANT: Call this method before program exit to prevent goroutine leaks.
+// In high-concurrency scenarios with large inputs, filter operations may spawn
+// background goroutines for regex processing. Failing to wait for these goroutines
+// can result in resource leaks and incomplete log filtering.
+//
+// Recommended usage in shutdown sequence:
+//
+//	// 1. Stop accepting new log messages
+//	// 2. Wait for filter goroutines to complete
+//	logger.WaitForFilterGoroutines(5 * time.Second)
+//	// 3. Close the logger
+//	logger.Close()
+//
 // Returns true if all goroutines completed, false if timeout was reached.
 func (f *SensitiveDataFilter) WaitForGoroutines(timeout time.Duration) bool {
 	if f == nil {
@@ -251,6 +263,23 @@ func (f *SensitiveDataFilter) WaitForGoroutines(timeout time.Duration) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return f.activeGoroutines.Load() == 0
+}
+
+// Close marks the filter as closed and waits for active goroutines to complete.
+// After calling Close, the Filter method will return input unchanged without
+// spawning new goroutines. This prevents goroutine leaks during shutdown.
+//
+// IMPORTANT: Always call Close (or WaitForGoroutines) before program exit to
+// ensure all background goroutines complete gracefully.
+//
+// Returns true if all goroutines completed within the timeout, false otherwise.
+func (f *SensitiveDataFilter) Close() bool {
+	if f == nil {
+		return true
+	}
+
+	f.closed.Store(true)
+	return f.WaitForGoroutines(DefaultFilterTimeout * 2)
 }
 
 // Clone creates a copy of the SensitiveDataFilter.
@@ -288,11 +317,10 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 }
 
 func (f *SensitiveDataFilter) Filter(input string) string {
-	if f == nil || !f.enabled.Load() {
+	if f == nil || !f.enabled.Load() || f.closed.Load() {
 		return input
 	}
 
-	startTime := time.Now()
 	inputLen := len(input)
 	if inputLen == 0 {
 		return input
@@ -303,6 +331,8 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	if patternsPtr == nil || len(*patternsPtr) == 0 {
 		return input
 	}
+
+	startTime := time.Now()
 
 	patterns := *patternsPtr
 	timeout := f.timeout
@@ -375,7 +405,7 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 //
 // The function uses a tiered approach based on input size:
 // - Small inputs (< FastPathThreshold): Direct synchronous processing
-// - Medium inputs (< 100*FastPathThreshold): Synchronous chunked processing with context
+// - Medium inputs (< FilterMediumInputThreshold): Synchronous chunked processing with context
 // - Large inputs: Async processing with timeout and semaphore-based concurrency limiting
 //
 // For large inputs, a goroutine is spawned for regex processing. The context is passed
@@ -390,7 +420,7 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	}
 
 	// For medium inputs, use synchronous chunked processing (no goroutine overhead)
-	if inputLen < 100*FastPathThreshold {
+	if inputLen < FilterMediumInputThreshold {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		result := f.filterInChunksWithContext(ctx, input, pattern)
@@ -454,22 +484,20 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 
 	// For inputs up to a reasonable size, process directly without chunking
 	// This avoids the complexity of reassembling filtered chunks with different lengths
-	const directProcessThreshold = 32 * 1024 // 32KB
-	if inputLen <= directProcessThreshold {
+	if inputLen <= FilterDirectProcessThreshold {
 		return f.replaceWithPattern(input, pattern)
 	}
 
 	// For very large inputs, use chunked processing with overlap for boundary detection
-	const chunkSize = 4096
 	overlap := ChunkOverlapSize
 
 	var result strings.Builder
 	result.Grow(inputLen)
 
 	// Calculate effective step (chunk size minus overlap)
-	step := chunkSize - overlap
+	step := FilterChunkSize - overlap
 	if step <= 0 {
-		step = chunkSize / 2
+		step = FilterChunkSize / 2
 		if step == 0 {
 			step = 1
 		}
@@ -489,7 +517,7 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 		}
 
 		chunkStart := pos
-		chunkEnd := min(pos+chunkSize, inputLen)
+		chunkEnd := min(pos+FilterChunkSize, inputLen)
 		chunk := input[chunkStart:chunkEnd]
 
 		// Filter the current chunk
@@ -707,24 +735,16 @@ func (sc *SecurityConfig) Clone() *SecurityConfig {
 	return clone
 }
 
+// NewFullSensitiveDataFilter creates a filter with all built-in sensitive data patterns.
+// This is an alias for NewSensitiveDataFilter() with a clearer name indicating
+// that it includes all available patterns.
+func NewFullSensitiveDataFilter() *SensitiveDataFilter {
+	return NewSensitiveDataFilter()
+}
+
 func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
-	// Ensure patterns are initialized (only happens once)
 	internal.InitPatterns()
-
-	filter := &SensitiveDataFilter{
-		maxInputLength: MaxInputLength,
-		timeout:        DefaultFilterTimeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
-	}
-	filter.enabled.Store(true)
-
-	// Create and store patterns slice atomically
-	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
-	copy(patterns, internal.CompiledBasicPatterns)
-	filter.patternsPtr.Store(&patterns)
-	filter.patternCount.Store(int32(len(patterns)))
-
-	return filter
+	return newSensitiveDataFilterWithPatterns(internal.CompiledBasicPatterns, DefaultFilterTimeout)
 }
 
 // DefaultSecurityConfig returns a security config with basic sensitive data filtering enabled.
@@ -749,13 +769,11 @@ func DefaultSecurityConfigDisabled() *SecurityConfig {
 	}
 }
 
-// SecureConfig returns a security config with full sensitive data filtering enabled.
+// DefaultSecureConfig returns a security config with full sensitive data filtering enabled.
 // This includes all patterns from basic filtering plus additional patterns for
 // emails, IP addresses, JWT tokens, and database connection strings.
 // Use this for maximum security in production environments.
-//
-// This is the recommended function with consistent naming (matching DefaultSecurityConfig).
-func SecureConfig() *SecurityConfig {
+func DefaultSecureConfig() *SecurityConfig {
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
 		MaxWriters:      MaxWriterCount,
@@ -763,9 +781,10 @@ func SecureConfig() *SecurityConfig {
 	}
 }
 
-// SecureSecurityConfig returns a security config with full sensitive data filtering enabled.
+// SecureConfig returns a security config with full sensitive data filtering enabled.
 //
-// Deprecated: Use SecureConfig() for consistent naming with other configuration functions.
-func SecureSecurityConfig() *SecurityConfig {
-	return SecureConfig()
+// Deprecated: Use DefaultSecureConfig() instead. This function is kept for backward
+// compatibility and will be removed in a future major version.
+func SecureConfig() *SecurityConfig {
+	return DefaultSecureConfig()
 }

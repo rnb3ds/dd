@@ -19,7 +19,7 @@ func ExampleLogProvider() {
 
 // Example_typeSafeContext demonstrates type-safe context key usage.
 func Example_typeSafeContext() {
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelDebug
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
@@ -41,7 +41,7 @@ func Example_typeSafeContext() {
 // Example_builderPattern demonstrates the recommended Config API.
 func Example_builderPattern() {
 	// Create logger using Config struct
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelDebug
 	cfg.Format = dd.FormatJSON
 	logger, _ := dd.New(cfg)
@@ -65,7 +65,7 @@ func Example_builderPattern() {
 
 // Example_logSampling demonstrates log sampling for high-throughput scenarios.
 func Example_logSampling() {
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelInfo
 	cfg.Sampling = &dd.SamplingConfig{
 		Enabled:    true,
@@ -84,7 +84,7 @@ func Example_logSampling() {
 
 // Example_hooks demonstrates using lifecycle hooks.
 func Example_hooks() {
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelDebug
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
@@ -106,7 +106,7 @@ func Example_hooks() {
 
 // Example_contextExtractors demonstrates custom context extractors.
 func Example_contextExtractors() {
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelDebug
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
@@ -128,7 +128,7 @@ func Example_contextExtractors() {
 
 // Example_fieldChaining demonstrates field chaining for contextual logging.
 func Example_fieldChaining() {
-	cfg := dd.NewConfig()
+	cfg := dd.DefaultConfig()
 	cfg.Level = dd.LevelInfo
 	logger, _ := dd.New(cfg)
 	defer logger.Close()

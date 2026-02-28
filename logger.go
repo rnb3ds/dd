@@ -41,6 +41,23 @@ type FatalHandler func()
 
 type WriteErrorHandler func(writer io.Writer, err error)
 
+// LevelResolver is a function that determines the effective log level at runtime.
+// This allows dynamic log level adjustment based on runtime conditions such as
+// system load, error rate, or time of day. The function is called for each log
+// entry, so it should be efficient.
+//
+// Example:
+//
+//	// Adjust level based on system load
+//	resolver := func(ctx context.Context) LogLevel {
+//	    if getCPULoad() > 0.8 {
+//	        return LevelWarn  // Only log warnings and above under high load
+//	    }
+//	    return LevelDebug
+//	}
+//	logger.SetLevelResolver(resolver)
+type LevelResolver func(ctx context.Context) LogLevel
+
 // Flusher is an interface for writers that can flush buffered data.
 // Writers implementing this interface will have their Flush method called
 // during Logger.Flush() to ensure all buffered data is written.
@@ -57,6 +74,15 @@ type Logger struct {
 	writeErrorHandler atomic.Value // stores WriteErrorHandler
 	formatter         *internal.MessageFormatter
 
+	// levelResolver stores an optional dynamic level resolver function.
+	// When set, it is called to determine the effective log level for each entry.
+	// If nil or returns LevelDebug, the static level is used.
+	levelResolver atomic.Pointer[LevelResolver]
+
+	// fieldValidation stores the field validation configuration.
+	// When set, field keys are validated against the configured naming convention.
+	fieldValidation atomic.Pointer[FieldValidationConfig]
+
 	// writersPtr stores an immutable slice of writers using atomic pointer.
 	// This eliminates slice copying during write operations.
 	// The slice is replaced atomically when writers are added/removed.
@@ -70,6 +96,8 @@ type Logger struct {
 
 	// hooks stores the HookRegistry for lifecycle hooks.
 	hooks atomic.Value // stores *HookRegistry
+	// hooksMu protects the Clone-Modify-Store sequence in AddHook to prevent race conditions
+	hooksMu sync.Mutex
 
 	// sampling stores the sampling configuration and state.
 	sampling atomic.Value // stores *samplingState
@@ -112,6 +140,10 @@ var (
 //	cfg.Format = dd.FormatJSON
 //	logger, _ := dd.New(cfg)
 func New(cfgs ...*Config) (*Logger, error) {
+	// Return error if multiple configs provided - this is likely a developer mistake
+	if len(cfgs) > 1 {
+		return nil, fmt.Errorf("%w: %d configs provided, expected 0 or 1", ErrMultipleConfigs, len(cfgs))
+	}
 	if len(cfgs) == 0 {
 		return defaultConfig().build()
 	}
@@ -178,6 +210,11 @@ func newFromInternalConfig(config *internalConfig) (*Logger, error) {
 	l.level.Store(int32(config.level))
 	l.securityConfig.Store(config.securityConfig)
 
+	// Initialize field validation
+	if config.fieldValidation != nil && config.fieldValidation.Mode != FieldValidationNone {
+		l.fieldValidation.Store(config.fieldValidation)
+	}
+
 	// Initialize context extractors
 	if config.contextExtractors != nil && len(config.contextExtractors) > 0 {
 		registry := NewContextExtractorRegistry()
@@ -220,6 +257,77 @@ func (l *Logger) SetLevel(level LogLevel) error {
 		return ErrInvalidLevel
 	}
 	l.level.Store(int32(level))
+	return nil
+}
+
+// IsLevelEnabled checks if logging is enabled for the given level (thread-safe).
+// Returns true if the logger's level is at or below the specified level.
+//
+// Example:
+//
+//	if logger.IsLevelEnabled(dd.LevelDebug) {
+//	    // Expensive debug computation only when debug is enabled
+//	    logger.DebugWith("Details", dd.Any("data", computeExpensiveDebugInfo()))
+//	}
+func (l *Logger) IsLevelEnabled(level LogLevel) bool {
+	currentLevel := LogLevel(l.level.Load())
+	return level >= currentLevel
+}
+
+// IsDebugEnabled returns true if debug level logging is enabled.
+func (l *Logger) IsDebugEnabled() bool {
+	return l.IsLevelEnabled(LevelDebug)
+}
+
+// IsInfoEnabled returns true if info level logging is enabled.
+func (l *Logger) IsInfoEnabled() bool {
+	return l.IsLevelEnabled(LevelInfo)
+}
+
+// IsWarnEnabled returns true if warn level logging is enabled.
+func (l *Logger) IsWarnEnabled() bool {
+	return l.IsLevelEnabled(LevelWarn)
+}
+
+// IsErrorEnabled returns true if error level logging is enabled.
+func (l *Logger) IsErrorEnabled() bool {
+	return l.IsLevelEnabled(LevelError)
+}
+
+// IsFatalEnabled returns true if fatal level logging is enabled.
+func (l *Logger) IsFatalEnabled() bool {
+	return l.IsLevelEnabled(LevelFatal)
+}
+
+// SetLevelResolver sets a dynamic level resolver function (thread-safe).
+// The resolver is called for each log entry to determine the effective log level.
+// This allows runtime adjustment of log levels based on conditions like system load,
+// error rates, or request context. Set to nil to disable dynamic resolution.
+//
+// Example:
+//
+//	// Adaptive logging based on error rate
+//	var errorCount atomic.Int64
+//	logger.SetLevelResolver(func(ctx context.Context) LogLevel {
+//	    if errorCount.Load() > 100 {
+//	        return LevelWarn  // Reduce logging under high error rate
+//	    }
+//	    return LevelDebug
+//	})
+func (l *Logger) SetLevelResolver(resolver LevelResolver) {
+	if resolver == nil {
+		l.levelResolver.Store(nil)
+	} else {
+		l.levelResolver.Store(&resolver)
+	}
+}
+
+// GetLevelResolver returns the current level resolver function.
+// Returns nil if no resolver is set.
+func (l *Logger) GetLevelResolver() LevelResolver {
+	if ptr := l.levelResolver.Load(); ptr != nil {
+		return *ptr
+	}
 	return nil
 }
 
@@ -355,6 +463,9 @@ func (l *Logger) AddHook(event HookEvent, hook Hook) error {
 		return ErrLoggerClosed
 	}
 
+	l.hooksMu.Lock()
+	defer l.hooksMu.Unlock()
+
 	// Load existing registry or create new one
 	var registry *HookRegistry
 	if v := l.hooks.Load(); v != nil {
@@ -383,6 +494,9 @@ func (l *Logger) SetHooks(registry *HookRegistry) error {
 	if l.closed.Load() {
 		return ErrLoggerClosed
 	}
+
+	l.hooksMu.Lock()
+	defer l.hooksMu.Unlock()
 
 	if registry == nil {
 		l.hooks.Store(nil)
@@ -531,14 +645,54 @@ func (l *Logger) Close() error {
 
 // shouldLog checks if a message should be logged based on level and logger state
 func (l *Logger) shouldLog(level LogLevel) bool {
-	currentLevel := LogLevel(l.level.Load())
-	if level < currentLevel || level > LevelFatal {
-		return false
+	// Check dynamic level resolver first
+	if resolver := l.getLevelResolver(); resolver != nil {
+		// Use context.Background() as default to prevent nil pointer panics
+		effectiveLevel := resolver(context.Background())
+		if level < effectiveLevel || level > LevelFatal {
+			return false
+		}
+	} else {
+		// Use static level
+		currentLevel := LogLevel(l.level.Load())
+		if level < currentLevel || level > LevelFatal {
+			return false
+		}
 	}
 	if l.closed.Load() {
 		return false
 	}
 	return l.shouldSample()
+}
+
+// shouldLogCtx checks if a log entry should be logged with context support.
+// If a level resolver is set, it uses the context for dynamic level determination.
+func (l *Logger) shouldLogCtx(ctx context.Context, level LogLevel) bool {
+	// Check dynamic level resolver first
+	if resolver := l.getLevelResolver(); resolver != nil {
+		effectiveLevel := resolver(ctx)
+		if level < effectiveLevel || level > LevelFatal {
+			return false
+		}
+	} else {
+		// Use static level
+		currentLevel := LogLevel(l.level.Load())
+		if level < currentLevel || level > LevelFatal {
+			return false
+		}
+	}
+	if l.closed.Load() {
+		return false
+	}
+	return l.shouldSample()
+}
+
+// getLevelResolver safely returns the level resolver function.
+func (l *Logger) getLevelResolver() LevelResolver {
+	if ptr := l.levelResolver.Load(); ptr != nil {
+		return *ptr
+	}
+	return nil
 }
 
 // shouldSample determines if a log message should be recorded based on sampling configuration.
@@ -723,9 +877,12 @@ func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
 		return
 	}
 
-	// Save original fields before processing
-	originalFields := make([]Field, len(fields))
-	copy(originalFields, fields)
+	// Only copy original fields if hooks are registered (they may need them)
+	var originalFields []Field
+	if l.hooks.Load() != nil && len(fields) > 0 {
+		originalFields = make([]Field, len(fields))
+		copy(originalFields, fields)
+	}
 
 	msg = l.applyMessageSecurity(msg)
 	processedFields := l.processFields(fields)
@@ -755,29 +912,10 @@ func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
 	}
 }
 
-// toInternalFields converts dd.Field slice to internal.Field slice
-// Uses stack allocation for small field counts (<=8) to avoid heap allocation
+// toInternalFields converts dd.Field slice to internal.Field slice.
+// Since Field is a type alias for internal.Field, we can use direct slice conversion.
 func toInternalFields(fields []Field) []internal.Field {
-	if len(fields) == 0 {
-		return nil
-	}
-
-	// For small field counts (90% of cases), use stack-allocated array
-	// This avoids heap allocation for typical logging scenarios
-	if len(fields) <= 8 {
-		var result [8]internal.Field
-		for i, f := range fields {
-			result[i] = internal.Field{Key: f.Key, Value: f.Value}
-		}
-		return result[:len(fields)]
-	}
-
-	// For larger counts, allocate on heap
-	result := make([]internal.Field, len(fields))
-	for i, f := range fields {
-		result[i] = internal.Field{Key: f.Key, Value: f.Value}
-	}
-	return result
+	return fields
 }
 
 // processFields processes and filters structured fields
@@ -785,6 +923,9 @@ func (l *Logger) processFields(fields []Field) []Field {
 	if len(fields) == 0 {
 		return fields
 	}
+
+	// Validate field keys if validation is enabled
+	l.validateFields(fields)
 
 	secConfig := l.getSecurityConfig()
 	if secConfig == nil || secConfig.SensitiveFilter == nil || !secConfig.SensitiveFilter.IsEnabled() {
@@ -804,6 +945,32 @@ func (l *Logger) processFields(fields []Field) []Field {
 		if !hasSensitiveKey {
 			return fields // No patterns and no sensitive keys - return original
 		}
+	}
+
+	// First pass: check if any field actually needs filtering
+	// This avoids allocation when all values are non-sensitive
+	needsFiltering := false
+	for _, field := range fields {
+		// Check if key is sensitive
+		if internal.IsSensitiveKey(field.Key) {
+			needsFiltering = true
+			break
+		}
+		// Check if value is a string that might contain sensitive data
+		if _, ok := field.Value.(string); ok && secConfig.SensitiveFilter.PatternCount() > 0 {
+			needsFiltering = true
+			break
+		}
+		// Check for complex types that might need recursive filtering
+		if internal.IsComplexValue(field.Value) {
+			needsFiltering = true
+			break
+		}
+	}
+
+	// If no field needs filtering, return original slice
+	if !needsFiltering {
+		return fields
 	}
 
 	// Only allocate when actually filtering
@@ -846,6 +1013,58 @@ func (l *Logger) applySizeLimit(message string) string {
 	return message
 }
 
+// validateFields validates field keys against the configured naming convention.
+// In warn mode, validation errors are logged as warnings.
+// In strict mode, validation errors are logged as errors.
+func (l *Logger) validateFields(fields []Field) {
+	fv := l.getFieldValidation()
+	if fv == nil || fv.Mode == FieldValidationNone {
+		return
+	}
+
+	for _, field := range fields {
+		if err := fv.ValidateFieldKey(field.Key); err != nil {
+			switch fv.Mode {
+			case FieldValidationWarn:
+				// Log warning without affecting the log output
+				fmt.Fprintf(os.Stderr, "dd: field validation warning: %v\n", err)
+			case FieldValidationStrict:
+				// Log error without affecting the log output
+				fmt.Fprintf(os.Stderr, "dd: field validation error: %v\n", err)
+			}
+		}
+	}
+}
+
+// getFieldValidation safely returns the field validation configuration.
+func (l *Logger) getFieldValidation() *FieldValidationConfig {
+	if ptr := l.fieldValidation.Load(); ptr != nil {
+		return ptr
+	}
+	return nil
+}
+
+// SetFieldValidation sets the field validation configuration (thread-safe).
+// This allows runtime adjustment of field key validation.
+//
+// Example:
+//
+//	// Enable strict snake_case validation
+//	logger.SetFieldValidation(dd.StrictSnakeCaseConfig())
+func (l *Logger) SetFieldValidation(config *FieldValidationConfig) {
+	if config == nil || config.Mode == FieldValidationNone {
+		l.fieldValidation.Store(nil)
+	} else {
+		l.fieldValidation.Store(config)
+	}
+}
+
+// GetFieldValidation returns the current field validation configuration.
+// Returns nil if no validation is configured.
+func (l *Logger) GetFieldValidation() *FieldValidationConfig {
+	return l.getFieldValidation()
+}
+
 // handleFatal handles fatal log messages with timeout protection.
 // If Close() takes longer than DefaultFatalFlushTimeout, a warning is printed
 // and the program exits anyway to prevent indefinite hanging.
@@ -881,8 +1100,12 @@ func (l *Logger) writeMessage(message string) {
 	defer func() {
 		if cap(buf) <= MaxBufferSize {
 			*bufPtr = buf[:0]
-			messagePool.Put(bufPtr)
+		} else {
+			// Reset to default capacity to avoid holding large buffers in the pool
+			// This prevents memory leaks while still returning the pointer to the pool
+			*bufPtr = make([]byte, 0, DefaultBufferSize)
 		}
+		messagePool.Put(bufPtr)
 	}()
 
 	needed := len(message) + 1
@@ -979,15 +1202,32 @@ func (l *Logger) extractContextFields(ctx context.Context) []Field {
 
 // LogCtx logs a message at the specified level with context support.
 func (l *Logger) LogCtx(ctx context.Context, level LogLevel, args ...any) {
-	if !l.shouldLog(level) {
+	if !l.shouldLogCtx(ctx, level) {
 		return
 	}
 
 	msg := l.formatter.FormatArgsToString(args...)
 	msg = l.applyMessageSecurity(msg)
 	fields := l.extractContextFields(ctx)
+
+	// Trigger BeforeLog hook
+	hookCtx := &HookContext{
+		Event:     HookBeforeLog,
+		Level:     level,
+		Message:   msg,
+		Fields:    fields,
+		Timestamp: time.Now(),
+	}
+	if err := l.triggerHooks(ctx, hookCtx); err != nil {
+		return // Hook aborted the log
+	}
+
 	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(fields))
 	l.writeMessage(l.applySizeLimit(message))
+
+	// Trigger AfterLog hook
+	hookCtx.Event = HookAfterLog
+	_ = l.triggerHooks(ctx, hookCtx)
 
 	if level == LevelFatal {
 		l.handleFatal()
@@ -996,15 +1236,32 @@ func (l *Logger) LogCtx(ctx context.Context, level LogLevel, args ...any) {
 
 // LogfCtx logs a formatted message with context support.
 func (l *Logger) LogfCtx(ctx context.Context, level LogLevel, format string, args ...any) {
-	if !l.shouldLog(level) {
+	if !l.shouldLogCtx(ctx, level) {
 		return
 	}
 
 	msg := fmt.Sprintf(format, args...)
 	msg = l.applyMessageSecurity(msg)
 	fields := l.extractContextFields(ctx)
+
+	// Trigger BeforeLog hook
+	hookCtx := &HookContext{
+		Event:     HookBeforeLog,
+		Level:     level,
+		Message:   msg,
+		Fields:    fields,
+		Timestamp: time.Now(),
+	}
+	if err := l.triggerHooks(ctx, hookCtx); err != nil {
+		return // Hook aborted the log
+	}
+
 	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(fields))
 	l.writeMessage(l.applySizeLimit(message))
+
+	// Trigger AfterLog hook
+	hookCtx.Event = HookAfterLog
+	_ = l.triggerHooks(ctx, hookCtx)
 
 	if level == LevelFatal {
 		l.handleFatal()
@@ -1013,17 +1270,38 @@ func (l *Logger) LogfCtx(ctx context.Context, level LogLevel, format string, arg
 
 // LogWithCtx logs a structured message with fields and context support.
 func (l *Logger) LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field) {
-	if !l.shouldLog(level) {
+	if !l.shouldLogCtx(ctx, level) {
 		return
 	}
+
+	// Save original fields before processing
+	originalFields := make([]Field, len(fields))
+	copy(originalFields, fields)
 
 	msg = l.applyMessageSecurity(msg)
 	processedFields := l.processFields(fields)
 	contextFields := l.extractContextFields(ctx)
 	allFields := append(contextFields, processedFields...)
 
+	// Trigger BeforeLog hook
+	hookCtx := &HookContext{
+		Event:          HookBeforeLog,
+		Level:          level,
+		Message:        msg,
+		Fields:         allFields,
+		OriginalFields: originalFields,
+		Timestamp:      time.Now(),
+	}
+	if err := l.triggerHooks(ctx, hookCtx); err != nil {
+		return // Hook aborted the log
+	}
+
 	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(allFields))
 	l.writeMessage(l.applySizeLimit(message))
+
+	// Trigger AfterLog hook
+	hookCtx.Event = HookAfterLog
+	_ = l.triggerHooks(ctx, hookCtx)
 
 	if level == LevelFatal {
 		l.handleFatal()
@@ -1111,8 +1389,23 @@ func (l *Logger) ActiveFilterGoroutines() int32 {
 }
 
 // WaitForFilterGoroutines waits for all active filter goroutines to complete
-// or until the timeout is reached. This is useful for graceful shutdown to
-// ensure all background filtering operations have finished.
+// or until the timeout is reached.
+//
+// IMPORTANT: Call this method before Close() in graceful shutdown scenarios
+// to prevent goroutine leaks. The security filter may spawn background goroutines
+// for processing large inputs with regex patterns. Failing to wait for these
+// goroutines can result in resource leaks.
+//
+// Example graceful shutdown:
+//
+//	// 1. Stop accepting new requests/logs
+//	// 2. Wait for filter goroutines (use 2-5 seconds typically)
+//	if !logger.WaitForFilterGoroutines(3 * time.Second) {
+//	    log.Println("Warning: some filter goroutines did not complete in time")
+//	}
+//	// 3. Close the logger
+//	logger.Close()
+//
 // Returns true if all goroutines completed, false if timeout was reached.
 func (l *Logger) WaitForFilterGoroutines(timeout time.Duration) bool {
 	secConfig := l.getSecurityConfig()
@@ -1274,17 +1567,17 @@ func Default() *Logger {
 				fmt.Fprintln(os.Stderr, "[dd] WARNING: Using fallback logger with stderr output")
 
 				// Create fallback logger with proper initialization if New() fails
-				defaultConfig := NewConfig()
+				fallbackCfg := defaultConfig()
 				ctx, cancel := context.WithCancel(context.Background())
 				fallbackWriters := []io.Writer{os.Stderr}
 				formatterConfig := &internal.FormatterConfig{
-					Format:        internal.LogFormat(defaultConfig.Format),
-					TimeFormat:    defaultConfig.TimeFormat,
-					IncludeTime:   defaultConfig.IncludeTime,
-					IncludeLevel:  defaultConfig.IncludeLevel,
-					FullPath:      defaultConfig.FullPath,
-					DynamicCaller: defaultConfig.DynamicCaller,
-					JSON:          defaultConfig.JSON,
+					Format:        internal.LogFormat(fallbackCfg.Format),
+					TimeFormat:    fallbackCfg.TimeFormat,
+					IncludeTime:   fallbackCfg.IncludeTime,
+					IncludeLevel:  fallbackCfg.IncludeLevel,
+					FullPath:      fallbackCfg.FullPath,
+					DynamicCaller: fallbackCfg.DynamicCaller,
+					JSON:          fallbackCfg.JSON,
 				}
 				logger = &Logger{
 					callerDepth: DefaultCallerDepth,
@@ -1293,8 +1586,8 @@ func Default() *Logger {
 					cancel:      cancel,
 				}
 				logger.writersPtr.Store(&fallbackWriters)
-				logger.level.Store(int32(defaultConfig.Level))
-				logger.securityConfig.Store(defaultConfig.Security)
+				logger.level.Store(int32(fallbackCfg.Level))
+				logger.securityConfig.Store(fallbackCfg.Security)
 			}
 			defaultLogger.Store(logger)
 		}
@@ -1315,7 +1608,7 @@ func SetDefault(logger *Logger) {
 
 	if oldLogger != nil {
 		go func() {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(DefaultLoggerCloseDelay)
 			_ = oldLogger.Close()
 		}()
 	}
@@ -1351,3 +1644,111 @@ func SetLevel(level LogLevel) {
 func GetLevel() LogLevel {
 	return Default().GetLevel()
 }
+
+// ============================================================================
+// Generic Level Logging Functions
+// ============================================================================
+
+// Log logs a message at the specified level using the default logger.
+func Log(level LogLevel, args ...any) { Default().Log(level, args...) }
+
+// Logf logs a formatted message at the specified level using the default logger.
+func Logf(level LogLevel, format string, args ...any) {
+	Default().Logf(level, format, args...)
+}
+
+// LogWith logs a structured message at the specified level using the default logger.
+func LogWith(level LogLevel, msg string, fields ...Field) {
+	Default().LogWith(level, msg, fields...)
+}
+
+// LogCtx logs a message at the specified level with context using the default logger.
+func LogCtx(ctx context.Context, level LogLevel, args ...any) {
+	Default().LogCtx(ctx, level, args...)
+}
+
+// LogfCtx logs a formatted message at the specified level with context using the default logger.
+func LogfCtx(ctx context.Context, level LogLevel, format string, args ...any) {
+	Default().LogfCtx(ctx, level, format, args...)
+}
+
+// LogWithCtx logs a structured message at the specified level with context using the default logger.
+func LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, level, msg, fields...)
+}
+
+// ============================================================================
+// Level Check Functions
+// ============================================================================
+
+// IsLevelEnabled checks if the specified log level is enabled for the default logger.
+func IsLevelEnabled(level LogLevel) bool { return Default().IsLevelEnabled(level) }
+
+// IsDebugEnabled checks if DEBUG level is enabled for the default logger.
+func IsDebugEnabled() bool { return Default().IsDebugEnabled() }
+
+// IsInfoEnabled checks if INFO level is enabled for the default logger.
+func IsInfoEnabled() bool { return Default().IsInfoEnabled() }
+
+// IsWarnEnabled checks if WARN level is enabled for the default logger.
+func IsWarnEnabled() bool { return Default().IsWarnEnabled() }
+
+// IsErrorEnabled checks if ERROR level is enabled for the default logger.
+func IsErrorEnabled() bool { return Default().IsErrorEnabled() }
+
+// IsFatalEnabled checks if FATAL level is enabled for the default logger.
+func IsFatalEnabled() bool { return Default().IsFatalEnabled() }
+
+// ============================================================================
+// Field Chaining Functions
+// ============================================================================
+
+// WithFields returns a LoggerEntry with pre-set fields using the default logger.
+// The fields are inherited by all logging calls on the returned entry.
+//
+// Example:
+//
+//	dd.WithFields(dd.String("service", "api"), dd.String("version", "1.0")).
+//	    Info("request received")
+func WithFields(fields ...Field) *LoggerEntry {
+	return Default().WithFields(fields...)
+}
+
+// WithField returns a LoggerEntry with a single pre-set field using the default logger.
+//
+// Example:
+//
+//	dd.WithField("request_id", "abc123").Info("processing request")
+func WithField(key string, value any) *LoggerEntry {
+	return Default().WithField(key, value)
+}
+
+// ============================================================================
+// Lifecycle Functions
+// ============================================================================
+
+// Flush flushes any buffered data in the default logger.
+func Flush() error { return Default().Flush() }
+
+// ============================================================================
+// Writer Management Functions
+// ============================================================================
+
+// AddWriter adds a writer to the default logger.
+func AddWriter(writer io.Writer) error { return Default().AddWriter(writer) }
+
+// RemoveWriter removes a writer from the default logger.
+func RemoveWriter(writer io.Writer) error { return Default().RemoveWriter(writer) }
+
+// WriterCount returns the number of writers in the default logger.
+func WriterCount() int { return Default().WriterCount() }
+
+// ============================================================================
+// Sampling Functions
+// ============================================================================
+
+// SetSampling sets the sampling configuration for the default logger.
+func SetSampling(config *SamplingConfig) { Default().SetSampling(config) }
+
+// GetSampling returns the sampling configuration for the default logger.
+func GetSampling() *SamplingConfig { return Default().GetSampling() }

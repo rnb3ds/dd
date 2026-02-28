@@ -11,158 +11,163 @@ import (
 
 // Security - Sensitive Data Filtering and Protection
 //
-// This example demonstrates:
+// Topics covered:
 // 1. Basic filtering (passwords, API keys, credit cards)
-// 2. Full filtering (emails, IPs, SSNs, database URLs)
+// 2. Full filtering (emails, IPs, SSNs, JWTs)
 // 3. Custom filtering patterns
-// 4. Disable filtering when needed
+// 4. Filter statistics and monitoring
+// 5. Disable filtering when needed
 func main() {
 	fmt.Println("=== DD Security Features ===\n")
 
-	example1BasicFiltering()
-	example2FullFiltering()
-	example3CustomFiltering()
-	example4DisableFiltering()
+	section1BasicFiltering()
+	section2FullFiltering()
+	section3CustomFiltering()
+	section4FilterStats()
 
 	fmt.Println("\n✅ Security examples completed!")
-	fmt.Println("\nSecurity Tips:")
-	fmt.Println("  • Basic filtering is enabled by default for security")
-	fmt.Println("  • Use full filtering for comprehensive protection")
-	fmt.Println("  • Disable filtering only when you need raw data")
-	fmt.Println("  • Log injection protection is always enabled")
 }
 
-// Example 1: Basic filtering (enabled by default)
-func example1BasicFiltering() {
-	fmt.Println("1. Basic Filtering (Default)")
-	fmt.Println("----------------------------")
+// Section 1: Basic filtering (default protection)
+func section1BasicFiltering() {
+	fmt.Println("1. Basic Filtering")
+	fmt.Println("-------------------")
 
-	// Basic filtering is enabled by default
+	// Basic filtering: passwords, API keys, credit cards, phones
 	cfg := dd.DefaultConfig()
-	cfg.Security = dd.DefaultSecurityConfig() // Enables basic filtering
+	cfg.Security = dd.DefaultSecurityConfig()
 
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	// These will be automatically filtered
+	// These are automatically filtered
 	logger.Info("password=secret123")
 	logger.Info("api_key=sk-1234567890abcdef")
 	logger.Info("credit_card=4532015112830366")
-	logger.Info("phone=+1-415-555-2671")
 
-	// Structured logging with sensitive fields
+	// Structured logging - key-based filtering
 	logger.InfoWith("User login",
 		dd.String("username", "john_doe"),
-		dd.String("password", "secret123"), // Filtered by key name
-		dd.String("api_key", "sk-abc123"),  // Filtered by key name
+		dd.String("password", "secret123"),  // Filtered by key name
+		dd.String("api_key", "sk-abc123"),   // Filtered by key name
+		dd.String("token", "bearer-xyz789"), // Filtered by key name
 	)
 
-	fmt.Println("✓ Sensitive data filtered\n")
+	fmt.Println("✓ Sensitive data automatically filtered\n")
 }
 
-// Example 2: Full filtering
-func example2FullFiltering() {
+// Section 2: Full filtering (comprehensive protection)
+func section2FullFiltering() {
 	fmt.Println("2. Full Filtering")
-	fmt.Println("-----------------")
+	fmt.Println("------------------")
 
+	// Full filtering includes: emails, IPs, SSNs, JWTs, DB URLs
 	cfg := dd.DefaultConfig()
-	secConfig := dd.DefaultSecurityConfig()
-	secConfig.SensitiveFilter = dd.NewSensitiveDataFilter() // Full filtering
-	cfg.Security = secConfig
+	cfg.Security = dd.DefaultSecureConfig() // Full protection
 
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	// More types of sensitive data filtered
+	// Additional patterns filtered
 	logger.Info("email=user@example.com")
 	logger.Info("ssn=123-45-6789")
-	logger.Info("ip=192.168.1.1")
-	logger.Info("mysql://user:pass@localhost:3306/db")
+	logger.Info("ip_address=192.168.1.100")
+	logger.Info("mysql://user:password@localhost:3306/database")
 
 	// JWT tokens
-	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc123"
+	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
 	logger.Infof("Authorization: Bearer %s", jwt)
-
-	// Private keys
-	privateKey := `-----BEGIN RSA PRIVATE KEY-----
-MIIEpAIBAAKCAQEA1234567890...
------END RSA PRIVATE KEY-----`
-	logger.Info(privateKey)
 
 	fmt.Println("✓ Comprehensive filtering applied\n")
 }
 
-// Example 3: Custom filtering patterns
-func example3CustomFiltering() {
+// Section 3: Custom filtering patterns
+func section3CustomFiltering() {
 	fmt.Println("3. Custom Filtering")
-	fmt.Println("-------------------")
+	fmt.Println("--------------------")
 
-	// Create empty filter and add custom patterns
+	// Start with empty filter and add custom patterns
 	filter := dd.NewEmptySensitiveDataFilter()
-	filter.AddPattern(`(?i)(internal[_-]?token[:\s=]+)[^\s]+`)
-	filter.AddPattern(`(?i)(session[_-]?id[:\s=]+)[^\s]+`)
-	filter.AddPattern(`(?i)(secret[_-]?code[:\s=]+)[^\s]+`)
+	filter.AddPatterns(
+		`(?i)(internal_token[:\s=]+)[^\s]+`,
+		`(?i)(session_id[:\s=]+)[^\s]+`,
+		`(?i)(company_secret[:\s=]+)[^\s]+`,
+	)
 
 	cfg := dd.DefaultConfig()
-	secConfig := dd.DefaultSecurityConfig()
-	secConfig.SensitiveFilter = filter
-	cfg.Security = secConfig
+	cfg.Security = &dd.SecurityConfig{
+		SensitiveFilter: filter,
+	}
 
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	logger.Info("internal_token=abc123")
-	logger.Info("session_id=xyz789")
-	logger.Info("secret_code=def456")
-	logger.Info("public_data=visible") // Not filtered
+	logger.Info("internal_token=abc123")       // Filtered
+	logger.Info("session_id=xyz789")           // Filtered
+	logger.Info("company_secret=confidential") // Filtered
+	logger.Info("public_data=visible")         // Not filtered
 
 	fmt.Println("✓ Custom patterns applied\n")
 }
 
-// Example 4: Disable filtering when needed
-func example4DisableFiltering() {
-	fmt.Println("4. Disable Filtering")
-	fmt.Println("--------------------")
+// Section 4: Filter statistics and monitoring
+func section4FilterStats() {
+	fmt.Println("4. Filter Statistics")
+	fmt.Println("---------------------")
 
-	// Disable all filtering (use with caution)
+	// Create filter and get stats
+	filter := dd.NewSensitiveDataFilter()
+
+	cfg := dd.DefaultConfig()
+	cfg.Security = &dd.SecurityConfig{
+		SensitiveFilter: filter,
+	}
+
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
+
+	// Generate some filtered logs
+	for i := 0; i < 10; i++ {
+		logger.Infof("password=secret%d", i)
+	}
+
+	// Get filter statistics
+	stats := filter.GetFilterStats()
+	fmt.Printf("  Pattern count: %d\n", stats.PatternCount)
+	fmt.Printf("  Total filtered: %d\n", stats.TotalFiltered)
+	fmt.Printf("  Total redactions: %d\n", stats.TotalRedactions)
+	fmt.Printf("  Average latency: %v\n", stats.AverageLatency)
+	fmt.Printf("  Enabled: %v\n", stats.Enabled)
+
+	// Disable filtering temporarily
+	filter.Disable()
+	logger.Info("password=visible_now") // Not filtered
+
+	// Re-enable
+	filter.Enable()
+
+	// Monitor active goroutines (for high-concurrency scenarios)
+	activeGoroutines := filter.ActiveGoroutineCount()
+	fmt.Printf("  Active filter goroutines: %d\n", activeGoroutines)
+
+	// Message size limit
+	fmt.Println("\n  Message size limit (default 5MB):")
+	largeMsg := strings.Repeat("A", 100)
+	logger.Info(largeMsg[:50] + "... (truncated in output)")
+
+	fmt.Println()
+}
+
+// Example: Disable filtering completely (use with caution)
+func exampleDisableFiltering() {
+	// No filtering - maximum performance
 	cfg := dd.DefaultConfig()
 	cfg.Security = dd.DefaultSecurityConfigDisabled()
 
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	logger.Info("password=secret123") // Not filtered
+	logger.Info("password=raw_password") // Not filtered
 
-	fmt.Println("Note: Disable filtering only when you need raw data")
-	fmt.Println()
-}
-
-// Example 5: Message size limit (commented out to avoid large output)
-func example5MessageSizeLimit() {
-	fmt.Println("5. Message Size Limit")
-	fmt.Println("---------------------")
-
-	// Default limit is 5MB
-	logger, _ := dd.New()
-	defer logger.Close()
-
-	// Try to log 6MB message (will be truncated)
-	largeMsg := strings.Repeat("A", 6*1024*1024)
-	logger.Info(largeMsg)
-	fmt.Println("✓ 6MB message truncated to 5MB (default limit)")
-
-	// Custom limit: 1MB
-	cfg := dd.DefaultConfig()
-	secConfig := dd.DefaultSecurityConfig()
-	secConfig.MaxMessageSize = 1 * 1024 * 1024 // 1MB
-	cfg.Security = secConfig
-
-	logger2, _ := dd.New(cfg)
-	defer logger2.Close()
-
-	mediumMsg := strings.Repeat("B", 2*1024*1024)
-	logger2.Info(mediumMsg)
-	fmt.Println("✓ 2MB message truncated to 1MB (custom limit)")
-
-	fmt.Println()
+	// Note: Only disable when you need raw data or maximum performance
 }

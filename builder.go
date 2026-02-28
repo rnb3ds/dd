@@ -53,6 +53,9 @@ type Config struct {
 	// Security configuration
 	Security *SecurityConfig
 
+	// Field validation configuration
+	FieldValidation *FieldValidationConfig
+
 	// Lifecycle handlers
 	FatalHandler      FatalHandler
 	WriteErrorHandler WriteErrorHandler
@@ -64,7 +67,7 @@ type Config struct {
 }
 
 // NewConfig creates a new Config with default settings.
-// This is an alias for DefaultConfig().
+// Deprecated: Use DefaultConfig() instead. This alias will be removed in a future version.
 func NewConfig() *Config {
 	return defaultConfig()
 }
@@ -81,7 +84,6 @@ func DefaultConfig() *Config {
 	return defaultConfig()
 }
 
-// defaultConfig returns a Config with default settings.
 func defaultConfig() *Config {
 	return &Config{
 		Level:         LevelInfo,
@@ -96,15 +98,15 @@ func defaultConfig() *Config {
 	}
 }
 
-// ConfigDevelopment creates a Config with development-friendly settings.
+// DevelopmentConfig creates a Config with development-friendly settings.
 // Enables DEBUG level and dynamic caller detection.
 //
 // Example:
 //
-//	cfg := dd.ConfigDevelopment()
+//	cfg := dd.DevelopmentConfig()
 //	cfg.File = &dd.FileConfig{Path: "dev.log"}
 //	logger, _ := dd.New(cfg)
-func ConfigDevelopment() *Config {
+func DevelopmentConfig() *Config {
 	return &Config{
 		Level:         LevelDebug,
 		Format:        FormatText,
@@ -118,14 +120,14 @@ func ConfigDevelopment() *Config {
 	}
 }
 
-// ConfigJSON creates a Config with JSON output settings.
+// JSONConfig creates a Config with JSON output settings.
 //
 // Example:
 //
-//	cfg := dd.ConfigJSON()
+//	cfg := dd.JSONConfig()
 //	cfg.Level = dd.LevelInfo
 //	logger, _ := dd.New(cfg)
-func ConfigJSON() *Config {
+func JSONConfig() *Config {
 	return &Config{
 		Level:         LevelDebug,
 		Format:        FormatJSON,
@@ -161,6 +163,7 @@ func (c *Config) build() (*Logger, error) {
 		fullPath:          c.FullPath,
 		dynamicCaller:     c.DynamicCaller,
 		securityConfig:    c.Security,
+		fieldValidation:   c.FieldValidation,
 		fatalHandler:      c.FatalHandler,
 		writeErrorHandler: c.WriteErrorHandler,
 		contextExtractors: c.ContextExtractors,
@@ -253,6 +256,7 @@ func (c *Config) Clone() *Config {
 		DynamicCaller:     c.DynamicCaller,
 		Output:            c.Output,
 		Security:          c.Security,
+		FieldValidation:   c.FieldValidation,
 		FatalHandler:      c.FatalHandler,
 		WriteErrorHandler: c.WriteErrorHandler,
 		Sampling:          c.Sampling,
@@ -381,6 +385,7 @@ type internalConfig struct {
 	writers           []io.Writer
 	json              *JSONOptions
 	securityConfig    *SecurityConfig
+	fieldValidation   *FieldValidationConfig
 	fatalHandler      FatalHandler
 	writeErrorHandler WriteErrorHandler
 	contextExtractors []ContextExtractor

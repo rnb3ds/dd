@@ -80,6 +80,12 @@ type LevelLogger interface {
 	// Level management
 	GetLevel() LogLevel
 	SetLevel(level LogLevel) error
+	IsLevelEnabled(level LogLevel) bool
+	IsDebugEnabled() bool
+	IsInfoEnabled() bool
+	IsWarnEnabled() bool
+	IsErrorEnabled() bool
+	IsFatalEnabled() bool
 }
 
 // ConfigurableLogger extends CoreLogger with configuration and lifecycle methods.
@@ -149,6 +155,12 @@ type LogProvider interface {
 	// Level management
 	GetLevel() LogLevel
 	SetLevel(level LogLevel) error
+	IsLevelEnabled(level LogLevel) bool
+	IsDebugEnabled() bool
+	IsInfoEnabled() bool
+	IsWarnEnabled() bool
+	IsErrorEnabled() bool
+	IsFatalEnabled() bool
 
 	// Core logging methods
 	Log(level LogLevel, args ...any)

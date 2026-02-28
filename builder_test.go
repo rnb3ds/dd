@@ -3,6 +3,7 @@ package dd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -12,7 +13,7 @@ import (
 // TestNewConfig tests the new unified configuration API
 func TestNewConfig(t *testing.T) {
 	t.Run("default configuration", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		if cfg.Level != LevelInfo {
 			t.Errorf("Expected LevelInfo, got %v", cfg.Level)
 		}
@@ -22,7 +23,7 @@ func TestNewConfig(t *testing.T) {
 	})
 
 	t.Run("modify fields directly", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Level = LevelDebug
 		cfg.Format = FormatJSON
 		cfg.DynamicCaller = true
@@ -44,7 +45,7 @@ func TestNewConfig(t *testing.T) {
 
 	t.Run("build logger", func(t *testing.T) {
 		var buf bytes.Buffer
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		cfg.Level = LevelDebug
@@ -64,7 +65,7 @@ func TestNewConfig(t *testing.T) {
 	})
 
 	t.Run("MustBuild panics on error", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		// Use a path with invalid characters on Windows
 		cfg.File = &FileConfig{Path: "Z:\\\\nonexistent\\\\drive\\\\app.log"}
 
@@ -79,7 +80,7 @@ func TestNewConfig(t *testing.T) {
 }
 
 func TestConfigDevelopment(t *testing.T) {
-	cfg := ConfigDevelopment()
+	cfg := DevelopmentConfig()
 
 	if cfg.Level != LevelDebug {
 		t.Errorf("Expected LevelDebug, got %v", cfg.Level)
@@ -93,7 +94,7 @@ func TestConfigDevelopment(t *testing.T) {
 }
 
 func TestConfigJSON(t *testing.T) {
-	cfg := ConfigJSON()
+	cfg := JSONConfig()
 
 	if cfg.Format != FormatJSON {
 		t.Errorf("Expected FormatJSON, got %v", cfg.Format)
@@ -105,7 +106,7 @@ func TestConfigJSON(t *testing.T) {
 
 func TestConfigFileOutput(t *testing.T) {
 	t.Run("File config sets file path", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.File = &FileConfig{Path: "logs/test.log"}
 
 		if cfg.File.Path != "logs/test.log" {
@@ -114,7 +115,7 @@ func TestConfigFileOutput(t *testing.T) {
 	})
 
 	t.Run("modify rotation settings", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.File = &FileConfig{
 			Path:       "logs/test.log",
 			MaxSizeMB:  50,
@@ -151,7 +152,7 @@ func TestConfigLevelFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.expected.String(), func(t *testing.T) {
-			cfg := NewConfig()
+			cfg := DefaultConfig()
 			cfg.Level = tt.level
 
 			if cfg.Level != tt.expected {
@@ -163,7 +164,7 @@ func TestConfigLevelFields(t *testing.T) {
 
 func TestConfigFormatFields(t *testing.T) {
 	t.Run("FormatJSON", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Format = FormatJSON
 		if cfg.Format != FormatJSON {
 			t.Errorf("Expected FormatJSON, got %v", cfg.Format)
@@ -171,7 +172,7 @@ func TestConfigFormatFields(t *testing.T) {
 	})
 
 	t.Run("FormatText", func(t *testing.T) {
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Format = FormatText
 		if cfg.Format != FormatText {
 			t.Errorf("Expected FormatText, got %v", cfg.Format)
@@ -181,7 +182,7 @@ func TestConfigFormatFields(t *testing.T) {
 
 func TestBuilderConfigClone(t *testing.T) {
 	t.Run("clone preserves settings", func(t *testing.T) {
-		original := NewConfig()
+		original := DefaultConfig()
 		original.Format = FormatJSON
 		original.Level = LevelDebug
 		original.DynamicCaller = true
@@ -204,7 +205,7 @@ func TestBuilderConfigClone(t *testing.T) {
 	})
 
 	t.Run("clone is independent", func(t *testing.T) {
-		original := NewConfig()
+		original := DefaultConfig()
 		original.Level = LevelDebug
 		cloned := original.Clone()
 
@@ -221,7 +222,7 @@ func TestBuilderConfigClone(t *testing.T) {
 	})
 
 	t.Run("clone for multiple loggers", func(t *testing.T) {
-		base := NewConfig()
+		base := DefaultConfig()
 		base.Format = FormatJSON
 
 		// Create app logger
@@ -247,7 +248,7 @@ func TestBuilderConfigClone(t *testing.T) {
 }
 
 func TestConfigWithSampling(t *testing.T) {
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Sampling = &SamplingConfig{
 		Enabled:    true,
 		Initial:    100,
@@ -273,7 +274,7 @@ func TestConfigWithSampling(t *testing.T) {
 }
 
 func TestConfigAddHook(t *testing.T) {
-	cfg := NewConfig()
+	cfg := DefaultConfig()
 	cfg.Hooks = NewHookRegistry()
 	cfg.Hooks.Add(HookBeforeLog, func(ctx context.Context, h *HookContext) error {
 		return nil
@@ -291,7 +292,7 @@ func TestConfigIntegration(t *testing.T) {
 	t.Run("complete configuration example", func(t *testing.T) {
 		var buf bytes.Buffer
 
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.Output = &buf
 		cfg.Format = FormatJSON
 		cfg.Level = LevelDebug
@@ -319,7 +320,7 @@ func TestConfigIntegration(t *testing.T) {
 		// Create temp directory
 		tmpDir := t.TempDir()
 
-		cfg := NewConfig()
+		cfg := DefaultConfig()
 		cfg.File = &FileConfig{
 			Path:       tmpDir + "/test.log",
 			MaxSizeMB:  10,
@@ -341,5 +342,55 @@ func TestConfigIntegration(t *testing.T) {
 		if _, err := os.Stat(tmpDir + "/test.log"); os.IsNotExist(err) {
 			t.Error("Expected log file to be created")
 		}
+	})
+}
+
+func TestNewMultipleConfigs(t *testing.T) {
+	t.Run("returns error when multiple configs provided", func(t *testing.T) {
+		cfg1 := DefaultConfig()
+		cfg2 := DefaultConfig()
+
+		_, err := New(cfg1, cfg2)
+		if err == nil {
+			t.Error("Expected error when multiple configs provided")
+		}
+
+		if !errors.Is(err, ErrMultipleConfigs) {
+			t.Errorf("Expected ErrMultipleConfigs, got: %v", err)
+		}
+	})
+
+	t.Run("returns error with three configs", func(t *testing.T) {
+		cfg1 := DefaultConfig()
+		cfg2 := DefaultConfig()
+		cfg3 := DefaultConfig()
+
+		_, err := New(cfg1, cfg2, cfg3)
+		if err == nil {
+			t.Error("Expected error when multiple configs provided")
+		}
+
+		if !strings.Contains(err.Error(), "3 configs") {
+			t.Errorf("Expected error message to contain '3 configs', got: %v", err)
+		}
+	})
+
+	t.Run("works with single config", func(t *testing.T) {
+		cfg := DefaultConfig()
+		cfg.Level = LevelDebug
+
+		logger, err := New(cfg)
+		if err != nil {
+			t.Errorf("Unexpected error with single config: %v", err)
+		}
+		defer logger.Close()
+	})
+
+	t.Run("works with no config", func(t *testing.T) {
+		logger, err := New()
+		if err != nil {
+			t.Errorf("Unexpected error with no config: %v", err)
+		}
+		defer logger.Close()
 	})
 }
