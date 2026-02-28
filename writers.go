@@ -38,6 +38,17 @@ type FileWriterConfig struct {
 	Compress   bool
 }
 
+// DefaultFileWriterConfig returns FileWriterConfig with sensible defaults.
+// Default values: MaxSizeMB=100, MaxAge=30 days, MaxBackups=10, Compress=false.
+func DefaultFileWriterConfig() FileWriterConfig {
+	return FileWriterConfig{
+		MaxSizeMB:  DefaultMaxSizeMB,
+		MaxAge:     DefaultMaxAge,
+		MaxBackups: DefaultMaxBackups,
+		Compress:   false,
+	}
+}
+
 func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
 	securePath, err := internal.ValidateAndSecurePath(path, MaxPathLength, ErrEmptyFilePath, ErrNullByte, ErrPathTooLong, ErrPathTraversal, ErrInvalidPath)
 	if err != nil {
@@ -348,6 +359,10 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 		case <-bw.ctx.Done():
 			return
 		case <-ticker.C:
+			// Check if closed before attempting to flush
+			if bw.closed.Load() {
+				return
+			}
 			bw.mu.Lock()
 			if bw.buffer.Buffered() > 0 && time.Since(bw.lastFlush) >= bw.flushTime {
 				if err := bw.buffer.Flush(); err != nil {
@@ -402,21 +417,17 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 	}
 
 	// Iterate directly over the immutable slice - no copy needed
-	var firstErr error
+	var allErrors MultiWriterError
 	successCount := 0
 
 	for i := 0; i < writerCount; i++ {
 		n, err := writers[i].Write(p)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("writer[%d]: %w", i, err)
-			}
+			allErrors.AddError(i, writers[i], err)
 			continue
 		}
 		if n != pLen {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("writer[%d]: short write (%d/%d bytes)", i, n, pLen)
-			}
+			allErrors.AddError(i, writers[i], fmt.Errorf("short write (%d/%d bytes)", n, pLen))
 			continue
 		}
 		successCount++
@@ -424,12 +435,12 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 
 	// If all writers failed, return error
 	if successCount == 0 {
-		return 0, firstErr
+		return 0, &allErrors
 	}
 
 	// If partial success, return bytes written but include error info
-	if firstErr != nil {
-		return pLen, fmt.Errorf("partial write failure (%d/%d succeeded): %w", successCount, writerCount, firstErr)
+	if allErrors.HasErrors() {
+		return pLen, &allErrors
 	}
 
 	return pLen, nil

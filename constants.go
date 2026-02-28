@@ -15,14 +15,16 @@ const (
 )
 
 const (
+	// DefaultCallerDepth is the number of stack frames to skip when
+	// determining the caller of a log function.
+	// Value 3 accounts for: runtime.Caller -> GetCaller -> Log method -> user code
 	DefaultCallerDepth = 3
 )
 
 const (
-	DefaultBufferSize    = 1024
-	MaxBufferSize        = 4 * 1024
-	FieldBuilderCapacity = 256
-	EstimatedFieldSize   = 24
+	DefaultBufferSize = 1024
+	MaxBufferSize     = 4 * 1024
+	// FieldBuilderCapacity and EstimatedFieldSize are defined in internal/fields.go
 )
 
 const (
@@ -59,15 +61,31 @@ const (
 // FilePermissions (0600) for log files is defined in the internal package.
 
 const (
+	// DefaultFilterTimeout is the maximum time for sensitive data filtering.
+	// This timeout protects against ReDoS (Regular Expression Denial of Service)
+	// attacks on malicious input with complex regex patterns.
+	// 50ms provides reasonable protection while allowing thorough filtering.
 	DefaultFilterTimeout = 50 * time.Millisecond
-	EmptyFilterTimeout   = 10 * time.Millisecond
+
+	// EmptyFilterTimeout is used for filters with no patterns.
+	// Shorter timeout since minimal processing is needed.
+	EmptyFilterTimeout = 10 * time.Millisecond
+
 	// MaxConcurrentFilters limits concurrent regex filtering goroutines.
+	// Prevents resource exhaustion in high-concurrency scenarios.
 	MaxConcurrentFilters = 100
 )
 
 const (
 	DefaultTimeFormat = "2006-01-02T15:04:05Z07:00"
 	DevTimeFormat     = "15:04:05.000"
+)
+
+const (
+	// DefaultFatalFlushTimeout is the maximum time to wait for logger flush
+	// during fatal log handling. This ensures the program can exit even if
+	// the underlying writer is blocked or unresponsive.
+	DefaultFatalFlushTimeout = 5 * time.Second
 )
 
 const (

@@ -27,8 +27,8 @@ func main() {
 	fmt.Println("\n✅ Security examples completed!")
 	fmt.Println("\nSecurity Tips:")
 	fmt.Println("  • Basic filtering is enabled by default for security")
-	fmt.Println("  • Use EnableFullFiltering() for comprehensive protection")
-	fmt.Println("  • Use DisableFiltering() only when you need raw data")
+	fmt.Println("  • Use full filtering for comprehensive protection")
+	fmt.Println("  • Disable filtering only when you need raw data")
 	fmt.Println("  • Log injection protection is always enabled")
 }
 
@@ -37,9 +37,11 @@ func example1BasicFiltering() {
 	fmt.Println("1. Basic Filtering (Default)")
 	fmt.Println("----------------------------")
 
-	// Basic filtering is enabled by default in DefaultSecurityConfig()
-	config := dd.DefaultConfig().EnableBasicFiltering()
-	logger, _ := dd.New(config)
+	// Basic filtering is enabled by default
+	cfg := dd.DefaultConfig()
+	cfg.Security = dd.DefaultSecurityConfig() // Enables basic filtering
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	// These will be automatically filtered
@@ -63,8 +65,12 @@ func example2FullFiltering() {
 	fmt.Println("2. Full Filtering")
 	fmt.Println("-----------------")
 
-	config := dd.DefaultConfig().EnableFullFiltering()
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	secConfig := dd.DefaultSecurityConfig()
+	secConfig.SensitiveFilter = dd.NewSensitiveDataFilter() // Full filtering
+	cfg.Security = secConfig
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	// More types of sensitive data filtered
@@ -92,15 +98,17 @@ func example3CustomFiltering() {
 	fmt.Println("-------------------")
 
 	// Create empty filter and add custom patterns
-	// Note: The + quantifier must be after the character class [:\s=], not after the group
-	// This allows matching "key=value" format (not requiring "key=key=..." repetition)
 	filter := dd.NewEmptySensitiveDataFilter()
 	filter.AddPattern(`(?i)(internal[_-]?token[:\s=]+)[^\s]+`)
 	filter.AddPattern(`(?i)(session[_-]?id[:\s=]+)[^\s]+`)
 	filter.AddPattern(`(?i)(secret[_-]?code[:\s=]+)[^\s]+`)
 
-	config := dd.DefaultConfig().WithFilter(filter)
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	secConfig := dd.DefaultSecurityConfig()
+	secConfig.SensitiveFilter = filter
+	cfg.Security = secConfig
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	logger.Info("internal_token=abc123")
@@ -117,13 +125,15 @@ func example4DisableFiltering() {
 	fmt.Println("--------------------")
 
 	// Disable all filtering (use with caution)
-	config := dd.DefaultConfig().DisableFiltering()
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Security = dd.DefaultSecurityConfigDisabled()
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	logger.Info("password=secret123") // Not filtered
 
-	fmt.Println("Note: Use DisableFiltering() only when you need raw data")
+	fmt.Println("Note: Disable filtering only when you need raw data")
 	fmt.Println()
 }
 
@@ -133,8 +143,7 @@ func example5MessageSizeLimit() {
 	fmt.Println("---------------------")
 
 	// Default limit is 5MB
-	config := dd.DefaultConfig()
-	logger, _ := dd.New(config)
+	logger, _ := dd.New()
 	defer logger.Close()
 
 	// Try to log 6MB message (will be truncated)
@@ -143,11 +152,12 @@ func example5MessageSizeLimit() {
 	fmt.Println("✓ 6MB message truncated to 5MB (default limit)")
 
 	// Custom limit: 1MB
-	config2 := dd.DefaultConfig()
-	config2.SecurityConfig = &dd.SecurityConfig{
-		MaxMessageSize: 1 * 1024 * 1024, // 1MB
-	}
-	logger2, _ := dd.New(config2)
+	cfg := dd.DefaultConfig()
+	secConfig := dd.DefaultSecurityConfig()
+	secConfig.MaxMessageSize = 1 * 1024 * 1024 // 1MB
+	cfg.Security = secConfig
+
+	logger2, _ := dd.New(cfg)
 	defer logger2.Close()
 
 	mediumMsg := strings.Repeat("B", 2*1024*1024)

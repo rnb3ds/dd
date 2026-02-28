@@ -13,21 +13,21 @@ import (
 // ============================================================================
 
 func BenchmarkLoggerCreation(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		logger.Close()
 	}
 }
 
 func BenchmarkSimpleLogging(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -38,9 +38,9 @@ func BenchmarkSimpleLogging(b *testing.B) {
 }
 
 func BenchmarkFormattedLogging(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -51,9 +51,9 @@ func BenchmarkFormattedLogging(b *testing.B) {
 }
 
 func BenchmarkStructuredLogging(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -68,9 +68,9 @@ func BenchmarkStructuredLogging(b *testing.B) {
 }
 
 func BenchmarkConcurrentLogging(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -87,11 +87,11 @@ func BenchmarkConcurrentLogging(b *testing.B) {
 // ============================================================================
 
 func BenchmarkTextFormat(b *testing.B) {
-	config := DefaultConfig()
-	config.Format = FormatText
-	config.Writers = []io.Writer{io.Discard}
+	cfg := NewConfig()
+	cfg.Format = FormatText
+	cfg.Outputs = []io.Writer{io.Discard}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -105,10 +105,10 @@ func BenchmarkTextFormat(b *testing.B) {
 }
 
 func BenchmarkJSONFormat(b *testing.B) {
-	config := JSONConfig()
-	config.Writers = []io.Writer{io.Discard}
+	cfg := ConfigJSON()
+	cfg.Outputs = []io.Writer{io.Discard}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -122,11 +122,11 @@ func BenchmarkJSONFormat(b *testing.B) {
 }
 
 func BenchmarkJSONCompact(b *testing.B) {
-	config := JSONConfig()
-	config.JSON.PrettyPrint = false
-	config.Writers = []io.Writer{io.Discard}
+	cfg := ConfigJSON()
+	cfg.JSON.PrettyPrint = false
+	cfg.Outputs = []io.Writer{io.Discard}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -142,11 +142,11 @@ func BenchmarkJSONCompact(b *testing.B) {
 }
 
 func BenchmarkJSONPretty(b *testing.B) {
-	config := JSONConfig()
-	config.JSON.PrettyPrint = true
-	config.Writers = []io.Writer{io.Discard}
+	cfg := ConfigJSON()
+	cfg.JSON.PrettyPrint = true
+	cfg.Outputs = []io.Writer{io.Discard}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -177,9 +177,9 @@ func BenchmarkFieldCreation(b *testing.B) {
 }
 
 func BenchmarkFieldTypes(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("String", func(b *testing.B) {
@@ -226,9 +226,9 @@ func BenchmarkFieldTypes(b *testing.B) {
 }
 
 func BenchmarkMultipleFields(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("1Field", func(b *testing.B) {
@@ -286,9 +286,9 @@ func BenchmarkMultipleFields(b *testing.B) {
 // ============================================================================
 
 func BenchmarkLogLevels(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("Debug", func(b *testing.B) {
@@ -329,10 +329,10 @@ func BenchmarkLogLevels(b *testing.B) {
 }
 
 func BenchmarkLevelCheck(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.Level = LevelWarn
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Level = LevelWarn
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -345,11 +345,11 @@ func BenchmarkLevelCheck(b *testing.B) {
 
 func BenchmarkWriterCount(b *testing.B) {
 	b.Run("1Writer", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -360,11 +360,11 @@ func BenchmarkWriterCount(b *testing.B) {
 	})
 
 	b.Run("3Writers", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard, io.Discard, io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard, io.Discard, io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -380,15 +380,15 @@ func BenchmarkWriterCount(b *testing.B) {
 			writers[i] = io.Discard
 		}
 
-		config := DefaultConfig()
-		config.Writers = writers
-		config.SecurityConfig = &SecurityConfig{
+		cfg := NewConfig()
+		cfg.Outputs = writers
+		cfg.Security = &SecurityConfig{
 			MaxMessageSize:  1024 * 1024,
 			MaxWriters:      20,
 			SensitiveFilter: nil,
 		}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -401,10 +401,10 @@ func BenchmarkWriterCount(b *testing.B) {
 
 func BenchmarkMultipleWriters(b *testing.B) {
 	var buf1, buf2, buf3 bytes.Buffer
-	config := DefaultConfig()
-	config.Writers = []io.Writer{&buf1, &buf2, &buf3}
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{&buf1, &buf2, &buf3}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -422,11 +422,11 @@ func BenchmarkFilterComparison(b *testing.B) {
 	msg := "User password: secret123 and card 4532015112830366"
 
 	b.Run("NoFilter", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -437,11 +437,11 @@ func BenchmarkFilterComparison(b *testing.B) {
 	})
 
 	b.Run("BasicFilter", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -452,11 +452,11 @@ func BenchmarkFilterComparison(b *testing.B) {
 	})
 
 	b.Run("SecureFilter", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -494,11 +494,11 @@ func BenchmarkSecureFilter(b *testing.B) {
 // ============================================================================
 
 func BenchmarkMessageSizes(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("Small_10B", func(b *testing.B) {
@@ -539,23 +539,23 @@ func BenchmarkMessageSizes(b *testing.B) {
 // ============================================================================
 
 func BenchmarkConfigClone(b *testing.B) {
-	config := DefaultConfig()
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
+	cfg := NewConfig()
+	cfg.Security = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = config.Clone()
+		_ = cfg.Clone()
 	}
 }
 
 func BenchmarkConfigValidation(b *testing.B) {
-	config := DefaultConfig()
+	cfg := NewConfig()
 
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = config.Validate()
+		_, _ = New(cfg)
 	}
 }
 
@@ -593,10 +593,10 @@ func BenchmarkMultiWriter(b *testing.B) {
 func BenchmarkBufferedVsUnbuffered(b *testing.B) {
 	b.Run("Unbuffered", func(b *testing.B) {
 		var buf bytes.Buffer
-		config := DefaultConfig()
-		config.Writers = []io.Writer{&buf}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{&buf}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -611,10 +611,10 @@ func BenchmarkBufferedVsUnbuffered(b *testing.B) {
 		bw, _ := NewBufferedWriter(&buf, 4096)
 		defer bw.Close()
 
-		config := DefaultConfig()
-		config.Writers = []io.Writer{bw}
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{bw}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -630,11 +630,11 @@ func BenchmarkBufferedVsUnbuffered(b *testing.B) {
 // ============================================================================
 
 func BenchmarkConcurrencyLevels(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
 
-	logger, _ := New(config)
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("Sequential", func(b *testing.B) {
@@ -655,9 +655,9 @@ func BenchmarkConcurrencyLevels(b *testing.B) {
 }
 
 func BenchmarkConcurrentStructuredLogging(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.ResetTimer()
@@ -677,9 +677,9 @@ func BenchmarkConcurrentStructuredLogging(b *testing.B) {
 // ============================================================================
 
 func BenchmarkMemoryAllocation(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("Simple", func(b *testing.B) {
@@ -699,9 +699,9 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 		}
 	})
 
-	jsonConfig := JSONConfig()
-	jsonConfig.Writers = []io.Writer{io.Discard}
-	jsonLogger, _ := New(jsonConfig)
+	jsonCfg := ConfigJSON()
+	jsonCfg.Outputs = []io.Writer{io.Discard}
+	jsonLogger, _ := New(jsonCfg)
 	defer jsonLogger.Close()
 
 	b.Run("JSON", func(b *testing.B) {
@@ -721,11 +721,11 @@ func BenchmarkMemoryAllocation(b *testing.B) {
 
 func BenchmarkJSONOptions(b *testing.B) {
 	b.Run("CompactJSON", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.JSON.PrettyPrint = false
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.JSON.PrettyPrint = false
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -739,11 +739,11 @@ func BenchmarkJSONOptions(b *testing.B) {
 	})
 
 	b.Run("PrettyJSON", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.JSON.PrettyPrint = true
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.JSON.PrettyPrint = true
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -757,15 +757,15 @@ func BenchmarkJSONOptions(b *testing.B) {
 	})
 
 	b.Run("CustomFieldNames", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.JSON.FieldNames = &JSONFieldNames{
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.JSON.FieldNames = &JSONFieldNames{
 			Timestamp: "@timestamp",
 			Level:     "severity",
 			Message:   "msg",
 		}
 
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -786,10 +786,10 @@ func BenchmarkJSONOptions(b *testing.B) {
 // BenchmarkMultiWriterThroughput tests the atomic writer pointer optimization
 func BenchmarkMultiWriterThroughput(b *testing.B) {
 	b.Run("SingleWriter", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -800,10 +800,10 @@ func BenchmarkMultiWriterThroughput(b *testing.B) {
 	})
 
 	b.Run("TwoWriters", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard, io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard, io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -814,10 +814,10 @@ func BenchmarkMultiWriterThroughput(b *testing.B) {
 	})
 
 	b.Run("FiveWriters", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard, io.Discard, io.Discard, io.Discard, io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard, io.Discard, io.Discard, io.Discard, io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -830,10 +830,10 @@ func BenchmarkMultiWriterThroughput(b *testing.B) {
 
 // BenchmarkJSONMapAllocation tests the JSON map pooling optimization
 func BenchmarkJSONMapAllocation(b *testing.B) {
-	config := JSONConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-	logger, _ := New(config)
+	cfg := ConfigJSON()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("NoFields", func(b *testing.B) {
@@ -875,10 +875,10 @@ func BenchmarkJSONMapAllocation(b *testing.B) {
 
 // BenchmarkReflectionTypeCheck tests the type switch fast path optimization
 func BenchmarkReflectionTypeCheck(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("StringType", func(b *testing.B) {
@@ -937,11 +937,11 @@ func BenchmarkReflectionTypeCheck(b *testing.B) {
 
 // BenchmarkTimeFormatting tests the time cache optimization
 func BenchmarkTimeFormatting(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-	config.IncludeTime = true
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+	cfg.IncludeTime = true
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("CachedTime", func(b *testing.B) {
@@ -966,11 +966,11 @@ func BenchmarkTimeFormatting(b *testing.B) {
 // BenchmarkEndToEndText tests end-to-end text logging performance
 func BenchmarkEndToEndText(b *testing.B) {
 	b.Run("Simple", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Format = FormatText
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Format = FormatText
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -981,11 +981,11 @@ func BenchmarkEndToEndText(b *testing.B) {
 	})
 
 	b.Run("WithFields", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Format = FormatText
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Format = FormatText
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1000,11 +1000,11 @@ func BenchmarkEndToEndText(b *testing.B) {
 	})
 
 	b.Run("Parallel", func(b *testing.B) {
-		config := DefaultConfig()
-		config.Format = FormatText
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Format = FormatText
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1020,10 +1020,10 @@ func BenchmarkEndToEndText(b *testing.B) {
 // BenchmarkEndToEndJSON tests end-to-end JSON logging performance
 func BenchmarkEndToEndJSON(b *testing.B) {
 	b.Run("Simple", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1034,10 +1034,10 @@ func BenchmarkEndToEndJSON(b *testing.B) {
 	})
 
 	b.Run("WithFields", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1052,10 +1052,10 @@ func BenchmarkEndToEndJSON(b *testing.B) {
 	})
 
 	b.Run("Parallel", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1070,11 +1070,11 @@ func BenchmarkEndToEndJSON(b *testing.B) {
 
 // BenchmarkBuilderPool tests the strings.Builder pool optimization
 func BenchmarkBuilderPool(b *testing.B) {
-	config := DefaultConfig()
-	config.Format = FormatText
-	config.Writers = []io.Writer{io.Discard}
-	config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Format = FormatText
+	cfg.Outputs = []io.Writer{io.Discard}
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	b.Run("ShortMessage", func(b *testing.B) {
@@ -1106,9 +1106,9 @@ func BenchmarkBuilderPool(b *testing.B) {
 
 // BenchmarkWriterModification tests the performance of AddWriter/RemoveWriter
 func BenchmarkWriterModification(b *testing.B) {
-	config := DefaultConfig()
-	config.Writers = []io.Writer{io.Discard}
-	logger, _ := New(config)
+	cfg := NewConfig()
+	cfg.Outputs = []io.Writer{io.Discard}
+	logger, _ := New(cfg)
 	defer logger.Close()
 
 	var wg sync.WaitGroup
@@ -1140,10 +1140,10 @@ func BenchmarkWriterModification(b *testing.B) {
 // BenchmarkFieldNameCaching tests the JSON field name caching optimization
 func BenchmarkFieldNameCaching(b *testing.B) {
 	b.Run("DefaultFieldNames", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1154,17 +1154,17 @@ func BenchmarkFieldNameCaching(b *testing.B) {
 	})
 
 	b.Run("CustomFieldNames", func(b *testing.B) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		config.JSON.FieldNames = &JSONFieldNames{
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		cfg.JSON.FieldNames = &JSONFieldNames{
 			Timestamp: "@timestamp",
 			Level:     "severity",
 			Caller:    "source",
 			Message:   "msg",
 			Fields:    "data",
 		}
-		logger, _ := New(config)
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		b.ResetTimer()
@@ -1182,10 +1182,10 @@ func BenchmarkFieldNameCaching(b *testing.B) {
 // TestAllocsPerLog verifies that allocation targets are met
 func TestAllocsPerLog(t *testing.T) {
 	t.Run("SimpleTextLog", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		allocs := testing.AllocsPerRun(1000, func() {
@@ -1201,10 +1201,10 @@ func TestAllocsPerLog(t *testing.T) {
 	})
 
 	t.Run("JSONLogNoFields", func(t *testing.T) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		allocs := testing.AllocsPerRun(1000, func() {
@@ -1220,10 +1220,10 @@ func TestAllocsPerLog(t *testing.T) {
 	})
 
 	t.Run("JSONLogWithFields", func(t *testing.T) {
-		config := JSONConfig()
-		config.Writers = []io.Writer{io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := ConfigJSON()
+		cfg.Outputs = []io.Writer{io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		allocs := testing.AllocsPerRun(1000, func() {
@@ -1242,10 +1242,10 @@ func TestAllocsPerLog(t *testing.T) {
 	})
 
 	t.Run("MultiWriterLog", func(t *testing.T) {
-		config := DefaultConfig()
-		config.Writers = []io.Writer{io.Discard, io.Discard, io.Discard}
-		config.SecurityConfig = &SecurityConfig{SensitiveFilter: nil}
-		logger, _ := New(config)
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{io.Discard, io.Discard, io.Discard}
+		cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+		logger, _ := New(cfg)
 		defer logger.Close()
 
 		allocs := testing.AllocsPerRun(1000, func() {

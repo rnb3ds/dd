@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ValidateAndSecurePath validates a file path and returns a cleaned absolute path.
@@ -84,4 +85,17 @@ func ValidateAndSecurePath(path string, maxPathLength int, emptyFilePathErr, nul
 	// Note: Symlink checking is done AFTER opening the file in OpenFile
 	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities
 	return cleanPath, nil
+}
+
+// ValidateTimeFormat validates a time format string.
+// Returns nil if the format is valid or empty (empty uses default).
+// Returns an error if the format cannot be used to parse/format time.
+func ValidateTimeFormat(format string) error {
+	if format == "" {
+		return nil // Empty format is valid (will use default)
+	}
+	if _, err := time.Parse(format, time.Now().Format(format)); err != nil {
+		return fmt.Errorf("invalid time format %q: %w", format, err)
+	}
+	return nil
 }

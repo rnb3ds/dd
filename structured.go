@@ -1,14 +1,18 @@
 package dd
 
 import (
+	"context"
+	"fmt"
+	"runtime"
+	"strings"
 	"time"
+
+	"github.com/cybergodev/dd/internal"
 )
 
 // Field represents a structured log field with a key-value pair.
-type Field struct {
-	Key   string
-	Value any
-}
+// Type alias to internal.Field for API compatibility.
+type Field = internal.Field
 
 // Any creates a field with any value.
 func Any(key string, value any) Field {
@@ -105,6 +109,45 @@ func Err(err error) Field {
 	return Field{Key: "error", Value: err.Error()}
 }
 
+// ErrWithKey creates a field from an error with a custom key.
+func ErrWithKey(key string, err error) Field {
+	if err == nil {
+		return Field{Key: key, Value: nil}
+	}
+	return Field{Key: key, Value: err.Error()}
+}
+
+// ErrWithStack creates a field from an error including its stack trace.
+// Note: Stack trace capture has a small performance overhead.
+func ErrWithStack(err error) Field {
+	if err == nil {
+		return Field{Key: "error", Value: nil}
+	}
+
+	const maxDepth = 32
+	var pcs [maxDepth]uintptr
+	n := runtime.Callers(3, pcs[:])
+
+	frames := runtime.CallersFrames(pcs[:n])
+	var sb strings.Builder
+	sb.WriteString(err.Error())
+	sb.WriteString("\nStack:")
+
+	for {
+		frame, more := frames.Next()
+		if !strings.Contains(frame.File, "runtime/") &&
+			!strings.Contains(frame.File, "github.com/cybergodev/dd/") {
+			sb.WriteString(fmt.Sprintf("\n\t%s:%d: %s",
+				frame.File, frame.Line, frame.Function))
+		}
+		if !more {
+			break
+		}
+	}
+
+	return Field{Key: "error", Value: sb.String()}
+}
+
 // Package-level structured logging functions using the default logger.
 
 // DebugWith logs a structured debug message with the default logger.
@@ -121,3 +164,37 @@ func ErrorWith(msg string, fields ...Field) { Default().LogWith(LevelError, msg,
 
 // FatalWith logs a structured fatal message with the default logger and exits.
 func FatalWith(msg string, fields ...Field) { Default().LogWith(LevelFatal, msg, fields...) }
+
+// Context-aware package-level functions
+
+// DebugCtx logs a debug message with context support using the default logger.
+func DebugCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelDebug, args...) }
+
+// InfoCtx logs an info message with context support using the default logger.
+func InfoCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelInfo, args...) }
+
+// WarnCtx logs a warning message with context support using the default logger.
+func WarnCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelWarn, args...) }
+
+// ErrorCtx logs an error message with context support using the default logger.
+func ErrorCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelError, args...) }
+
+// DebugWithCtx logs a structured debug message with context support using the default logger.
+func DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelDebug, msg, fields...)
+}
+
+// InfoWithCtx logs a structured info message with context support using the default logger.
+func InfoWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelInfo, msg, fields...)
+}
+
+// WarnWithCtx logs a structured warning message with context support using the default logger.
+func WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelWarn, msg, fields...)
+}
+
+// ErrorWithCtx logs a structured error message with context support using the default logger.
+func ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelError, msg, fields...)
+}

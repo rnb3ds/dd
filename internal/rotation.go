@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// MaxDecompressSize limits the maximum bytes to read during gzip verification.
+// This protects against decompression bombs (zip bombs) that could exhaust memory.
+const MaxDecompressSize = 100 * 1024 * 1024 // 100MB
+
 func OpenFile(path string) (*os.File, int64, error) {
 	// Open file first with O_EXCL if creating new file to prevent TOCTOU
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, FilePermissions)
@@ -237,7 +241,9 @@ func verifyGzipFile(path string) error {
 	}
 	defer gr.Close()
 
-	_, err = io.Copy(io.Discard, gr)
+	// Limit bytes read to prevent decompression bombs
+	limited := io.LimitReader(gr, MaxDecompressSize)
+	_, err = io.Copy(io.Discard, limited)
 	if err != nil {
 		return fmt.Errorf("decompress: %w", err)
 	}

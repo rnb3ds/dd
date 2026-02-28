@@ -26,6 +26,14 @@ type SensitiveDataFilter struct {
 	semaphore chan struct{}
 	// activeGoroutines tracks the number of currently running filter goroutines
 	activeGoroutines atomic.Int32
+	// patternCount caches the number of patterns for O(1) access
+	patternCount atomic.Int32
+
+	// Performance monitoring counters
+	totalFiltered   atomic.Int64 // Total number of filter operations
+	totalRedactions atomic.Int64 // Total number of redactions performed
+	totalTimeouts   atomic.Int64 // Total number of timeout events
+	totalLatencyNs  atomic.Int64 // Total latency in nanoseconds (for average calculation)
 }
 
 func NewSensitiveDataFilter() *SensitiveDataFilter {
@@ -43,6 +51,7 @@ func NewSensitiveDataFilter() *SensitiveDataFilter {
 	patterns := make([]*regexp.Regexp, len(internal.CompiledFullPatterns))
 	copy(patterns, internal.CompiledFullPatterns)
 	filter.patternsPtr.Store(&patterns)
+	filter.patternCount.Store(int32(len(patterns)))
 
 	return filter
 }
@@ -57,6 +66,7 @@ func NewEmptySensitiveDataFilter() *SensitiveDataFilter {
 	// Initialize with empty patterns slice
 	emptyPatterns := make([]*regexp.Regexp, 0)
 	filter.patternsPtr.Store(&emptyPatterns)
+	filter.patternCount.Store(0)
 	return filter
 }
 
@@ -95,6 +105,7 @@ func (f *SensitiveDataFilter) addPattern(pattern string) error {
 	copy(newPatterns, *currentPatterns)
 	newPatterns[len(*currentPatterns)] = re
 	f.patternsPtr.Store(&newPatterns)
+	f.patternCount.Store(int32(len(newPatterns)))
 
 	return nil
 }
@@ -129,14 +140,14 @@ func (f *SensitiveDataFilter) ClearPatterns() {
 	defer f.mu.Unlock()
 	emptyPatterns := make([]*regexp.Regexp, 0)
 	f.patternsPtr.Store(&emptyPatterns)
+	f.patternCount.Store(0)
 }
 
 func (f *SensitiveDataFilter) PatternCount() int {
-	patterns := f.patternsPtr.Load()
-	if patterns == nil {
+	if f == nil {
 		return 0
 	}
-	return len(*patterns)
+	return int(f.patternCount.Load())
 }
 
 func (f *SensitiveDataFilter) Enable() {
@@ -167,6 +178,60 @@ func (f *SensitiveDataFilter) ActiveGoroutineCount() int32 {
 		return 0
 	}
 	return f.activeGoroutines.Load()
+}
+
+// FilterStats holds filter statistics for monitoring and observability.
+// This provides a snapshot of the filter's current state for health checks
+// and performance monitoring.
+type FilterStats struct {
+	ActiveGoroutines  int32         // Number of currently running filter goroutines
+	PatternCount      int32         // Number of registered sensitive data patterns
+	SemaphoreCapacity int           // Maximum concurrent filter operations
+	MaxInputLength    int           // Maximum input length before truncation
+	Enabled           bool          // Whether filtering is enabled
+	TotalFiltered     int64         // Total number of filter operations
+	TotalRedactions   int64         // Total number of redactions performed
+	TotalTimeouts     int64         // Total number of timeout events
+	AverageLatency    time.Duration // Average latency per filter operation
+}
+
+// GetFilterStats returns current filter statistics for monitoring.
+// This is useful for health checks, metrics collection, and debugging.
+//
+// Example:
+//
+//	stats := filter.GetFilterStats()
+//	fmt.Printf("Active goroutines: %d\n", stats.ActiveGoroutines)
+//	fmt.Printf("Patterns: %d\n", stats.PatternCount)
+//	fmt.Printf("Enabled: %v\n", stats.Enabled)
+//	fmt.Printf("Total filtered: %d\n", stats.TotalFiltered)
+//	fmt.Printf("Average latency: %v\n", stats.AverageLatency)
+func (f *SensitiveDataFilter) GetFilterStats() FilterStats {
+	if f == nil {
+		return FilterStats{
+			SemaphoreCapacity: 0,
+			MaxInputLength:    0,
+			Enabled:           false,
+		}
+	}
+
+	var avgLatency time.Duration
+	totalFiltered := f.totalFiltered.Load()
+	if totalFiltered > 0 {
+		avgLatency = time.Duration(f.totalLatencyNs.Load() / totalFiltered)
+	}
+
+	return FilterStats{
+		ActiveGoroutines:  f.activeGoroutines.Load(),
+		PatternCount:      f.patternCount.Load(),
+		SemaphoreCapacity: cap(f.semaphore),
+		MaxInputLength:    f.maxInputLength,
+		Enabled:           f.enabled.Load(),
+		TotalFiltered:     totalFiltered,
+		TotalRedactions:   f.totalRedactions.Load(),
+		TotalTimeouts:     f.totalTimeouts.Load(),
+		AverageLatency:    avgLatency,
+	}
 }
 
 // WaitForGoroutines waits for all active filter goroutines to complete or until
@@ -217,6 +282,7 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	patterns := make([]*regexp.Regexp, len(*currentPatterns))
 	copy(patterns, *currentPatterns)
 	clone.patternsPtr.Store(&patterns)
+	clone.patternCount.Store(f.patternCount.Load())
 
 	return clone
 }
@@ -226,6 +292,7 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	startTime := time.Now()
 	inputLen := len(input)
 	if inputLen == 0 {
 		return input
@@ -278,13 +345,28 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	}
 
 	result := input
+	redactionCount := int64(0)
 	for i := range patterns {
+		originalLen := len(result)
 		result = f.filterWithTimeout(result, patterns[i], timeout)
+		// Track redactions (result changed)
+		if len(result) != originalLen || result != input {
+			redactionCount++
+		}
 		// Early exit if result becomes empty or redacted
 		if result == "" || result == "[REDACTED]" {
+			redactionCount++
 			break
 		}
 	}
+
+	// Update metrics
+	f.totalFiltered.Add(1)
+	if redactionCount > 0 {
+		f.totalRedactions.Add(redactionCount)
+	}
+	latencyNs := time.Since(startTime).Nanoseconds()
+	f.totalLatencyNs.Add(latencyNs)
 
 	return result
 }
@@ -311,7 +393,12 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	if inputLen < 100*FastPathThreshold {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		return f.filterInChunksWithContext(ctx, input, pattern)
+		result := f.filterInChunksWithContext(ctx, input, pattern)
+		// Check if context timed out
+		if ctx.Err() == context.DeadlineExceeded {
+			f.totalTimeouts.Add(1)
+		}
+		return result
 	}
 
 	// Try to acquire semaphore with timeout to limit concurrent goroutines
@@ -320,6 +407,7 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 		defer func() { <-f.semaphore }()
 	case <-time.After(timeout / 2):
 		// Could not acquire semaphore within half the timeout, return [REDACTED] for safety
+		f.totalTimeouts.Add(1)
 		return "[REDACTED]"
 	}
 
@@ -354,6 +442,7 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	case res := <-done:
 		return res.output
 	case <-ctx.Done():
+		f.totalTimeouts.Add(1)
 		return "[REDACTED]"
 	}
 }
@@ -386,15 +475,22 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 		}
 	}
 
+	lastWritten := 0
+
 	for pos := 0; pos < inputLen; pos += step {
 		select {
 		case <-ctx.Done():
+			// Write remaining unprocessed input
+			if lastWritten < inputLen {
+				result.WriteString(input[lastWritten:])
+			}
 			return result.String()
 		default:
 		}
 
-		end := min(pos+chunkSize, inputLen)
-		chunk := input[pos:end]
+		chunkStart := pos
+		chunkEnd := min(pos+chunkSize, inputLen)
+		chunk := input[chunkStart:chunkEnd]
 
 		// Filter the current chunk
 		filtered := f.replaceWithPattern(chunk, pattern)
@@ -402,11 +498,17 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 		if pos == 0 {
 			// First chunk: write everything
 			result.WriteString(filtered)
+			lastWritten = chunkEnd
 		} else {
-			// Subsequent chunks: write everything
-			// The overlap ensures boundary patterns are caught in at least one chunk
-			// We write all chunks to preserve redactions, accepting some redundancy
-			result.WriteString(filtered)
+			// Subsequent chunks: skip the overlap region that was already written
+			// Only write the new portion (from overlap point to chunk end)
+			overlapStart := overlap
+			if overlapStart < len(filtered) {
+				// Simple approach: write the non-overlap portion
+				// The overlap ensures boundary patterns are caught in the previous chunk
+				result.WriteString(filtered[overlapStart:])
+			}
+			lastWritten = chunkEnd
 		}
 	}
 
@@ -620,6 +722,7 @@ func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
 	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
 	copy(patterns, internal.CompiledBasicPatterns)
 	filter.patternsPtr.Store(&patterns)
+	filter.patternCount.Store(int32(len(patterns)))
 
 	return filter
 }
@@ -635,14 +738,34 @@ func DefaultSecurityConfig() *SecurityConfig {
 	}
 }
 
-// SecureSecurityConfig returns a security config with full sensitive data filtering enabled.
+// DefaultSecurityConfigDisabled returns a security config with NO sensitive data filtering.
+// This is the default configuration for maximum performance.
+// Use this when you need raw logging without any filtering overhead.
+func DefaultSecurityConfigDisabled() *SecurityConfig {
+	return &SecurityConfig{
+		MaxMessageSize:  MaxMessageSize,
+		MaxWriters:      MaxWriterCount,
+		SensitiveFilter: nil,
+	}
+}
+
+// SecureConfig returns a security config with full sensitive data filtering enabled.
 // This includes all patterns from basic filtering plus additional patterns for
 // emails, IP addresses, JWT tokens, and database connection strings.
 // Use this for maximum security in production environments.
-func SecureSecurityConfig() *SecurityConfig {
+//
+// This is the recommended function with consistent naming (matching DefaultSecurityConfig).
+func SecureConfig() *SecurityConfig {
 	return &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
 		MaxWriters:      MaxWriterCount,
 		SensitiveFilter: NewSensitiveDataFilter(),
 	}
+}
+
+// SecureSecurityConfig returns a security config with full sensitive data filtering enabled.
+//
+// Deprecated: Use SecureConfig() for consistent naming with other configuration functions.
+func SecureSecurityConfig() *SecurityConfig {
+	return SecureConfig()
 }

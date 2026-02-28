@@ -16,172 +16,17 @@ import (
 )
 
 // ============================================================================
-// CONFIG CHAIN METHODS TESTS
+// CONFIG TESTS
 // ============================================================================
-
-func TestConfigWithFile(t *testing.T) {
-	t.Run("WithFile", func(t *testing.T) {
-		config := DefaultConfig()
-		tmpFile := filepath.Join(t.TempDir(), "test.log")
-
-		result, err := config.WithFile(tmpFile, FileWriterConfig{})
-		if err != nil {
-			t.Fatalf("WithFile() error = %v", err)
-		}
-		if result == nil {
-			t.Fatal("WithFile() should return config")
-		}
-		if len(result.Writers) == 0 {
-			t.Error("WithFile() should add writer")
-		}
-
-		// Close the file writer
-		if len(result.Writers) > 0 {
-			if fw, ok := result.Writers[len(result.Writers)-1].(*FileWriter); ok {
-				fw.Close()
-			}
-		}
-	})
-
-	t.Run("WithFileOnly", func(t *testing.T) {
-		config := DefaultConfig()
-		tmpFile := filepath.Join(t.TempDir(), "test.log")
-
-		result, err := config.WithFileOnly(tmpFile, FileWriterConfig{})
-		if err != nil {
-			t.Fatalf("WithFileOnly() error = %v", err)
-		}
-		if result == nil {
-			t.Fatal("WithFileOnly() should return config")
-		}
-		if len(result.Writers) != 1 {
-			t.Errorf("WithFileOnly() should have 1 writer, got %d", len(result.Writers))
-		}
-
-		if len(result.Writers) > 0 {
-			if fw, ok := result.Writers[0].(*FileWriter); ok {
-				fw.Close()
-			}
-		}
-	})
-
-	t.Run("WithFileNilConfig", func(t *testing.T) {
-		var config *LoggerConfig
-		tmpFile := filepath.Join(t.TempDir(), "test.log")
-
-		_, err := config.WithFile(tmpFile, FileWriterConfig{})
-		if err == nil {
-			t.Error("WithFile() on nil config should return error")
-		}
-	})
-
-	t.Run("WithFileOnlyNilConfig", func(t *testing.T) {
-		var config *LoggerConfig
-		tmpFile := filepath.Join(t.TempDir(), "test.log")
-
-		_, err := config.WithFileOnly(tmpFile, FileWriterConfig{})
-		if err == nil {
-			t.Error("WithFileOnly() on nil config should return error")
-		}
-	})
-
-	t.Run("WithFileEmptyPath", func(t *testing.T) {
-		config := DefaultConfig()
-
-		_, err := config.WithFile("", FileWriterConfig{})
-		if err == nil {
-			t.Error("WithFile() with empty path should return error")
-		}
-	})
-
-	t.Run("WithFileOnlyEmptyPath", func(t *testing.T) {
-		config := DefaultConfig()
-
-		_, err := config.WithFileOnly("", FileWriterConfig{})
-		if err == nil {
-			t.Error("WithFileOnly() with empty path should return error")
-		}
-	})
-}
-
-func TestConfigWithWriter(t *testing.T) {
-	var buf bytes.Buffer
-
-	t.Run("ValidWriter", func(t *testing.T) {
-		config := DefaultConfig()
-		result := config.WithWriter(&buf)
-
-		if result == nil {
-			t.Fatal("WithWriter() should return config")
-		}
-		if len(result.Writers) == 0 {
-			t.Error("WithWriter() should add writer")
-		}
-	})
-
-	t.Run("NilConfig", func(t *testing.T) {
-		var config *LoggerConfig
-		result := config.WithWriter(&buf)
-
-		if result != nil {
-			t.Error("WithWriter() on nil config should return nil")
-		}
-	})
-
-	t.Run("NilWriter", func(t *testing.T) {
-		config := DefaultConfig()
-		result := config.WithWriter(nil)
-
-		if result == nil {
-			t.Fatal("WithWriter() with nil writer should return config")
-		}
-	})
-}
-
-func TestConfigWithFilter(t *testing.T) {
-	filter := NewSensitiveDataFilter()
-
-	t.Run("ValidFilter", func(t *testing.T) {
-		config := DefaultConfig()
-		result := config.WithFilter(filter)
-
-		if result == nil {
-			t.Fatal("WithFilter() should return config")
-		}
-		if result.SecurityConfig == nil {
-			t.Error("WithFilter() should create security config")
-		}
-		if result.SecurityConfig.SensitiveFilter == nil {
-			t.Error("WithFilter() should set filter")
-		}
-	})
-
-	t.Run("NilConfig", func(t *testing.T) {
-		var config *LoggerConfig
-		result := config.WithFilter(filter)
-
-		if result != nil {
-			t.Error("WithFilter() on nil config should return nil")
-		}
-	})
-
-	t.Run("NilFilter", func(t *testing.T) {
-		config := DefaultConfig()
-		result := config.WithFilter(nil)
-
-		if result == nil {
-			t.Fatal("WithFilter() with nil filter should return config")
-		}
-		if result.SecurityConfig == nil {
-			t.Error("WithFilter() should create security config")
-		}
-	})
-}
 
 func TestConfigClone(t *testing.T) {
 	t.Run("FullClone", func(t *testing.T) {
-		original := DefaultConfig()
-		original.SecurityConfig.SensitiveFilter = NewSensitiveDataFilter()
+		original := NewConfig()
+		original.Security = &SecurityConfig{
+			MaxMessageSize:  1000,
+			MaxWriters:      10,
+			SensitiveFilter: NewSensitiveDataFilter(),
+		}
 		original.JSON = DefaultJSONOptions()
 		clone := original.Clone()
 
@@ -196,14 +41,14 @@ func TestConfigClone(t *testing.T) {
 		}
 
 		// Modify security filter
-		clone.SecurityConfig.SensitiveFilter.AddPattern(`test=\w+`)
-		if original.SecurityConfig.SensitiveFilter.PatternCount() == clone.SecurityConfig.SensitiveFilter.PatternCount() {
+		clone.Security.SensitiveFilter.AddPattern(`test=\w+`)
+		if original.Security.SensitiveFilter.PatternCount() == clone.Security.SensitiveFilter.PatternCount() {
 			t.Error("Modifying clone filter should not affect original")
 		}
 	})
 
 	t.Run("NilClone", func(t *testing.T) {
-		var config *LoggerConfig
+		var config *Config
 		clone := config.Clone()
 
 		if clone != nil {
@@ -212,88 +57,27 @@ func TestConfigClone(t *testing.T) {
 	})
 }
 
-func TestConfigValidation(t *testing.T) {
-	tests := []struct {
-		name    string
-		config  *LoggerConfig
-		wantErr bool
-	}{
-		{"nil config", nil, true},
-		{"valid", DefaultConfig(), false},
-		{"invalid level", &LoggerConfig{Level: LogLevel(99), Format: FormatText}, true},
-		{"invalid format", &LoggerConfig{Level: LevelInfo, Format: LogFormat(99)}, true},
-		{"no writers", &LoggerConfig{Level: LevelInfo, Format: FormatText}, false},
-		{"no time format with include time", &LoggerConfig{Level: LevelInfo, Format: FormatText, IncludeTime: true}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.config.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 // ============================================================================
 // LOGGER CREATION AND CONFIGURATION TESTS
 // ============================================================================
 
-func TestDefaultConfig(t *testing.T) {
-	config := DefaultConfig()
-
-	if config.Level != LevelInfo {
-		t.Errorf("Default level = %v, want %v", config.Level, LevelInfo)
-	}
-	if config.Format != FormatText {
-		t.Errorf("Default format = %v, want %v", config.Format, FormatText)
-	}
-	if config.SecurityConfig == nil {
-		t.Error("Default should have security config")
-	}
-}
-
-func TestDevelopmentConfig(t *testing.T) {
-	config := DevelopmentConfig()
-
-	if config.Level != LevelDebug {
-		t.Errorf("Dev level = %v, want %v", config.Level, LevelDebug)
-	}
-	if !config.DynamicCaller {
-		t.Error("Dev config should enable dynamic caller")
-	}
-}
-
-func TestJSONConfig(t *testing.T) {
-	config := JSONConfig()
-
-	if config.Format != FormatJSON {
-		t.Errorf("JSON config format = %v, want %v", config.Format, FormatJSON)
-	}
-	if config.JSON == nil {
-		t.Error("JSON config should have JSON options")
-	}
-}
-
 func TestLoggerCreation(t *testing.T) {
 	var buf bytes.Buffer
 
-	config := &LoggerConfig{
-		Level:       LevelInfo,
-		Format:      FormatText,
-		TimeFormat:  DefaultTimeFormat,
-		Writers:     []io.Writer{&buf},
-		IncludeTime: true,
-	}
+	cfg := NewConfig()
+	cfg.Level = LevelInfo
+	cfg.Format = FormatText
+	cfg.TimeFormat = DefaultTimeFormat
+	cfg.Output = &buf
+	cfg.IncludeTime = true
 
-	logger, err := New(config)
+	logger, err := New(cfg)
 	if err != nil {
-		t.Fatalf("New() error = %v", err)
+		t.Fatalf("Build() error = %v", err)
 	}
 
 	if logger == nil {
-		t.Fatal("New() returned nil logger")
+		t.Fatal("Build() returned nil logger")
 	}
 
 	logger.Info("test message")
@@ -303,7 +87,8 @@ func TestLoggerCreation(t *testing.T) {
 }
 
 func TestLoggerSetSecurityConfig(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 
 	secConfig := &SecurityConfig{
 		MaxMessageSize:  1000,
@@ -331,11 +116,10 @@ func TestLoggerSetSecurityConfig(t *testing.T) {
 
 func TestBasicLogging(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:        LevelInfo,
-		IncludeLevel: true,
-		Writers:      []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	tests := []struct {
 		name   string
@@ -361,10 +145,10 @@ func TestBasicLogging(t *testing.T) {
 
 func TestFormattedLogging(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	logger.Infof("test %s", "message")
 	if !strings.Contains(buf.String(), "test message") {
@@ -374,10 +158,10 @@ func TestFormattedLogging(t *testing.T) {
 
 func TestAllFormattedMethods(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 
 	tests := []struct {
 		name   string
@@ -402,10 +186,10 @@ func TestAllFormattedMethods(t *testing.T) {
 
 func TestStructuredLogging(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	logger.InfoWith("test", String("key", "value"), Int("count", 42))
 	output := buf.String()
@@ -420,10 +204,10 @@ func TestStructuredLogging(t *testing.T) {
 
 func TestAllStructuredLoggingMethods(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 
 	tests := []struct {
 		name   string
@@ -451,11 +235,11 @@ func TestFatalLogging(t *testing.T) {
 		var buf bytes.Buffer
 		exited := false
 
-		logger, _ := New(&LoggerConfig{
-			Level:        LevelInfo,
-			Writers:      []io.Writer{&buf},
-			FatalHandler: func() { exited = true },
-		})
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		cfg.FatalHandler = func() { exited = true }
+		logger, _ := New(cfg)
 
 		logger.Fatal("fatal message")
 
@@ -471,11 +255,11 @@ func TestFatalLogging(t *testing.T) {
 		var buf bytes.Buffer
 		exited := false
 
-		logger, _ := New(&LoggerConfig{
-			Level:        LevelInfo,
-			Writers:      []io.Writer{&buf},
-			FatalHandler: func() { exited = true },
-		})
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		cfg.FatalHandler = func() { exited = true }
+		logger, _ := New(cfg)
 
 		logger.Fatalf("fatal %s", "message")
 
@@ -491,11 +275,11 @@ func TestFatalLogging(t *testing.T) {
 		var buf bytes.Buffer
 		exited := false
 
-		logger, _ := New(&LoggerConfig{
-			Level:        LevelInfo,
-			Writers:      []io.Writer{&buf},
-			FatalHandler: func() { exited = true },
-		})
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		cfg.FatalHandler = func() { exited = true }
+		logger, _ := New(cfg)
 
 		logger.FatalWith("fatal", String("key", "value"))
 
@@ -507,11 +291,11 @@ func TestFatalLogging(t *testing.T) {
 
 func TestJSONLogging(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Format:  FormatJSON,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.Format = FormatJSON
+	logger, _ := New(cfg)
 
 	logger.Info("test message")
 
@@ -526,10 +310,10 @@ func TestJSONLogging(t *testing.T) {
 
 func TestLoggerLevelManagement(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	// Test level filtering
 	logger.Debug("debug message")
@@ -566,7 +350,10 @@ func TestConvenienceFunctions(t *testing.T) {
 	}()
 
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{Level: LevelDebug, Writers: []io.Writer{&buf}})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 	SetDefault(logger)
 
 	Info("test info")
@@ -593,7 +380,10 @@ func TestGlobalGetLevel(t *testing.T) {
 	}()
 
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{Level: LevelInfo, Writers: []io.Writer{&buf}})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 	SetDefault(logger)
 
 	// Test initial level
@@ -619,7 +409,10 @@ func TestAllGlobalFunctions(t *testing.T) {
 	defer SetDefault(oldDefault)
 
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{Level: LevelDebug, Writers: []io.Writer{&buf}})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 	SetDefault(logger)
 
 	tests := []struct {
@@ -648,7 +441,10 @@ func TestAllGlobalFormattedFunctions(t *testing.T) {
 	defer SetDefault(oldDefault)
 
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{Level: LevelDebug, Writers: []io.Writer{&buf}})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 	SetDefault(logger)
 
 	tests := []struct {
@@ -677,10 +473,10 @@ func TestGlobalStructuredLoggingMethods(t *testing.T) {
 	defer SetDefault(oldDefault)
 
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelDebug,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
 	SetDefault(logger)
 
 	InfoWith("test", String("key", "value"))
@@ -710,10 +506,10 @@ func TestGlobalStructuredLoggingMethods(t *testing.T) {
 
 func TestWriterManagement(t *testing.T) {
 	var buf1, buf2 bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf1},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf1
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	// Add writer
 	err := logger.AddWriter(&buf2)
@@ -885,13 +681,13 @@ func TestMultiWriterClose(t *testing.T) {
 
 func TestConcurrentLogging(t *testing.T) {
 	safeWriter := &threadSafeWriter{w: &bytes.Buffer{}}
-	logger, _ := New(&LoggerConfig{
-		Level:          LevelInfo,
-		IncludeTime:    false,
-		IncludeLevel:   false,
-		Writers:        []io.Writer{safeWriter},
-		SecurityConfig: &SecurityConfig{SensitiveFilter: nil},
-	})
+	cfg := NewConfig()
+	cfg.Level = LevelInfo
+	cfg.IncludeTime = false
+	cfg.IncludeLevel = false
+	cfg.Output = safeWriter
+	cfg.Security = &SecurityConfig{SensitiveFilter: nil}
+	logger, _ := New(cfg)
 
 	const goroutines = 100
 	const messagesPerGoroutine = 10
@@ -915,7 +711,8 @@ func TestConcurrentLogging(t *testing.T) {
 }
 
 func TestConcurrentLevelChanges(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 
 	const goroutines = 50
 	var wg sync.WaitGroup
@@ -932,7 +729,8 @@ func TestConcurrentLevelChanges(t *testing.T) {
 }
 
 func TestConcurrentWriterOperations(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 	const goroutines = 50
 	var wg sync.WaitGroup
 
@@ -975,11 +773,11 @@ func (t *threadSafeWriter) String() string {
 
 func TestSanitization(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:          LevelInfo,
-		Writers:        []io.Writer{&buf},
-		SecurityConfig: DefaultSecurityConfig(),
-	})
+	cfg := NewConfig()
+	cfg.Level = LevelInfo
+	cfg.Output = &buf
+	cfg.Security = DefaultSecurityConfig()
+	logger, _ := New(cfg)
 
 	// Test control character sanitization
 	logger.Info("test\x00message\x1f")
@@ -991,14 +789,13 @@ func TestSanitization(t *testing.T) {
 
 func TestMessageSizeLimit(t *testing.T) {
 	var buf bytes.Buffer
-	config := DefaultSecurityConfig()
-	config.MaxMessageSize = 100
-
-	logger, _ := New(&LoggerConfig{
-		Level:          LevelInfo,
-		Writers:        []io.Writer{&buf},
-		SecurityConfig: config,
-	})
+	secConfig := DefaultSecurityConfig()
+	secConfig.MaxMessageSize = 100
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.Security = secConfig
+	logger, _ := New(cfg)
 
 	largeMessage := strings.Repeat("a", 200)
 	logger.Info(largeMessage)
@@ -1012,17 +809,17 @@ func TestMessageSizeLimit(t *testing.T) {
 func TestSensitiveDataFiltering(t *testing.T) {
 	var buf bytes.Buffer
 	filter := NewSensitiveDataFilter()
-	config := &SecurityConfig{
+	secConfig := &SecurityConfig{
 		MaxMessageSize:  MaxMessageSize,
 		MaxWriters:      MaxWriterCount,
 		SensitiveFilter: filter,
 	}
 
-	logger, _ := New(&LoggerConfig{
-		Level:          LevelInfo,
-		Writers:        []io.Writer{&buf},
-		SecurityConfig: config,
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.Security = secConfig
+	logger, _ := New(cfg)
 
 	logger.Info("password=secret123 api_key=sk-1234")
 
@@ -1040,7 +837,8 @@ func TestSensitiveDataFiltering(t *testing.T) {
 // ============================================================================
 
 func TestNilWriter(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 
 	err := logger.AddWriter(nil)
 	if err == nil {
@@ -1055,7 +853,9 @@ func TestNilWriter(t *testing.T) {
 
 func TestMaxWritersExceeded(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{Writers: []io.Writer{&buf}})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	logger, _ := New(cfg)
 
 	// Clear default writer and add 99 more using the atomic pointer
 	writers := make([]io.Writer, 0, 100)
@@ -1081,7 +881,8 @@ func TestMaxWritersExceeded(t *testing.T) {
 }
 
 func TestClosedLogger(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 	logger.Close()
 
 	var buf bytes.Buffer
@@ -1096,10 +897,10 @@ func TestClosedLogger(t *testing.T) {
 
 func TestEmptyAndNilInputs(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	// Empty message
 	logger.Info()
@@ -1113,10 +914,10 @@ func TestEmptyAndNilInputs(t *testing.T) {
 
 func TestLargeMessage(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	largeMsg := strings.Repeat("test", 10000)
 	logger.Info(largeMsg)
@@ -1128,10 +929,10 @@ func TestLargeMessage(t *testing.T) {
 
 func TestManyFields(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	fields := make([]Field, 100)
 	for i := 0; i < 100; i++ {
@@ -1153,7 +954,9 @@ func TestLoggerClose(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.log")
 
 	fw, _ := NewFileWriter(tmpFile, FileWriterConfig{})
-	logger, _ := New(&LoggerConfig{Writers: []io.Writer{fw}})
+	cfg := NewConfig()
+	cfg.Output = fw
+	logger, _ := New(cfg)
 
 	err := logger.Close()
 	if err != nil {
@@ -1167,7 +970,9 @@ func TestLoggerClose(t *testing.T) {
 	}
 
 	// Should not close stdout/stderr
-	stdoutLogger, _ := New(&LoggerConfig{Writers: []io.Writer{os.Stdout}})
+	stdoutCfg := NewConfig()
+	stdoutCfg.Output = os.Stdout
+	stdoutLogger, _ := New(stdoutCfg)
 	stdoutLogger.Close() // Should not panic or exit
 }
 
@@ -1480,14 +1285,14 @@ func TestFullLoggingPipeline(t *testing.T) {
 	fw, _ := NewFileWriter(tmpFile, FileWriterConfig{})
 	defer fw.Close()
 
-	logger, _ := New(&LoggerConfig{
-		Level:          LevelInfo,
-		IncludeTime:    true,
-		IncludeLevel:   true,
-		DynamicCaller:  false,
-		Writers:        []io.Writer{fw},
-		SecurityConfig: DefaultSecurityConfig(),
-	})
+	cfg := NewConfig()
+	cfg.Level = LevelInfo
+	cfg.IncludeTime = true
+	cfg.IncludeLevel = true
+	cfg.DynamicCaller = false
+	cfg.Output = fw
+	cfg.Security = DefaultSecurityConfig()
+	logger, _ := New(cfg)
 
 	// Test various logging methods
 	logger.Info("simple message")
@@ -1518,13 +1323,11 @@ func TestFullLoggingPipeline(t *testing.T) {
 
 func TestJSONLoggingPipeline(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:        LevelInfo,
-		Format:       FormatJSON,
-		IncludeTime:  true,
-		IncludeLevel: true,
-		Writers:      []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.Format = FormatJSON
+	logger, _ := New(cfg)
 
 	logger.InfoWith("test", String("key", "value"), Int("count", 42))
 
@@ -1692,9 +1495,9 @@ func TestTypeConverterComplexTypes(t *testing.T) {
 
 func TestErrorReturns(t *testing.T) {
 	// Test New() with nil config - it returns a default logger
-	logger, err := New(nil)
+	logger, err := New()
 	if logger == nil {
-		t.Error("New(nil) should return default logger, not nil")
+		t.Error("New() should return default logger, not nil")
 	}
 	_ = err // Use err to avoid lint error
 
@@ -1712,7 +1515,8 @@ func TestErrorReturns(t *testing.T) {
 }
 
 func TestLoggerSetLevelInvalid(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	cfg := NewConfig()
+	logger, _ := New(cfg)
 
 	err := logger.SetLevel(LogLevel(99))
 	if err == nil {
@@ -1850,7 +1654,8 @@ func TestDefaultLoggerConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			logger, err := New(nil)
+			cfg := NewConfig()
+			logger, err := New(cfg)
 			if err != nil {
 				return
 			}
@@ -1870,13 +1675,15 @@ func TestDefaultLoggerConcurrent(t *testing.T) {
 
 func TestDefaultLoggerCompareAndSwap(t *testing.T) {
 	// Test that CompareAndSwap semantics work correctly
-	logger1, err := New(nil)
+	cfg1 := NewConfig()
+	logger1, err := New(cfg1)
 	if err != nil {
 		t.Fatalf("Failed to create logger1: %v", err)
 	}
 	defer logger1.Close()
 
-	logger2, err := New(nil)
+	cfg2 := NewConfig()
+	logger2, err := New(cfg2)
 	if err != nil {
 		t.Fatalf("Failed to create logger2: %v", err)
 	}
@@ -1897,4 +1704,169 @@ func TestDefaultLoggerCompareAndSwap(t *testing.T) {
 	if Default() != logger2 {
 		t.Error("Default() should return logger2")
 	}
+}
+
+// ============================================================================
+// CONFIG BUILD TESTS
+// ============================================================================
+
+func TestConfigBuild(t *testing.T) {
+	t.Run("BasicBuild", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+
+		logger, err := New(cfg)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		if logger == nil {
+			t.Fatal("Build() returned nil logger")
+		}
+
+		logger.Info("test message")
+		if buf.Len() == 0 {
+			t.Error("Logger should have written to buffer")
+		}
+	})
+
+	t.Run("MustBuild", func(t *testing.T) {
+		cfg := NewConfig()
+		logger := Must(cfg)
+		if logger == nil {
+			t.Error("Must() should not return nil")
+		}
+	})
+
+	t.Run("MustBuildPanic", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Error("Must() with invalid config should panic")
+			}
+		}()
+
+		cfg := NewConfig()
+		cfg.Level = LogLevel(99) // Invalid level
+		Must(cfg)
+	})
+
+	t.Run("WithMultipleOutputs", func(t *testing.T) {
+		var buf1, buf2 bytes.Buffer
+		cfg := NewConfig()
+		cfg.Outputs = []io.Writer{&buf1, &buf2}
+		cfg.Level = LevelInfo
+
+		logger, _ := New(cfg)
+		logger.Info("test")
+
+		if buf1.Len() == 0 || buf2.Len() == 0 {
+			t.Error("Message should be written to all outputs")
+		}
+	})
+
+	t.Run("WithFileOutput", func(t *testing.T) {
+		tmpFile := filepath.Join(t.TempDir(), "test.log")
+		cfg := NewConfig()
+		cfg.File = &FileConfig{
+			Path:       tmpFile,
+			MaxSizeMB:  1,
+			MaxBackups: 3,
+		}
+		cfg.Level = LevelInfo
+
+		logger, err := New(cfg)
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		defer logger.Close()
+
+		logger.Info("test message")
+
+		data, err := os.ReadFile(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to read file: %v", err)
+		}
+		if len(data) == 0 {
+			t.Error("File should contain log data")
+		}
+	})
+
+	t.Run("WithJSONFormat", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := ConfigJSON()
+		cfg.Output = &buf
+
+		logger, _ := New(cfg)
+		logger.Info("test message")
+
+		if !strings.Contains(buf.String(), `"message"`) {
+			t.Error("Output should be JSON format")
+		}
+	})
+
+	t.Run("WithSecurityConfig", func(t *testing.T) {
+		var buf bytes.Buffer
+		secConfig := DefaultSecurityConfig()
+		secConfig.MaxMessageSize = 100
+
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		cfg.Security = secConfig
+
+		logger, _ := New(cfg)
+		logger.Info(strings.Repeat("a", 200))
+
+		if len(buf.String()) > 150 {
+			t.Error("Message should be truncated")
+		}
+	})
+
+	t.Run("WithFatalHandler", func(t *testing.T) {
+		var buf bytes.Buffer
+		exited := false
+
+		cfg := NewConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		cfg.FatalHandler = func() { exited = true }
+
+		logger, _ := New(cfg)
+		logger.Fatal("fatal message")
+
+		if !exited {
+			t.Error("FatalHandler should be called")
+		}
+	})
+}
+
+func TestConfigValidation(t *testing.T) {
+	t.Run("InvalidLevel", func(t *testing.T) {
+		cfg := NewConfig()
+		cfg.Level = LogLevel(99)
+
+		_, err := New(cfg)
+		if err == nil {
+			t.Error("Build() with invalid level should return error")
+		}
+	})
+
+	t.Run("InvalidFormat", func(t *testing.T) {
+		cfg := NewConfig()
+		cfg.Format = LogFormat(99)
+
+		_, err := New(cfg)
+		if err == nil {
+			t.Error("Build() with invalid format should return error")
+		}
+	})
+
+	t.Run("NilConfig", func(t *testing.T) {
+		var cfg *Config
+		_, err := New(cfg)
+		if err == nil {
+			t.Error("New() with nil config should return error")
+		}
+	})
 }

@@ -61,9 +61,10 @@ func example1BufferedWriter() {
 	defer bufferedWriter.Close() // IMPORTANT: Always call Close() to flush!
 
 	// Create logger with buffered writer
-	config := dd.DefaultConfig()
-	config.Writers = []io.Writer{bufferedWriter}
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Output = bufferedWriter
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	// High-throughput logging
@@ -92,9 +93,10 @@ func example2MultiWriter() {
 	multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 	// Create logger with MultiWriter
-	config := dd.DefaultConfig()
-	config.Writers = []io.Writer{multiWriter}
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Output = multiWriter
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	logger.Info("This message goes to both console and file")
@@ -111,7 +113,7 @@ func example3DynamicWriterManagement() {
 	fmt.Println("3. Dynamic Writer Management")
 	fmt.Println("-----------------------------")
 
-	logger, _ := dd.New(dd.DefaultConfig())
+	logger, _ := dd.New()
 	defer logger.Close()
 
 	fmt.Printf("Initial writer count: %d\n", logger.WriterCount())
@@ -154,15 +156,17 @@ func example4WriteErrorHandler() {
 	var mu sync.Mutex
 
 	// Create config with custom error handler
-	config := dd.DefaultConfig()
-	config.WriteErrorHandler = func(writer io.Writer, err error) {
+	handler := func(writer io.Writer, err error) {
 		mu.Lock()
 		errorCount++
 		mu.Unlock()
 		fmt.Printf("  [Write Error] Writer: %T, Error: %v\n", writer, err)
 	}
 
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.WriteErrorHandler = handler
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	// Set error handler at runtime
@@ -184,7 +188,7 @@ func example5LoggerStateInspection() {
 	fmt.Println("5. Logger State Inspection")
 	fmt.Println("---------------------------")
 
-	logger, _ := dd.New(dd.DefaultConfig())
+	logger, _ := dd.New()
 	defer logger.Close()
 
 	// Check logger state

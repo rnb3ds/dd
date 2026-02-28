@@ -16,8 +16,8 @@ type Field struct {
 	Value any
 }
 
-// Constants for field formatting (imported from root package)
-var (
+// Constants for field formatting
+const (
 	// FieldBuilderCapacity is the initial capacity for field builder
 	FieldBuilderCapacity = 256
 	// EstimatedFieldSize is the estimated size per field in bytes

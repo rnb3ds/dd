@@ -36,12 +36,12 @@ func example1CoreFieldTypes() {
 	fmt.Println("1. Core Field Types")
 	fmt.Println("-------------------")
 
-	config, err := dd.JSONConfig().WithFileOnly("logs/structured.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	// Use File config for file-only JSON output
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/structured.log"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -71,12 +71,11 @@ func example2HTTPRequestLogging() {
 	fmt.Println("2. HTTP Request Logging")
 	fmt.Println("-----------------------")
 
-	config, err := dd.JSONConfig().WithFileOnly("logs/http.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/http.log"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -108,12 +107,11 @@ func example3ErrorLogging() {
 	fmt.Println("3. Error & Warning Logging")
 	fmt.Println("--------------------------")
 
-	config, err := dd.JSONConfig().WithFileOnly("logs/errors.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/errors.log"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

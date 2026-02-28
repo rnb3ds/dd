@@ -9,9 +9,8 @@ import (
 
 // fmt Package Function Re-exports
 //
-// These are direct aliases to fmt package functions (Sprint, Sprintf, Fprint, etc.).
-// They do NOT include caller information or sensitive data filtering.
-// For production logging with security filtering, use Logger methods.
+// Direct aliases to fmt package functions. For production logging with
+// security filtering, use Logger methods instead.
 
 var (
 	Sprint   = fmt.Sprint
@@ -39,13 +38,8 @@ var (
 
 // Debug Print Functions
 //
-// SECURITY WARNING: These functions output to stdout WITHOUT sensitive data filtering.
-// Use logger.Print() or logger.Info() for production logging with security filtering.
-//
-// Comparison:
-//
-//	dd.Print()     -> stdout with caller info, NO filtering
-//	logger.Print() -> configured writers with caller info, WITH filtering
+// SECURITY WARNING: Output to stdout WITHOUT sensitive data filtering.
+// Use logger.Print/Info for production logging with filtering.
 
 // Print writes to stdout with caller info. For debugging only.
 func Print(args ...any) {

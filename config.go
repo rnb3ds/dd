@@ -1,17 +1,18 @@
 package dd
 
 import (
-	"fmt"
-	"io"
-	"os"
 	"time"
 
 	"github.com/cybergodev/dd/internal"
 )
 
+// JSONOptions configures JSON output format.
 type JSONOptions = internal.JSONOptions
+
+// JSONFieldNames configures custom field names for JSON output.
 type JSONFieldNames = internal.JSONFieldNames
 
+// DefaultJSONOptions returns default JSON options.
 func DefaultJSONOptions() *JSONOptions {
 	return &JSONOptions{
 		PrettyPrint: false,
@@ -20,339 +21,18 @@ func DefaultJSONOptions() *JSONOptions {
 	}
 }
 
-type LoggerConfig struct {
-	Level             LogLevel
-	Format            LogFormat
-	TimeFormat        string
-	IncludeTime       bool
-	IncludeLevel      bool
-	FullPath          bool
-	DynamicCaller     bool
-	Writers           []io.Writer
-	SecurityConfig    *SecurityConfig
-	FatalHandler      FatalHandler
-	WriteErrorHandler WriteErrorHandler
-	JSON              *JSONOptions
-}
-
-func DefaultConfig() *LoggerConfig {
-	return &LoggerConfig{
-		Level:          LevelInfo,
-		Format:         FormatText,
-		TimeFormat:     DefaultTimeFormat,
-		IncludeTime:    true,
-		IncludeLevel:   true,
-		FullPath:       false,
-		DynamicCaller:  false,
-		SecurityConfig: DefaultSecurityConfig(),
-	}
-}
-
-func DevelopmentConfig() *LoggerConfig {
-	return &LoggerConfig{
-		Level:         LevelDebug,
-		Format:        FormatText,
-		TimeFormat:    DevTimeFormat,
-		IncludeTime:   true,
-		IncludeLevel:  true,
-		FullPath:      false,
-		DynamicCaller: true,
-	}
-}
-
-func JSONConfig() *LoggerConfig {
-	return &LoggerConfig{
-		Level:         LevelDebug,
-		Format:        FormatJSON,
-		TimeFormat:    time.RFC3339,
-		IncludeTime:   true,
-		IncludeLevel:  true,
-		FullPath:      false,
-		DynamicCaller: true,
-		JSON: &internal.JSONOptions{
-			PrettyPrint: false,
-			Indent:      DefaultJSONIndent,
-			FieldNames:  internal.DefaultJSONFieldNames(),
-		},
-	}
-}
-
-// Clone creates a copy of the configuration.
-//
-// Deep copy:
-//   - SecurityConfig and its SensitiveFilter
-//   - JSON options and FieldNames
-//
-// Shallow copy (shared references):
-//   - Writers slice (Writer instances are shared)
-//   - FatalHandler and WriteErrorHandler functions
-//
-// Returns nil if the receiver is nil.
-func (c *LoggerConfig) Clone() *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-
-	clone := &LoggerConfig{
-		Level:             c.Level,
-		Format:            c.Format,
-		TimeFormat:        c.TimeFormat,
-		IncludeTime:       c.IncludeTime,
-		IncludeLevel:      c.IncludeLevel,
-		FullPath:          c.FullPath,
-		DynamicCaller:     c.DynamicCaller,
-		FatalHandler:      c.FatalHandler,
-		WriteErrorHandler: c.WriteErrorHandler,
-		Writers:           make([]io.Writer, len(c.Writers)),
-	}
-	copy(clone.Writers, c.Writers)
-
-	if c.SecurityConfig != nil {
-		clone.SecurityConfig = c.SecurityConfig.Clone()
-	}
-
-	if c.JSON != nil {
-		clone.JSON = &JSONOptions{
-			PrettyPrint: c.JSON.PrettyPrint,
-			Indent:      c.JSON.Indent,
-		}
-		if c.JSON.FieldNames != nil {
-			clone.JSON.FieldNames = &JSONFieldNames{
-				Timestamp: c.JSON.FieldNames.Timestamp,
-				Level:     c.JSON.FieldNames.Level,
-				Caller:    c.JSON.FieldNames.Caller,
-				Message:   c.JSON.FieldNames.Message,
-				Fields:    c.JSON.FieldNames.Fields,
-			}
-		}
-	}
-
-	return clone
-}
-
-func (c *LoggerConfig) Validate() error {
-	if c == nil {
-		return ErrNilConfig
-	}
-
-	if c.Level < LevelDebug || c.Level > LevelFatal {
-		return fmt.Errorf("%w: %d (valid range: %d-%d)", ErrInvalidLevel, c.Level, LevelDebug, LevelFatal)
-	}
-
-	if c.Format != FormatText && c.Format != FormatJSON {
-		return fmt.Errorf("%w: %d (valid: %d=Text, %d=JSON)", ErrInvalidFormat, c.Format, FormatText, FormatJSON)
-	}
-
-	// Validate TimeFormat if time inclusion is enabled
-	if c.IncludeTime && c.TimeFormat != "" {
-		// Test the time format by formatting a sample time
-		if _, err := time.Parse(c.TimeFormat, time.Now().Format(c.TimeFormat)); err != nil {
-			return fmt.Errorf("invalid time format %q: %w", c.TimeFormat, err)
-		}
-	}
-
-	// Validate Writers count
-	if len(c.Writers) > MaxWriterCount {
-		return fmt.Errorf("%w: %d writers configured, maximum is %d", ErrMaxWritersExceeded, len(c.Writers), MaxWriterCount)
-	}
-
-	// Check for nil writers in the slice
-	for i, w := range c.Writers {
-		if w == nil {
-			return fmt.Errorf("writer at index %d is nil", i)
-		}
-	}
-
-	return nil
-}
-
-// ApplyDefaults sets default values for uninitialized config fields.
-// This should be called after validation and before creating the logger.
-//
-// IMPORTANT: This method modifies the receiver in place.
-// If you need to preserve the original config, clone it first:
-//
-//	config = config.Clone()
-//	config.ApplyDefaults()
-func (c *LoggerConfig) ApplyDefaults() {
-	if c == nil {
-		return
-	}
-
-	if c.IncludeTime && c.TimeFormat == "" {
-		c.TimeFormat = time.RFC3339
-	}
-
-	if len(c.Writers) == 0 {
-		c.Writers = []io.Writer{os.Stdout}
-	}
-
-	if c.SecurityConfig == nil {
-		c.SecurityConfig = DefaultSecurityConfig()
-	} else {
-		if c.SecurityConfig.MaxMessageSize <= 0 {
-			c.SecurityConfig.MaxMessageSize = MaxMessageSize
-		}
-		if c.SecurityConfig.MaxWriters <= 0 {
-			c.SecurityConfig.MaxWriters = MaxWriterCount
-		}
-	}
-}
-
-func (c *LoggerConfig) WithFile(filename string, config FileWriterConfig) (*LoggerConfig, error) {
-	if c == nil {
-		return nil, ErrNilConfig
-	}
-	if filename == "" {
-		return nil, ErrEmptyFilePath
-	}
-
-	fileWriter, err := NewFileWriter(filename, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create file writer: %w", err)
-	}
-
-	clone := c.Clone()
-	if clone.Writers == nil {
-		clone.Writers = []io.Writer{}
-	}
-
-	if len(clone.Writers) >= MaxWriterCount {
-		return nil, ErrMaxWritersExceeded
-	}
-
-	clone.Writers = append(clone.Writers, fileWriter)
-	return clone, nil
-}
-
-func (c *LoggerConfig) WithFileOnly(filename string, config FileWriterConfig) (*LoggerConfig, error) {
-	if c == nil {
-		return nil, ErrNilConfig
-	}
-	if filename == "" {
-		return nil, ErrEmptyFilePath
-	}
-
-	fileWriter, err := NewFileWriter(filename, config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create file writer: %w", err)
-	}
-
-	clone := c.Clone()
-	clone.Writers = []io.Writer{fileWriter}
-	return clone, nil
-}
-
-func (c *LoggerConfig) WithWriter(writer io.Writer) *LoggerConfig {
-	if c == nil || writer == nil {
-		return c
-	}
-
-	clone := c.Clone()
-	if clone.Writers == nil {
-		clone.Writers = []io.Writer{}
-	}
-
-	if len(clone.Writers) >= MaxWriterCount {
-		return c
-	}
-
-	clone.Writers = append(clone.Writers, writer)
-	return clone
-}
-
-// WithLevel sets the log level. Returns the original config if level is invalid
-// (out of range) to allow safe method chaining. Use Validate() to check for errors.
-func (c *LoggerConfig) WithLevel(level LogLevel) *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	if level < LevelDebug || level > LevelFatal {
-		return c
-	}
-	clone := c.Clone()
-	clone.Level = level
-	return clone
-}
-
-func (c *LoggerConfig) WithFormat(format LogFormat) *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	if format != FormatText && format != FormatJSON {
-		return c
-	}
-	clone := c.Clone()
-	clone.Format = format
-	return clone
-}
-
-func (c *LoggerConfig) WithDynamicCaller(enabled bool) *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.DynamicCaller = enabled
-	return clone
-}
-
-// DisableFiltering disables all sensitive data filtering.
-// Note: Basic filtering is enabled by default for security.
-// Use this method if you need to log raw data without any filtering.
-func (c *LoggerConfig) DisableFiltering() *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.ensureSecurityConfig()
-	clone.SecurityConfig.SensitiveFilter = nil
-	return clone
-}
-
-func (c *LoggerConfig) EnableBasicFiltering() *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.ensureSecurityConfig()
-	clone.SecurityConfig.SensitiveFilter = NewBasicSensitiveDataFilter()
-	return clone
-}
-
-func (c *LoggerConfig) EnableFullFiltering() *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.ensureSecurityConfig()
-	clone.SecurityConfig.SensitiveFilter = NewSensitiveDataFilter()
-	return clone
-}
-
-func (c *LoggerConfig) WithFilter(filter *SensitiveDataFilter) *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.ensureSecurityConfig()
-	clone.SecurityConfig.SensitiveFilter = filter
-	return clone
-}
-
-func (c *LoggerConfig) WithWriteErrorHandler(handler WriteErrorHandler) *LoggerConfig {
-	if c == nil {
-		return nil
-	}
-	clone := c.Clone()
-	clone.WriteErrorHandler = handler
-	return clone
-}
-
-func (c *LoggerConfig) ensureSecurityConfig() {
-	if c.SecurityConfig == nil {
-		c.SecurityConfig = &SecurityConfig{
-			MaxMessageSize: MaxMessageSize,
-			MaxWriters:     MaxWriterCount,
-		}
-	}
+// SamplingConfig configures log sampling for high-throughput scenarios.
+// Sampling reduces log volume by only recording a subset of messages.
+type SamplingConfig struct {
+	// Enabled controls whether sampling is active.
+	Enabled bool
+	// Initial is the number of messages that are always logged before sampling begins.
+	// This ensures visibility of initial burst traffic.
+	Initial int
+	// Thereafter is the sampling rate after Initial messages.
+	// A value of 10 means log 1 out of every 10 messages.
+	Thereafter int
+	// Tick is the time interval after which counters are reset.
+	// This allows sampling to restart periodically for burst handling.
+	Tick time.Duration
 }

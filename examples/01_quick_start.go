@@ -12,7 +12,7 @@ import (
 //
 // This example covers:
 // 1. Package-level functions (simplest)
-// 2. Configuration-based logger creation
+// 2. Config-based API (recommended)
 // 3. All log levels
 // 4. Formatted and structured logging
 // 5. Dynamic level control
@@ -20,16 +20,12 @@ func main() {
 	fmt.Println("=== DD Logger Quick Start ===\n")
 
 	example1PackageLevelFunctions()
-	example2LoggerCreation()
+	example2ConfigAPI()
 	example3LogLevels()
 	example4FormattedLogging()
 	example5DynamicLevelControl()
 
 	fmt.Println("\n✅ Quick start completed!")
-	fmt.Println("\nNext steps:")
-	fmt.Println("  • Run 02_structured_logging.go for production patterns")
-	fmt.Println("  • Run 03_configuration.go for file output and rotation")
-	fmt.Println("  • Run 05_writers.go for advanced output management")
 }
 
 // Example 1: Package-level functions (simplest way)
@@ -47,13 +43,13 @@ func example1PackageLevelFunctions() {
 	fmt.Println()
 }
 
-// Example 2: Logger creation with configuration
-func example2LoggerCreation() {
-	fmt.Println("2. Logger Creation with Configuration")
-	fmt.Println("--------------------------------------")
+// Example 2: Config-based API (recommended)
+func example2ConfigAPI() {
+	fmt.Println("2. Config-Based API (Recommended)")
+	fmt.Println("---------------------------------")
 
-	// Console logger (default)
-	logger1, err := dd.New(dd.DefaultConfig())
+	// Simple console logger (default)
+	logger1, err := dd.New()
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -61,13 +57,14 @@ func example2LoggerCreation() {
 	defer logger1.Close()
 	logger1.Info("Console only output")
 
-	// File logger
-	fileConfig, err := dd.DefaultConfig().WithFileOnly("logs/custom.log", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create file config: %v\n", err)
-		return
+	// File-only logger with Config
+	cfg2 := dd.DefaultConfig()
+	cfg2.File = &dd.FileConfig{
+		Path:       "logs/custom.log",
+		MaxSizeMB:  100,
+		MaxBackups: 10,
 	}
-	logger2, err := dd.New(fileConfig)
+	logger2, err := dd.New(cfg2)
 	if err != nil {
 		fmt.Printf("Failed to create file logger: %v\n", err)
 		return
@@ -75,33 +72,45 @@ func example2LoggerCreation() {
 	defer logger2.Close()
 	logger2.Info("File only output → logs/custom.log")
 
-	// JSON file logger
-	jsonConfig, err := dd.JSONConfig().WithFileOnly("logs/app.json", dd.FileWriterConfig{})
+	// File with custom rotation config
+	cfg3 := dd.DefaultConfig()
+	cfg3.File = &dd.FileConfig{
+		Path:       "logs/app.log",
+		MaxSizeMB:  50,
+		MaxBackups: 5,
+		Compress:   true,
+	}
+	logger3, err := dd.New(cfg3)
 	if err != nil {
-		fmt.Printf("Failed to create JSON config: %v\n", err)
+		fmt.Printf("Failed to create logger: %v\n", err)
 		return
 	}
-	logger3, err := dd.New(jsonConfig)
+	defer logger3.Close()
+	logger3.Info("File with custom config → logs/app.log")
+
+	// JSON format with debug level
+	cfg4 := dd.DefaultConfig()
+	cfg4.Format = dd.FormatJSON
+	cfg4.Level = dd.LevelDebug
+	logger4, err := dd.New(cfg4)
 	if err != nil {
 		fmt.Printf("Failed to create JSON logger: %v\n", err)
 		return
 	}
-	defer logger3.Close()
-	logger3.Info("JSON format → logs/app.json")
+	defer logger4.Close()
+	logger4.Info("JSON format with debug level")
 
 	// Multi-output (console + file)
-	multiConfig, err := dd.DefaultConfig().WithFile("logs/app.log", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create multi config: %v\n", err)
-		return
-	}
-	logger4, err := dd.New(multiConfig)
+	cfg5 := dd.DefaultConfig()
+	cfg5.File = &dd.FileConfig{Path: "logs/multi.log"}
+	cfg5.Level = dd.LevelInfo
+	logger5, err := dd.New(cfg5)
 	if err != nil {
 		fmt.Printf("Failed to create multi logger: %v\n", err)
 		return
 	}
-	defer logger4.Close()
-	logger4.Info("Both console and file output")
+	defer logger5.Close()
+	logger5.Info("Both console and file output")
 
 	fmt.Println()
 }
@@ -111,7 +120,10 @@ func example3LogLevels() {
 	fmt.Println("3. Log Levels")
 	fmt.Println("-------------")
 
-	logger, err := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
+	// Using Config for level
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -134,7 +146,7 @@ func example4FormattedLogging() {
 	fmt.Println("4. Formatted & Structured Logging")
 	fmt.Println("---------------------------------")
 
-	logger, err := dd.New(dd.DefaultConfig())
+	logger, err := dd.New()
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -165,7 +177,7 @@ func example5DynamicLevelControl() {
 	fmt.Println("5. Dynamic Level Control")
 	fmt.Println("-------------------------")
 
-	logger, err := dd.New(dd.DefaultConfig())
+	logger, err := dd.New()
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

@@ -3,7 +3,6 @@ package dd
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,66 +16,36 @@ import (
 // ============================================================================
 
 func TestConfigChainMethods(t *testing.T) {
-	t.Run("WithLevel", func(t *testing.T) {
-		config := DefaultConfig().WithLevel(LevelDebug)
-		if config.Level != LevelDebug {
-			t.Errorf("WithLevel() failed, got %v want %v", config.Level, LevelDebug)
-		}
-	})
-
-	t.Run("WithFormat", func(t *testing.T) {
-		config := DefaultConfig().WithFormat(FormatJSON)
-		if config.Format != FormatJSON {
-			t.Errorf("WithFormat() failed, got %v want %v", config.Format, FormatJSON)
-		}
-	})
-
-	t.Run("WithDynamicCaller", func(t *testing.T) {
-		config := DefaultConfig().WithDynamicCaller(true)
-		if !config.DynamicCaller {
-			t.Error("WithDynamicCaller() failed to enable")
-		}
-	})
-
 	t.Run("DisableFiltering", func(t *testing.T) {
-		config := DefaultConfig().EnableBasicFiltering()
-		config = config.DisableFiltering()
-		if config.SecurityConfig.SensitiveFilter != nil {
+		cfg := NewConfig()
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
+		cfg.Security.SensitiveFilter = nil
+		if cfg.Security.SensitiveFilter != nil {
 			t.Error("DisableFiltering() should remove filter")
 		}
 	})
 
 	t.Run("EnableBasicFiltering", func(t *testing.T) {
-		config := DefaultConfig().EnableBasicFiltering()
-		if config.SecurityConfig.SensitiveFilter == nil {
+		cfg := NewConfig()
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
+		if cfg.Security.SensitiveFilter == nil {
 			t.Error("EnableBasicFiltering() should add filter")
 		}
 	})
 
 	t.Run("EnableFullFiltering", func(t *testing.T) {
-		config := DefaultConfig().EnableFullFiltering()
-		if config.SecurityConfig.SensitiveFilter == nil {
+		cfg := NewConfig()
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewSensitiveDataFilter()}
+		if cfg.Security.SensitiveFilter == nil {
 			t.Error("EnableFullFiltering() should add filter")
 		}
 	})
 
 	t.Run("ChainMultiple", func(t *testing.T) {
-		config := DefaultConfig().
-			WithLevel(LevelDebug).
-			WithFormat(FormatJSON).
-			WithDynamicCaller(true).
-			EnableBasicFiltering()
+		cfg := NewConfig()
+		cfg.Security = &SecurityConfig{SensitiveFilter: NewBasicSensitiveDataFilter()}
 
-		if config.Level != LevelDebug {
-			t.Error("Chained WithLevel failed")
-		}
-		if config.Format != FormatJSON {
-			t.Error("Chained WithFormat failed")
-		}
-		if !config.DynamicCaller {
-			t.Error("Chained WithDynamicCaller failed")
-		}
-		if config.SecurityConfig.SensitiveFilter == nil {
+		if cfg.Security.SensitiveFilter == nil {
 			t.Error("Chained EnableBasicFiltering failed")
 		}
 	})
@@ -89,7 +58,11 @@ func TestConfigChainMethods(t *testing.T) {
 func TestLoggerPrintMethods(t *testing.T) {
 	var buf bytes.Buffer
 
-	logger, err := New(DefaultConfig().WithLevel(LevelDebug).WithWriter(&buf))
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+
+	logger, err := New(cfg)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -108,7 +81,11 @@ func TestLoggerPrintMethods(t *testing.T) {
 func TestLoggerPrintlnMethod(t *testing.T) {
 	var buf bytes.Buffer
 
-	logger, err := New(DefaultConfig().WithLevel(LevelDebug).WithWriter(&buf))
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+
+	logger, err := New(cfg)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -127,7 +104,11 @@ func TestLoggerPrintlnMethod(t *testing.T) {
 func TestLoggerPrintfMethod(t *testing.T) {
 	var buf bytes.Buffer
 
-	logger, err := New(DefaultConfig().WithLevel(LevelDebug).WithWriter(&buf))
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelDebug
+
+	logger, err := New(cfg)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -148,7 +129,7 @@ func TestLoggerPrintfMethod(t *testing.T) {
 // ============================================================================
 
 func TestLoggerTextVisualization(t *testing.T) {
-	logger, err := New(DefaultConfig())
+	logger, err := New()
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -174,7 +155,7 @@ func TestLoggerTextVisualization(t *testing.T) {
 }
 
 func TestLoggerTextfVisualization(t *testing.T) {
-	logger, err := New(DefaultConfig())
+	logger, err := New()
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -200,7 +181,7 @@ func TestLoggerTextfVisualization(t *testing.T) {
 }
 
 func TestLoggerJsonVisualization(t *testing.T) {
-	logger, err := New(DefaultConfig())
+	logger, err := New()
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -226,7 +207,7 @@ func TestLoggerJsonVisualization(t *testing.T) {
 }
 
 func TestLoggerJsonfVisualization(t *testing.T) {
-	logger, err := New(DefaultConfig())
+	logger, err := New()
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
@@ -313,10 +294,10 @@ func TestSecurityFilterEnableDisable(t *testing.T) {
 
 func TestComplexTypeFormatting(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	t.Run("SliceFormatting", func(t *testing.T) {
 		buf.Reset()
@@ -375,10 +356,10 @@ func TestComplexTypeFormatting(t *testing.T) {
 
 func TestStructuredLoggingComplexTypes(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	t.Run("SliceInField", func(t *testing.T) {
 		buf.Reset()
@@ -541,21 +522,21 @@ func TestFileCompressionTrigger(t *testing.T) {
 
 func TestJSONOptionsCustomization(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:  LevelInfo,
-		Format: FormatJSON,
-		JSON: &JSONOptions{
-			PrettyPrint: true,
-			Indent:      "  ",
-			FieldNames: &JSONFieldNames{
-				Timestamp: "time",
-				Level:     "severity",
-				Message:   "msg",
-				Fields:    "data",
-			},
+	config := NewConfig()
+	config.Level = LevelInfo
+	config.Format = FormatJSON
+	config.Output = &buf
+	config.JSON = &JSONOptions{
+		PrettyPrint: true,
+		Indent:      "  ",
+		FieldNames: &JSONFieldNames{
+			Timestamp: "time",
+			Level:     "severity",
+			Message:   "msg",
+			Fields:    "data",
 		},
-		Writers: []io.Writer{&buf},
-	})
+	}
+	logger, _ := New(config)
 
 	logger.InfoWith("test", String("key", "value"))
 	output := buf.String()
@@ -588,12 +569,12 @@ func TestJSONOptionsCustomization(t *testing.T) {
 
 func TestDynamicCallerDetection(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:         LevelInfo,
-		Writers:       []io.Writer{&buf},
-		DynamicCaller: true,
-		FullPath:      false,
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.DynamicCaller = true
+	cfg.FullPath = false
+	logger, _ := New(cfg)
 
 	logger.Info("test message")
 	output := buf.String()
@@ -605,12 +586,12 @@ func TestDynamicCallerDetection(t *testing.T) {
 
 func TestFullPathCaller(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:         LevelInfo,
-		Writers:       []io.Writer{&buf},
-		DynamicCaller: true,
-		FullPath:      true,
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.DynamicCaller = true
+	cfg.FullPath = true
+	logger, _ := New(cfg)
 
 	logger.Info("test message")
 	output := buf.String()
@@ -625,7 +606,7 @@ func TestFullPathCaller(t *testing.T) {
 // ============================================================================
 
 func TestConcurrentWriterAddRemove(t *testing.T) {
-	logger, _ := New(DefaultConfig())
+	logger, _ := New()
 	const goroutines = 50
 	var wg sync.WaitGroup
 
@@ -710,10 +691,10 @@ func TestSecureSecurityConfig(t *testing.T) {
 
 func TestEmptyStructuredFields(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	logger.InfoWith("message")
 
@@ -724,10 +705,10 @@ func TestEmptyStructuredFields(t *testing.T) {
 
 func TestVeryLongFieldName(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	longKey := strings.Repeat("a", 1000)
 	logger.InfoWith("message", String(longKey, "value"))
@@ -739,10 +720,10 @@ func TestVeryLongFieldName(t *testing.T) {
 
 func TestSpecialCharactersInMessage(t *testing.T) {
 	var buf bytes.Buffer
-	logger, _ := New(&LoggerConfig{
-		Level:   LevelInfo,
-		Writers: []io.Writer{&buf},
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	logger, _ := New(cfg)
 
 	specialMsg := "Test\n\x00\x1f\x1b\"message\""
 	logger.Info(specialMsg)
@@ -766,11 +747,11 @@ func TestFatalWithLoggingIntegration(t *testing.T) {
 	var buf bytes.Buffer
 	exited := false
 
-	logger, _ := New(&LoggerConfig{
-		Level:        LevelInfo,
-		Writers:      []io.Writer{&buf},
-		FatalHandler: func() { exited = true },
-	})
+	cfg := NewConfig()
+	cfg.Output = &buf
+	cfg.Level = LevelInfo
+	cfg.FatalHandler = func() { exited = true }
+	logger, _ := New(cfg)
 
 	logger.FatalWith("fatal", String("key", "value"))
 

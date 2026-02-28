@@ -56,7 +56,9 @@ func example2SetDefault() {
 	fmt.Println("---------------------------------------")
 
 	// Create custom logger with DEBUG level
-	customLogger, err := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	customLogger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -70,7 +72,9 @@ func example2SetDefault() {
 	dd.Info("Info message with custom logger")
 
 	// Create logger with security filtering
-	filterLogger, err := dd.New(dd.DefaultConfig().EnableBasicFiltering())
+	filterCfg := dd.DefaultConfig()
+	filterCfg.Security = dd.DefaultSecurityConfig() // Enables basic filtering
+	filterLogger, err := filterCfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -129,7 +133,9 @@ func example4BestPractices() {
 	dd.Info("password=secret123") // Will be filtered
 
 	// ✅ CORRECT: Use instance logger for specific needs
-	specialLogger, _ := dd.New(dd.DefaultConfig().DisableFiltering())
+	specialCfg := dd.DefaultConfig()
+	specialCfg.Security = dd.DefaultSecurityConfigDisabled()
+	specialLogger, _ := dd.New(specialCfg)
 	specialLogger.Info("password=raw123") // Not filtered
 	specialLogger.Close()
 
@@ -149,8 +155,10 @@ func example4BestPractices() {
 
 // setupGlobalLogger is the recommended way to configure global logger
 func setupGlobalLogger() {
-	// Create custom logger
-	logger, err := dd.New(dd.DefaultConfig().EnableBasicFiltering())
+	// Create custom logger with security filtering
+	cfg := dd.DefaultConfig()
+	cfg.Security = dd.DefaultSecurityConfig()
+	logger, err := dd.New(cfg)
 	if err != nil {
 		// Fallback to default if creation fails
 		return
@@ -169,7 +177,9 @@ func computeExpensiveDebugInfo() string {
 // Uncomment to use:
 /*
 func init() {
-	logger, _ := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	logger, _ := dd.New(cfg)
 	dd.SetDefault(logger)
 }
 */

@@ -38,12 +38,11 @@ func example1ErrorHandling() {
 	fmt.Println("1. Error Handling & Panic Recovery")
 	fmt.Println("----------------------------------")
 
-	config, err := dd.JSONConfig().WithFile("logs/errors.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/errors.json"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -80,12 +79,11 @@ func example2ContextPropagation() {
 	fmt.Println("2. Context Propagation")
 	fmt.Println("----------------------")
 
-	config, err := dd.JSONConfig().WithFile("logs/requests.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/requests.json"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -121,12 +119,11 @@ func example3GracefulShutdown() {
 	fmt.Println("3. Graceful Shutdown")
 	fmt.Println("--------------------")
 
-	config, err := dd.JSONConfig().WithFile("logs/shutdown.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/shutdown.json"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -178,12 +175,11 @@ func example4BackgroundJobs() {
 	fmt.Println("4. Background Jobs")
 	fmt.Println("------------------")
 
-	config, err := dd.JSONConfig().WithFile("logs/jobs.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	logger, err := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{Path: "logs/jobs.json"}
+
+	logger, err := dd.New(cfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

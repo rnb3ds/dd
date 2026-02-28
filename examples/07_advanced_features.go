@@ -36,12 +36,14 @@ func example1CallerDetection() {
 	fmt.Println("-------------------")
 
 	// No caller (default)
-	logger1, _ := dd.New(dd.DefaultConfig())
+	logger1, _ := dd.New()
 	defer logger1.Close()
 	logger1.Info("No caller: caller information is not shown")
 
 	// Dynamic caller (auto-detects through wrappers)
-	logger2, _ := dd.New(dd.DefaultConfig().WithDynamicCaller(true))
+	cfg := dd.DefaultConfig()
+	cfg.DynamicCaller = true
+	logger2, _ := dd.New(cfg)
 	defer logger2.Close()
 
 	// Direct call
@@ -62,13 +64,16 @@ func example2CloudLogging() {
 	fmt.Println("------------------------")
 
 	// ELK Stack format
-	elkConfig := dd.JSONConfig()
-	elkConfig.JSON.FieldNames = &dd.JSONFieldNames{
-		Timestamp: "@timestamp", // ELK standard
-		Level:     "level",
-		Message:   "message",
+	elkCfg := dd.DefaultConfig()
+	elkCfg.Format = dd.FormatJSON
+	elkCfg.JSON = &dd.JSONOptions{
+		FieldNames: &dd.JSONFieldNames{
+			Timestamp: "@timestamp", // ELK standard
+			Level:     "level",
+			Message:   "message",
+		},
 	}
-	elkLogger, _ := dd.New(elkConfig)
+	elkLogger, _ := dd.New(elkCfg)
 	defer elkLogger.Close()
 
 	elkLogger.InfoWith("ELK format",
@@ -80,12 +85,11 @@ func example2CloudLogging() {
 	)
 
 	// Distributed tracing format
-	traceConfig, err := dd.JSONConfig().WithFileOnly("logs/trace.json", dd.FileWriterConfig{})
-	if err != nil {
-		fmt.Printf("Failed to create config: %v\n", err)
-		return
-	}
-	traceLogger, err := dd.New(traceConfig)
+	traceCfg := dd.DefaultConfig()
+	traceCfg.Format = dd.FormatJSON
+	traceCfg.File = &dd.FileConfig{Path: "logs/trace.json"}
+
+	traceLogger, err := traceCfg)
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return
@@ -108,9 +112,9 @@ func example3Performance() {
 	fmt.Println("---------------------------")
 
 	// Basic throughput test
-	config := dd.DefaultConfig()
-	config.Writers = []io.Writer{io.Discard} // Avoid I/O overhead
-	logger, _ := dd.New(config)
+	cfg := dd.DefaultConfig()
+	cfg.Output = io.Discard // Avoid I/O overhead
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	iterations := 10000
@@ -178,7 +182,7 @@ func example4DebugUtilities() {
 	dd.JSONF("Request from %s", "192.168.1.1")
 
 	// Logger methods
-	logger, err := dd.New(dd.DefaultConfig())
+	logger, err := dd.New()
 	if err != nil {
 		fmt.Printf("Failed to create logger: %v\n", err)
 		return

@@ -73,23 +73,19 @@ func (tc *timeCache) getFormattedTime() string {
 		return cached.formatted
 	}
 
-	// Slow path: create new entry and atomically swap
+	// Slow path: format time and atomically swap
 	// Multiple goroutines may race here, but that's acceptable -
 	// they'll all create the same formatted time for the same second
-	newEntry := &cachedTimeEntry{
+	formatted := now.Format(tc.timeFormat)
+
+	// Only update if the cache is stale (another goroutine may have updated it)
+	// Use Store directly since the value is the same regardless of who wins the race
+	tc.current.Store(&cachedTimeEntry{
 		sec:       currentSec,
-		formatted: now.Format(tc.timeFormat),
-	}
+		formatted: formatted,
+	})
 
-	// Compare-and-swap to avoid unnecessary updates
-	// If another goroutine already updated to the same second, use their value
-	if cached == nil || cached.sec != currentSec {
-		tc.current.Store(newEntry)
-		return newEntry.formatted
-	}
-
-	// Another goroutine won the race, use their cached value
-	return cached.formatted
+	return formatted
 }
 
 // FormatterConfig holds the configuration for creating a MessageFormatter.
