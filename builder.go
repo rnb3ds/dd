@@ -66,12 +66,6 @@ type Config struct {
 	Sampling          *SamplingConfig
 }
 
-// NewConfig creates a new Config with default settings.
-// Deprecated: Use DefaultConfig() instead. This alias will be removed in a future version.
-func NewConfig() *Config {
-	return defaultConfig()
-}
-
 // DefaultConfig creates a new Config with default settings.
 //
 // Example:

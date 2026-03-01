@@ -118,7 +118,12 @@ type IntegritySigner struct {
 }
 
 // NewIntegritySigner creates a new IntegritySigner with the given configuration.
-func NewIntegritySigner(config *IntegrityConfig) (*IntegritySigner, error) {
+// If no configuration is provided, DefaultIntegrityConfig() is used.
+func NewIntegritySigner(configs ...*IntegrityConfig) (*IntegritySigner, error) {
+	var config *IntegrityConfig
+	if len(configs) > 0 {
+		config = configs[0]
+	}
 	if config == nil {
 		config = DefaultIntegrityConfig()
 	}

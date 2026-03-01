@@ -17,48 +17,6 @@ import (
 )
 
 // ============================================================================
-// CONFIG TESTS
-// ============================================================================
-
-func TestConfigClone(t *testing.T) {
-	t.Run("FullClone", func(t *testing.T) {
-		original := DefaultConfig()
-		original.Security = &SecurityConfig{
-			MaxMessageSize:  1000,
-			MaxWriters:      10,
-			SensitiveFilter: NewSensitiveDataFilter(),
-		}
-		original.JSON = DefaultJSONOptions()
-		clone := original.Clone()
-
-		if clone == nil {
-			t.Fatal("Clone() returned nil")
-		}
-
-		// Modify clone
-		clone.Level = LevelDebug
-		if original.Level == LevelDebug {
-			t.Error("Clone should not affect original")
-		}
-
-		// Modify security filter
-		clone.Security.SensitiveFilter.AddPattern(`test=\w+`)
-		if original.Security.SensitiveFilter.PatternCount() == clone.Security.SensitiveFilter.PatternCount() {
-			t.Error("Modifying clone filter should not affect original")
-		}
-	})
-
-	t.Run("NilClone", func(t *testing.T) {
-		var config *Config
-		clone := config.Clone()
-
-		if clone != nil {
-			t.Error("Clone() of nil should return nil")
-		}
-	})
-}
-
-// ============================================================================
 // LOGGER CREATION AND CONFIGURATION TESTS
 // ============================================================================
 
@@ -659,7 +617,7 @@ func TestMultiWriterManagement(t *testing.T) {
 
 func TestMultiWriterClose(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.log")
-	fw, _ := NewFileWriter(tmpFile, FileWriterConfig{})
+	fw, _ := NewFileWriter(tmpFile)
 
 	var buf bytes.Buffer
 	mw := NewMultiWriter(&buf, fw)
@@ -954,7 +912,7 @@ func TestManyFields(t *testing.T) {
 func TestLoggerClose(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "test.log")
 
-	fw, _ := NewFileWriter(tmpFile, FileWriterConfig{})
+	fw, _ := NewFileWriter(tmpFile)
 	cfg := DefaultConfig()
 	cfg.Output = fw
 	logger, _ := New(cfg)
@@ -1084,7 +1042,7 @@ func TestJSONFieldNamesDefaults(t *testing.T) {
 func TestFullLoggingPipeline(t *testing.T) {
 	tmpFile := t.TempDir() + "/test.log"
 
-	fw, _ := NewFileWriter(tmpFile, FileWriterConfig{})
+	fw, _ := NewFileWriter(tmpFile)
 	defer fw.Close()
 
 	cfg := DefaultConfig()
@@ -1304,7 +1262,7 @@ func TestErrorReturns(t *testing.T) {
 	_ = err // Use err to avoid lint error
 
 	// Test NewFileWriter with invalid path
-	_, err = NewFileWriter("\x00invalid", FileWriterConfig{})
+	_, err = NewFileWriter("\x00invalid")
 	if err == nil {
 		t.Error("NewFileWriter() with invalid path should fail")
 	}

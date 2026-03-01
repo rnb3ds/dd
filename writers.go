@@ -49,7 +49,12 @@ func DefaultFileWriterConfig() FileWriterConfig {
 	}
 }
 
-func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
+func NewFileWriter(path string, opts ...FileWriterConfig) (*FileWriter, error) {
+	var config FileWriterConfig
+	if len(opts) > 0 {
+		config = opts[0]
+	}
+
 	securePath, err := internal.ValidateAndSecurePath(path, MaxPathLength, ErrEmptyFilePath, ErrNullByte, ErrPathTooLong, ErrPathTraversal, ErrInvalidPath)
 	if err != nil {
 		return nil, err
@@ -251,11 +256,16 @@ type BufferedWriter struct {
 // NewBufferedWriter creates a new BufferedWriter with the specified buffer size.
 // The writer automatically flushes when the buffer is half full or every 100ms.
 // Remember to call Close() to ensure all buffered data is written to the underlying writer.
-func NewBufferedWriter(w io.Writer, bufferSize int) (*BufferedWriter, error) {
+// If bufferSize is not specified or is 0, DefaultBufferSizeKB (4KB) is used.
+func NewBufferedWriter(w io.Writer, bufferSizes ...int) (*BufferedWriter, error) {
 	if w == nil {
 		return nil, ErrNilWriter
 	}
 
+	bufferSize := 0
+	if len(bufferSizes) > 0 {
+		bufferSize = bufferSizes[0]
+	}
 	if bufferSize < DefaultBufferSizeKB*1024 {
 		bufferSize = DefaultBufferSizeKB * 1024
 	}
@@ -526,8 +536,11 @@ func (mw *MultiWriter) Close() error {
 	var errs []error
 	for _, w := range writers {
 		if closer, ok := w.(io.Closer); ok {
-			if err := closer.Close(); err != nil {
-				errs = append(errs, err)
+			// Skip standard streams to prevent closing os.Stdout/Stderr/Stdin
+			if w != os.Stdout && w != os.Stderr && w != os.Stdin {
+				if err := closer.Close(); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}

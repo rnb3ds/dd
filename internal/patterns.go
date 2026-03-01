@@ -431,20 +431,121 @@ var ExactMatchOnlyKeywords = map[string]struct{}{
 	"url":  {},
 }
 
+// Pre-computed sorted keyword slices for efficient exact matching with binary search
+var (
+	// sortedSensitiveKeywords is a pre-sorted slice of SensitiveKeywords for binary search
+	sortedSensitiveKeywords []string
+	// sortedExactMatchKeywords is a pre-sorted slice of ExactMatchOnlyKeywords for binary search
+	sortedExactMatchKeywords []string
+	// substringCheckKeywords contains keywords sorted by length (longest first) for substring matching
+	substringCheckKeywords []string
+	// keywordInitOnce ensures keyword slices are initialized only once
+	keywordInitOnce sync.Once
+)
+
+// initKeywordSlices initializes the pre-sorted keyword slices for efficient lookup.
+// This is called once on first use.
+func initKeywordSlices() {
+	keywordInitOnce.Do(func() {
+		// Initialize sorted slices for exact match
+		sortedSensitiveKeywords = make([]string, 0, len(SensitiveKeywords))
+		for k := range SensitiveKeywords {
+			sortedSensitiveKeywords = append(sortedSensitiveKeywords, k)
+		}
+		sortStrings(sortedSensitiveKeywords)
+
+		sortedExactMatchKeywords = make([]string, 0, len(ExactMatchOnlyKeywords))
+		for k := range ExactMatchOnlyKeywords {
+			sortedExactMatchKeywords = append(sortedExactMatchKeywords, k)
+		}
+		sortStrings(sortedExactMatchKeywords)
+
+		// Initialize substring check keywords (same as sensitive keywords)
+		substringCheckKeywords = make([]string, len(sortedSensitiveKeywords))
+		copy(substringCheckKeywords, sortedSensitiveKeywords)
+	})
+}
+
+// sortStrings sorts a string slice in place using quicksort.
+// This avoids importing sort package and is faster for small slices.
+func sortStrings(s []string) {
+	if len(s) < 2 {
+		return
+	}
+	quickSortStrings(s, 0, len(s)-1)
+}
+
+func quickSortStrings(s []string, lo, hi int) {
+	for lo < hi {
+		if hi-lo < 10 {
+			// Use insertion sort for small ranges
+			for i := lo + 1; i <= hi; i++ {
+				for j := i; j > lo && s[j] < s[j-1]; j-- {
+					s[j], s[j-1] = s[j-1], s[j]
+				}
+			}
+			return
+		}
+		pivot := partitionStrings(s, lo, hi)
+		if pivot-lo < hi-pivot {
+			quickSortStrings(s, lo, pivot-1)
+			lo = pivot + 1
+		} else {
+			quickSortStrings(s, pivot+1, hi)
+			hi = pivot - 1
+		}
+	}
+}
+
+func partitionStrings(s []string, lo, hi int) int {
+	pivot := s[hi]
+	i := lo
+	for j := lo; j < hi; j++ {
+		if s[j] < pivot {
+			s[i], s[j] = s[j], s[i]
+			i++
+		}
+	}
+	s[i], s[hi] = s[hi], s[i]
+	return i
+}
+
+// binarySearchString performs binary search on a sorted string slice.
+// Returns true if the target is found.
+func binarySearchString(sorted []string, target string) bool {
+	lo, hi := 0, len(sorted)-1
+	for lo <= hi {
+		mid := lo + (hi-lo)/2
+		if sorted[mid] == target {
+			return true
+		}
+		if sorted[mid] < target {
+			lo = mid + 1
+		} else {
+			hi = mid - 1
+		}
+	}
+	return false
+}
+
 // IsSensitiveKey checks if a key indicates sensitive data.
 // It uses both exact match and substring matching for comprehensive detection.
+// Performance optimized with pre-sorted slices and binary search for exact matching,
+// and efficient substring matching for compound keys.
 func IsSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
 
-	// Fast path: try exact match with inline ASCII lowercase comparison
-	// This avoids strings.ToLower allocation for exact matches
-	keyLen := len(key)
+	// Ensure keyword slices are initialized
+	initKeywordSlices()
 
-	// Check exact match in both maps using inline lowercase comparison
-	// For short keys (< 64 bytes), use stack-allocated buffer
+	// Convert key to lowercase inline to avoid allocation
+	keyLen := len(key)
+	var lowerKey string
+
 	if keyLen <= 64 {
+		// Use stack-allocated buffer for short keys
 		var lowerBuf [64]byte
 		for i := 0; i < keyLen; i++ {
 			c := key[i]
@@ -453,42 +554,29 @@ func IsSensitiveKey(key string) bool {
 			}
 			lowerBuf[i] = c
 		}
-		lowerKey := string(lowerBuf[:keyLen])
-
-		// Check exact match for all keywords
-		if _, exists := SensitiveKeywords[lowerKey]; exists {
-			return true
-		}
-		if _, exists := ExactMatchOnlyKeywords[lowerKey]; exists {
-			return true
-		}
-
-		// Substring match for compound keys like "user_password", "api_key_secret", etc.
-		for keyword := range SensitiveKeywords {
-			if strings.Contains(lowerKey, keyword) {
-				return true
-			}
-		}
-		return false
+		lowerKey = string(lowerBuf[:keyLen])
+	} else {
+		// Use strings.ToLower for long keys
+		lowerKey = strings.ToLower(key)
 	}
 
-	// Slow path: for long keys, use strings.ToLower
-	lowerKey := strings.ToLower(key)
-
-	// Check exact match for all keywords
-	if _, exists := SensitiveKeywords[lowerKey]; exists {
+	// Fast path: binary search for exact match in sensitive keywords
+	if binarySearchString(sortedSensitiveKeywords, lowerKey) {
 		return true
 	}
-	if _, exists := ExactMatchOnlyKeywords[lowerKey]; exists {
+
+	// Fast path: binary search for exact match in exact-match-only keywords
+	if binarySearchString(sortedExactMatchKeywords, lowerKey) {
 		return true
 	}
 
 	// Substring match for compound keys like "user_password", "api_key_secret", etc.
-	// Only use SensitiveKeywords (not ExactMatchOnlyKeywords) for substring matching
-	for keyword := range SensitiveKeywords {
+	// Use pre-sorted slice instead of map iteration for better cache locality
+	for _, keyword := range substringCheckKeywords {
 		if strings.Contains(lowerKey, keyword) {
 			return true
 		}
 	}
+
 	return false
 }

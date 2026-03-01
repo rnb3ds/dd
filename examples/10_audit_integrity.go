@@ -44,8 +44,8 @@ func section1AuditLogging() {
 
 	// Log security events using helper methods
 	auditLogger.LogSensitiveDataRedaction(
-		"password=*",        // pattern
-		"password",          // field name
+		"password=*", // pattern
+		"password",   // field name
 		"Password field was redacted in user input",
 	)
 
@@ -104,7 +104,7 @@ func section2IntegritySigning() {
 		dd.Time("timestamp", time.Now()),
 	}
 	signedMessage := signer.SignFields("Audit event", fields)
-	fmt.Printf("  Signed with fields: %s\n", signedMessage[:min(50, len(signedMessage))]+"...")
+	fmt.Printf("  Signed with fields: %s\n", signedMessage[:minInt(50, len(signedMessage))]+"...")
 
 	fmt.Println()
 }
@@ -129,7 +129,7 @@ func section3Verification() {
 	// Sign a message
 	message := "Critical audit event: admin access granted"
 	signedEntry := message + " " + signer.Sign(message)
-	fmt.Printf("  Signed entry: %s\n", signedEntry[:min(60, len(signedEntry))]+"...")
+	fmt.Printf("  Signed entry: %s\n", signedEntry[:minInt(60, len(signedEntry))]+"...")
 
 	// Verify the signature
 	result := dd.VerifyAuditEvent(signedEntry, signer)
@@ -152,7 +152,7 @@ func section3Verification() {
 	fmt.Println()
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

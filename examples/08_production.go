@@ -238,7 +238,7 @@ func section5Performance() {
 	// Tip 1: Disable security filtering for max performance
 	fastCfg := dd.DefaultConfig()
 	fastCfg.Output = io.Discard
-	fastCfg.Security = dd.DefaultSecurityConfigDisabled()
+	fastCfg.Security = dd.SecurityConfigForLevel(dd.SecurityLevelDevelopment)
 
 	fastLogger, _ := dd.New(fastCfg)
 	defer fastLogger.Close()

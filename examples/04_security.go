@@ -24,6 +24,7 @@ func main() {
 	section2FullFiltering()
 	section3CustomFiltering()
 	section4FilterStats()
+	section5DisableFiltering()
 
 	fmt.Println("\n✅ Security examples completed!")
 }
@@ -159,10 +160,10 @@ func section4FilterStats() {
 }
 
 // Example: Disable filtering completely (use with caution)
-func exampleDisableFiltering() {
+func section5DisableFiltering() {
 	// No filtering - maximum performance
 	cfg := dd.DefaultConfig()
-	cfg.Security = dd.DefaultSecurityConfigDisabled()
+	cfg.Security = dd.SecurityConfigForLevel(dd.SecurityLevelDevelopment)
 
 	logger, _ := dd.New(cfg)
 	defer logger.Close()

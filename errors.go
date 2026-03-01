@@ -302,13 +302,13 @@ func (e *MultiWriterError) AddError(index int, writer io.Writer, err error) {
 // Example:
 //
 //	// Instead of:
-//	writer, err := dd.NewBufferedWriter(file, 4096)
+//	writer, err := dd.NewBufferedWriter(file)
 //	if err != nil {
 //	    panic(err)
 //	}
 //
 //	// Use:
-//	writer := dd.MustVal(dd.NewBufferedWriter(file, 4096))
+//	writer := dd.MustVal(dd.NewBufferedWriter(file))
 //
 //	// Also works with other return-value-and-error functions:
 //	file := dd.MustVal(os.Open("file.txt"))

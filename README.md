@@ -156,9 +156,9 @@ logger, _ := dd.New(cfg)
 
 // Automatic filtering
 logger.Info("password=secret123")           // → password=[REDACTED]
-logger.Info("api_key=sk-abc123")           // → api_key=[REDACTED]
+logger.Info("api_key=sk-abc123")            // → api_key=[REDACTED]
 logger.Info("credit_card=4532015112830366") // → credit_card=[REDACTED]
-logger.Info("email=user@example.com")      // → email=[REDACTED]
+logger.Info("email=user@example.com")       // → email=[REDACTED]
 ```
 
 **Basic Filtering** covers: passwords, API keys, credit cards, phone numbers, database URLs
@@ -188,7 +188,7 @@ cfg.Security = &dd.SecurityConfig{
 
 ```go
 cfg := dd.DefaultConfig()
-cfg.Security = dd.DefaultSecurityConfigDisabled()
+cfg.Security = dd.SecurityConfigForLevel(dd.SecurityLevelDevelopment)
 ```
 
 ## 📊 Structured Logging
@@ -238,7 +238,7 @@ requestLogger.Info("Processing request")
 logger := dd.MustToAll("logs/app.log")
 
 // Or use MultiWriter
-fileWriter, _ := dd.NewFileWriter("logs/app.log", dd.FileWriterConfig{})
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
 multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 cfg := dd.DefaultConfig()
@@ -249,8 +249,8 @@ logger, _ := dd.New(cfg)
 ### Buffered Writes (High Throughput)
 
 ```go
-fileWriter, _ := dd.NewFileWriter("logs/app.log", dd.FileWriterConfig{})
-bufferedWriter, _ := dd.NewBufferedWriter(fileWriter, 4096)  // 4KB buffer
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
+bufferedWriter, _ := dd.NewBufferedWriter(fileWriter)  // Default 4KB buffer
 defer bufferedWriter.Close()  // IMPORTANT: Flush on close
 
 cfg := dd.DefaultConfig()
@@ -263,7 +263,7 @@ logger, _ := dd.New(cfg)
 ```go
 logger, _ := dd.New()
 
-fileWriter, _ := dd.NewFileWriter("logs/dynamic.log", dd.FileWriterConfig{})
+fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
 logger.AddWriter(fileWriter)        // Add at runtime
 logger.RemoveWriter(fileWriter)     // Remove at runtime
 

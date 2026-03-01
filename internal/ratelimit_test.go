@@ -298,3 +298,122 @@ func TestRateLimiter_NewSecondReset(t *testing.T) {
 		t.Error("Message should be allowed after second reset")
 	}
 }
+
+// ============================================================================
+// RATE LIMITER BOUNDARY TESTS
+// ============================================================================
+
+func TestRateLimiter_ZeroConfig(t *testing.T) {
+	// Zero config should disable rate limiting
+	config := &RateLimitConfig{
+		MaxMessagesPerSecond: 0,
+		MaxBytesPerSecond:    0,
+		BurstSize:            0,
+		Strategy:             RateLimitStrategyDrop,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// All messages should pass
+	for i := 0; i < 1000; i++ {
+		if rl.ShouldRateLimit(100) {
+			t.Error("Zero config should not rate limit any messages")
+		}
+	}
+}
+
+func TestRateLimiter_NegativeValues(t *testing.T) {
+	// Negative values should be treated as disabled
+	config := &RateLimitConfig{
+		MaxMessagesPerSecond: -1,
+		MaxBytesPerSecond:    -1,
+		BurstSize:            -1,
+		Strategy:             RateLimitStrategyDrop,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Should not panic and should not rate limit
+	for i := 0; i < 100; i++ {
+		if rl.ShouldRateLimit(100) {
+			t.Error("Negative values should disable rate limiting")
+		}
+	}
+}
+
+func TestRateLimiter_VeryLargeMessage(t *testing.T) {
+	config := &RateLimitConfig{
+		MaxMessagesPerSecond: 0,   // Disabled
+		MaxBytesPerSecond:    100, // 100 bytes/sec
+		BurstSize:            10,
+		Strategy:             RateLimitStrategyDrop,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Very large message should be rate limited immediately
+	if !rl.ShouldRateLimit(10000) {
+		t.Error("Very large message should be rate limited")
+	}
+
+	// Small messages should still pass until burst is exhausted
+	allowed := 0
+	for i := 0; i < 20; i++ {
+		if !rl.ShouldRateLimit(5) {
+			allowed++
+		}
+	}
+
+	if allowed < 10 {
+		t.Errorf("Expected at least 10 small messages allowed, got %d", allowed)
+	}
+}
+
+func TestRateLimiter_VeryHighRate(t *testing.T) {
+	// Very high rate should effectively allow all messages
+	config := &RateLimitConfig{
+		MaxMessagesPerSecond: 1000000, // 1M messages/sec
+		MaxBytesPerSecond:    0,
+		BurstSize:            100000,
+		Strategy:             RateLimitStrategyDrop,
+	}
+
+	rl := NewRateLimiter(config)
+
+	allowed := 0
+	for i := 0; i < 10000; i++ {
+		if !rl.ShouldRateLimit(100) {
+			allowed++
+		}
+	}
+
+	// All should be allowed
+	if allowed != 10000 {
+		t.Errorf("Expected all 10000 messages allowed, got %d", allowed)
+	}
+}
+
+func TestRateLimiter_BurstOnly(t *testing.T) {
+	// Only burst, no sustained rate
+	config := &RateLimitConfig{
+		MaxMessagesPerSecond: 1, // Very low
+		MaxBytesPerSecond:    0,
+		BurstSize:            50,
+		Strategy:             RateLimitStrategyDrop,
+	}
+
+	rl := NewRateLimiter(config)
+
+	// Should allow burst
+	allowed := 0
+	for i := 0; i < 100; i++ {
+		if !rl.ShouldRateLimit(100) {
+			allowed++
+		}
+	}
+
+	// Should allow approximately MaxMessagesPerSecond + BurstSize
+	if allowed < 40 || allowed > 60 {
+		t.Errorf("Expected ~50 messages (burst), got %d", allowed)
+	}
+}

@@ -243,10 +243,10 @@ logger.InfoWith("Test",
 File writers automatically validate paths to prevent directory traversal attacks:
 ```go
 // Safe: Creates file in logs directory
-fileWriter, _ := dd.NewFileWriter("logs/app.log", nil)
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
 
 // Protected: Path traversal attempts are blocked
-fileWriter, _ := dd.NewFileWriter("../../../etc/passwd", nil) // Returns error
+fileWriter, _ := dd.NewFileWriter("../../../etc/passwd") // Returns error
 ```
 
 #### Symlink and Hardlink Protection
@@ -547,8 +547,7 @@ If you discover a security vulnerability in the DD library, please report it res
 ## Additional Resources
 
 - [README.md](README.md) - General documentation
-- [examples/04_security_features.go](examples/04_security_features.go) - Security examples
-- [security_advanced_test.go](security_advanced_test.go) - Security test cases
+- [examples/04_security_features.go](examples/04_security.go) - Security examples
 
 ---
 

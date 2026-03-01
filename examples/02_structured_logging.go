@@ -121,9 +121,8 @@ func section3BestPractices() {
 	)
 
 	// ✅ DO: Include error context
-	err := errors.New("database timeout")
 	logger.ErrorWith("Operation failed",
-		dd.Err(err),
+		dd.Err(errors.New("database timeout")),
 		dd.String("operation", "db_query"),
 		dd.String("host", "db.example.com"),
 		dd.Int("retry_count", 3),

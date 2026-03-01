@@ -2,6 +2,7 @@ package dd
 
 import (
 	"context"
+	"fmt"
 )
 
 // LoggerEntry represents a logger with pre-set fields.
@@ -111,7 +112,8 @@ func (e *LoggerEntry) Log(level LogLevel, args ...any) {
 
 // Logf logs a formatted message at the specified level with the entry's fields.
 func (e *LoggerEntry) Logf(level LogLevel, format string, args ...any) {
-	e.logger.LogWith(level, format, e.fields...)
+	msg := fmt.Sprintf(format, args...)
+	e.logger.LogWith(level, msg, e.fields...)
 }
 
 // LogWith logs a structured message with the entry's fields plus additional fields.
@@ -136,7 +138,7 @@ func (e *LoggerEntry) LogfCtx(ctx context.Context, level LogLevel, format string
 	if !e.logger.shouldLog(level) {
 		return
 	}
-	msg := format
+	msg := fmt.Sprintf(format, args...)
 	msg = e.logger.applyMessageSecurity(msg)
 	contextFields := e.logger.extractContextFields(ctx)
 	allFields := append(contextFields, e.fields...)

@@ -156,9 +156,9 @@ logger, _ := dd.New(cfg)
 
 // 自动过滤
 logger.Info("password=secret123")           // → password=[REDACTED]
-logger.Info("api_key=sk-abc123")           // → api_key=[REDACTED]
+logger.Info("api_key=sk-abc123")            // → api_key=[REDACTED]
 logger.Info("credit_card=4532015112830366") // → credit_card=[REDACTED]
-logger.Info("email=user@example.com")      // → email=[REDACTED]
+logger.Info("email=user@example.com")       // → email=[REDACTED]
 ```
 
 **基础过滤** 覆盖：密码、API Key、信用卡号、手机号、数据库连接串
@@ -188,7 +188,7 @@ cfg.Security = &dd.SecurityConfig{
 
 ```go
 cfg := dd.DefaultConfig()
-cfg.Security = dd.DefaultSecurityConfigDisabled()
+cfg.Security = dd.SecurityConfigForLevel(dd.SecurityLevelDevelopment)
 ```
 
 ## 📊 结构化日志
@@ -238,7 +238,7 @@ requestLogger.Info("处理请求")
 logger := dd.MustToAll("logs/app.log")
 
 // 或使用 MultiWriter
-fileWriter, _ := dd.NewFileWriter("logs/app.log", dd.FileWriterConfig{})
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
 multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 cfg := dd.DefaultConfig()
@@ -249,8 +249,8 @@ logger, _ := dd.New(cfg)
 ### 缓冲写入（高吞吐场景）
 
 ```go
-fileWriter, _ := dd.NewFileWriter("logs/app.log", dd.FileWriterConfig{})
-bufferedWriter, _ := dd.NewBufferedWriter(fileWriter, 4096)  // 4KB 缓冲
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
+bufferedWriter, _ := dd.NewBufferedWriter(fileWriter)  // 默认 4KB 缓冲
 defer bufferedWriter.Close()  // 重要：关闭时刷新缓冲
 
 cfg := dd.DefaultConfig()
@@ -263,7 +263,7 @@ logger, _ := dd.New(cfg)
 ```go
 logger, _ := dd.New()
 
-fileWriter, _ := dd.NewFileWriter("logs/dynamic.log", dd.FileWriterConfig{})
+fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
 logger.AddWriter(fileWriter)        // 运行时添加
 logger.RemoveWriter(fileWriter)     // 运行时移除
 

@@ -268,17 +268,3 @@ func WipeBytes(data []byte) {
 		data[i] = 0
 	}
 }
-
-// WipeString zeros the bytes of a string's underlying data.
-// Note: This is a no-op for strings since they're immutable in Go.
-//
-// Deprecated: This function does nothing and cannot actually wipe strings.
-// Strings in Go are immutable and cannot be modified in place.
-// Use SecureString for sensitive data that needs to be cleared after use.
-// This function will be removed in a future major version.
-func WipeString(s string) {
-	// Strings are immutable in Go, so we can't actually zero them.
-	// This function exists for backward compatibility only.
-	// In practice, use SecureString for sensitive data that needs to be cleared.
-	// WARNING: This function does nothing and will be removed in v2.
-}

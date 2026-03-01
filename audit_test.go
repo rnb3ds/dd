@@ -358,3 +358,137 @@ func TestNewAuditLogger_NilConfig(t *testing.T) {
 
 	al.Close()
 }
+
+// TestAuditLogger_ConcurrentTypeCount tests that incrementTypeCount correctly
+// handles concurrent increments for the same event type without losing counts.
+// This test validates the fix for the check-then-act race condition.
+func TestAuditLogger_ConcurrentTypeCount(t *testing.T) {
+	config := &AuditConfig{
+		Enabled:         true,
+		Output:          nil,
+		BufferSize:      1000,
+		MinimumSeverity: AuditSeverityInfo,
+	}
+
+	al := NewAuditLogger(config)
+	defer al.Close()
+
+	numGoroutines := 100
+	eventsPerGoroutine := 100
+	expectedTotal := numGoroutines * eventsPerGoroutine
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	// All goroutines log the same event type concurrently
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			for j := 0; j < eventsPerGoroutine; j++ {
+				al.Log(AuditEvent{
+					Type:     AuditEventSensitiveDataRedacted,
+					Message:  "concurrent test",
+					Severity: AuditSeverityInfo,
+				})
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Wait for async processing to complete
+	time.Sleep(100 * time.Millisecond)
+
+	stats := al.Stats()
+
+	// Verify no events were dropped (buffer should be large enough)
+	if stats.Dropped > 0 {
+		t.Logf("Warning: %d events were dropped due to buffer overflow", stats.Dropped)
+	}
+
+	// Verify total events
+	actualTotal := stats.TotalEvents
+	if actualTotal != int64(expectedTotal)-stats.Dropped {
+		t.Errorf("TotalEvents = %d, want %d (dropped: %d)",
+			actualTotal, expectedTotal, stats.Dropped)
+	}
+
+	// Verify type-specific count matches total
+	typeCount := stats.ByType[AuditEventSensitiveDataRedacted]
+	if typeCount != actualTotal {
+		t.Errorf("Type count mismatch: ByType=%d, TotalEvents=%d", typeCount, actualTotal)
+	}
+
+	t.Logf("Concurrent test passed: %d events logged, %d dropped, type count=%d",
+		stats.TotalEvents, stats.Dropped, typeCount)
+}
+
+// TestAuditLogger_ConcurrentMultipleTypes tests concurrent logging of multiple
+// event types to verify that LoadOrStore handles multiple new types correctly.
+func TestAuditLogger_ConcurrentMultipleTypes(t *testing.T) {
+	config := &AuditConfig{
+		Enabled:         true,
+		Output:          nil,
+		BufferSize:      2000,
+		MinimumSeverity: AuditSeverityInfo,
+	}
+
+	al := NewAuditLogger(config)
+	defer al.Close()
+
+	eventTypes := []AuditEventType{
+		AuditEventSensitiveDataRedacted,
+		AuditEventRateLimitExceeded,
+		AuditEventSecurityViolation,
+		AuditEventIntegrityViolation,
+		AuditEventReDoSAttempt,
+	}
+
+	numGoroutines := 50
+	eventsPerGoroutine := 20
+
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines * len(eventTypes))
+
+	// Each event type gets its own set of goroutines
+	for _, eventType := range eventTypes {
+		eventType := eventType // capture
+		for i := 0; i < numGoroutines; i++ {
+			go func() {
+				defer wg.Done()
+				for j := 0; j < eventsPerGoroutine; j++ {
+					al.Log(AuditEvent{
+						Type:     eventType,
+						Message:  "concurrent multi-type test",
+						Severity: AuditSeverityInfo,
+					})
+				}
+			}()
+		}
+	}
+
+	wg.Wait()
+	time.Sleep(100 * time.Millisecond)
+
+	stats := al.Stats()
+	expectedPerType := numGoroutines * eventsPerGoroutine
+
+	for _, eventType := range eventTypes {
+		count := stats.ByType[eventType]
+		// Account for possible drops due to buffer overflow
+		if count < int64(expectedPerType) && stats.Dropped == 0 {
+			t.Errorf("EventType %v: count=%d, expected at least %d",
+				eventType, count, expectedPerType)
+		}
+		t.Logf("EventType %v: %d events logged", eventType, count)
+	}
+
+	totalByType := int64(0)
+	for _, count := range stats.ByType {
+		totalByType += count
+	}
+
+	if totalByType != stats.TotalEvents {
+		t.Errorf("Sum of type counts (%d) != TotalEvents (%d)", totalByType, stats.TotalEvents)
+	}
+}

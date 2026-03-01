@@ -68,10 +68,10 @@ func section2BufferedWriter() {
 	fmt.Println("-------------------------------------")
 
 	// Create underlying file writer
-	fileWriter, _ := dd.NewFileWriter("logs/buffered.log", dd.FileWriterConfig{})
+	fileWriter, _ := dd.NewFileWriter("logs/buffered.log")
 
-	// Wrap with buffer (4KB buffer)
-	bufferedWriter, err := dd.NewBufferedWriter(fileWriter, 4*1024)
+	// Wrap with buffer (default 4KB buffer)
+	bufferedWriter, err := dd.NewBufferedWriter(fileWriter)
 	if err != nil {
 		fmt.Printf("Failed: %v\n", err)
 		return
@@ -103,7 +103,7 @@ func section3MultiWriter() {
 	fmt.Println("-----------------------------------")
 
 	// Create MultiWriter combining outputs
-	fileWriter, _ := dd.NewFileWriter("logs/multi.log", dd.FileWriterConfig{})
+	fileWriter, _ := dd.NewFileWriter("logs/multi.log")
 	multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 	cfg := dd.DefaultConfig()
@@ -131,7 +131,7 @@ func section4DynamicManagement() {
 	fmt.Printf("Initial writers: %d\n", logger.WriterCount())
 
 	// Add writers dynamically
-	fileWriter, _ := dd.NewFileWriter("logs/dynamic.log", dd.FileWriterConfig{})
+	fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
 	logger.AddWriter(fileWriter)
 	fmt.Printf("After adding file: %d writers\n", logger.WriterCount())
 

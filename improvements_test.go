@@ -184,22 +184,40 @@ func TestErrorHandling(t *testing.T) {
 	})
 }
 
-// TestDefaultLoggerWarning tests that Default() prints warning on fallback
+// TestDefaultLoggerWarning tests that Default() returns a usable logger
 func TestDefaultLoggerWarning(t *testing.T) {
-	// This test is tricky because Default() is a singleton
-	// We test the warning logic indirectly through the DefaultInitError function
-
 	// The default logger should work without error
 	logger := Default()
 	if logger == nil {
-		t.Error("Default() should return a logger")
+		t.Fatal("Default() should return a logger")
+	}
+
+	// Verify the logger is functional by checking it can log
+	// (without actually writing to stdout)
+	var buf bytes.Buffer
+	testLogger, err := New(NewTestConfigWithBuffer(&buf))
+	if err != nil {
+		t.Fatalf("Failed to create test logger: %v", err)
+	}
+	testLogger.Info("test message")
+
+	if !strings.Contains(buf.String(), "test message") {
+		t.Error("Test logger should log messages")
 	}
 
 	// Check if we can get the init error (should be nil for normal operation)
-	err := DefaultInitError()
-	// The error might not be nil if there was an issue during init
-	// but the logger should still be usable
-	_ = err
+	initErr := DefaultInitError()
+	// The error should be nil in normal operation
+	if initErr != nil {
+		t.Logf("DefaultInitError returned: %v (may be expected in some environments)", initErr)
+	}
+
+	// Verify the default logger has essential methods
+	t.Run("Default logger has required methods", func(t *testing.T) {
+		// These should not panic
+		_ = logger.IsClosed()
+		_ = logger.GetLevel()
+	})
 }
 
 // TestWithFields tests the WithFields context propagation

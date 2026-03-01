@@ -171,7 +171,12 @@ type AuditLogger struct {
 }
 
 // NewAuditLogger creates a new AuditLogger with the given configuration.
-func NewAuditLogger(config *AuditConfig) *AuditLogger {
+// If no configuration is provided, DefaultAuditConfig() is used.
+func NewAuditLogger(configs ...*AuditConfig) *AuditLogger {
+	var config *AuditConfig
+	if len(configs) > 0 {
+		config = configs[0]
+	}
 	if config == nil {
 		config = DefaultAuditConfig()
 	}
@@ -343,16 +348,27 @@ func (al *AuditLogger) writeEvent(event AuditEvent) {
 }
 
 // incrementTypeCount increments the count for an event type.
+// Uses LoadOrStore to atomically handle the check-then-act pattern,
+// preventing race conditions where multiple goroutines could create
+// duplicate counters for the same event type.
 func (al *AuditLogger) incrementTypeCount(eventType AuditEventType) {
-	// Use sync.Map for concurrent-safe access
+	// Try to load existing counter first (fast path)
 	if ptr, ok := al.byType.Load(eventType); ok {
 		if counter, ok := ptr.(*atomic.Int64); ok {
 			counter.Add(1)
+			return
 		}
-	} else {
-		counter := &atomic.Int64{}
-		counter.Store(1)
-		al.byType.Store(eventType, counter)
+	}
+
+	// Slow path: use LoadOrStore to atomically get or create the counter
+	counter := &atomic.Int64{}
+	counter.Store(1)
+	if actual, loaded := al.byType.LoadOrStore(eventType, counter); loaded {
+		// Another goroutine created the counter first, use it
+		if existingCounter, ok := actual.(*atomic.Int64); ok {
+			// Add 1 to account for the initial count we tried to set
+			existingCounter.Add(1)
+		}
 	}
 }
 

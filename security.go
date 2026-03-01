@@ -313,8 +313,8 @@ func (f *SensitiveDataFilter) Close() bool {
 
 // Clone creates a copy of the SensitiveDataFilter.
 //
-// Deep copy:
-//   - patterns slice (but the compiled *regexp.Regexp instances are shared)
+// Shared (immutable):
+//   - patterns slice pointer (shared for better performance, patterns are immutable after creation)
 //
 // New instances:
 //   - semaphore channel (new channel with same capacity)
@@ -328,7 +328,6 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	currentPatterns := f.patternsPtr.Load()
 	clone := &SensitiveDataFilter{
 		maxInputLength: f.maxInputLength,
 		timeout:        f.timeout,
@@ -336,10 +335,9 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	}
 	clone.enabled.Store(f.enabled.Load())
 
-	// Copy patterns slice and store atomically
-	patterns := make([]*regexp.Regexp, len(*currentPatterns))
-	copy(patterns, *currentPatterns)
-	clone.patternsPtr.Store(&patterns)
+	// Share the patterns pointer directly (immutable after creation)
+	// This avoids allocation when cloning
+	clone.patternsPtr.Store(f.patternsPtr.Load())
 	clone.patternCount.Store(f.patternCount.Load())
 
 	return clone
@@ -363,16 +361,18 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 
 	// Check cache for repeated messages (only for small inputs to avoid memory bloat)
 	// Skip cache if not initialized (for filters created without using constructor)
-	if inputLen <= 1024 && f.cache != nil {
-		hash := hashString(input)
+	if inputLen <= 1024 {
 		f.cacheMu.RLock()
-		if entry, ok := f.cache[hash]; ok && entry.input == input {
-			f.cacheMu.RUnlock()
-			f.cacheHits.Add(1)
-			f.totalFiltered.Add(1)
-			// Record minimal latency for cache hit
-			f.totalLatencyNs.Add(1)
-			return entry.result
+		if f.cache != nil {
+			hash := hashString(input)
+			if entry, ok := f.cache[hash]; ok && entry.input == input {
+				f.cacheMu.RUnlock()
+				f.cacheHits.Add(1)
+				f.totalFiltered.Add(1)
+				// Record minimal latency for cache hit
+				f.totalLatencyNs.Add(1)
+				return entry.result
+			}
 		}
 		f.cacheMu.RUnlock()
 		f.cacheMiss.Add(1)
@@ -478,11 +478,11 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 
 // cacheResult stores a filter result in the cache
 func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
 	if f.cache == nil {
 		return
 	}
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
 
 	// Evict old entries if cache is full
 	if f.cacheSize >= f.maxCacheSz {
@@ -505,6 +505,22 @@ func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 		created: time.Now().Unix(),
 	}
 	f.cacheSize++
+}
+
+// Pre-computed lowercase credential keywords for fast case-insensitive matching
+// These are the most common credential keywords that appear in sensitive data patterns
+var credentialKeywords = [][]byte{
+	[]byte("password"),
+	[]byte("passwd"),
+	[]byte("secret"),
+	[]byte("token"),
+	[]byte("api_key"),
+	[]byte("apikey"),
+	[]byte("bearer"),
+	[]byte("auth"),
+	[]byte("credential"),
+	[]byte("private_key"),
+	[]byte("session"),
 }
 
 // couldContainSensitiveData performs fast pre-checks to determine if input
@@ -576,27 +592,53 @@ func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
 		}
 	}
 
-	// Check for credential keywords (case-insensitive)
-	if !hasCredentialKeyword {
-		lowerInput := strings.ToLower(input)
-		if strings.Contains(lowerInput, "password") ||
-			strings.Contains(lowerInput, "passwd") ||
-			strings.Contains(lowerInput, "secret") ||
-			strings.Contains(lowerInput, "token") ||
-			strings.Contains(lowerInput, "api_key") ||
-			strings.Contains(lowerInput, "apikey") ||
-			strings.Contains(lowerInput, "bearer") ||
-			strings.Contains(lowerInput, "auth") ||
-			strings.Contains(lowerInput, "credential") ||
-			strings.Contains(lowerInput, "private_key") ||
-			strings.Contains(lowerInput, "session") {
-			hasCredentialKeyword = true
-		}
+	// Check for credential keywords using case-insensitive byte comparison
+	// This avoids strings.ToLower allocation
+	if !hasCredentialKeyword && inputLen >= 4 {
+		hasCredentialKeyword = containsCredentialKeyword(input)
 	}
 
 	// If input has none of the characteristics, it's very unlikely to contain sensitive data
 	// Most patterns require at least one of these characteristics
 	return hasDigits || hasAtSign || hasProtocol || hasCredentialKeyword || hasAPIKeyPrefix
+}
+
+// containsCredentialKeyword checks if input contains any credential keyword.
+// Uses case-insensitive byte-by-byte comparison to avoid allocation.
+func containsCredentialKeyword(input string) bool {
+	inputLen := len(input)
+	if inputLen < 4 {
+		return false
+	}
+
+	// Convert input to lowercase inline for comparison
+	// Use a sliding window approach for each keyword
+	for _, keyword := range credentialKeywords {
+		keywordLen := len(keyword)
+		if inputLen < keywordLen {
+			continue
+		}
+
+		// Search for keyword in input using case-insensitive comparison
+		for i := 0; i <= inputLen-keywordLen; i++ {
+			match := true
+			for j := 0; j < keywordLen; j++ {
+				c := input[i+j]
+				// Convert to lowercase inline
+				if c >= 'A' && c <= 'Z' {
+					c += 32
+				}
+				if c != keyword[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // filterWithTimeout applies regex filtering with timeout protection for large inputs.
@@ -1115,21 +1157,6 @@ func DefaultSecurityConfig() *SecurityConfig {
 	}
 }
 
-// DefaultSecurityConfigDisabled returns a security config with NO sensitive data filtering.
-// This configuration is intended for development and testing environments only.
-//
-// Deprecated: Use SecurityConfigForLevel(SecurityLevelDevelopment) instead.
-// This function will be removed in a future major version.
-// Running without sensitive data filtering in production is a security risk.
-func DefaultSecurityConfigDisabled() *SecurityConfig {
-	// Note: Consider logging a deprecation warning in a future version
-	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
-		SensitiveFilter: nil,
-	}
-}
-
 // DefaultSecureConfig returns a security config with full sensitive data filtering enabled.
 // This includes all patterns from basic filtering plus additional patterns for
 // emails, IP addresses, JWT tokens, and database connection strings.
@@ -1140,14 +1167,6 @@ func DefaultSecureConfig() *SecurityConfig {
 		MaxWriters:      MaxWriterCount,
 		SensitiveFilter: NewSensitiveDataFilter(),
 	}
-}
-
-// SecureConfig returns a security config with full sensitive data filtering enabled.
-//
-// Deprecated: Use DefaultSecureConfig() instead. This function is kept for backward
-// compatibility and will be removed in a future major version.
-func SecureConfig() *SecurityConfig {
-	return DefaultSecureConfig()
 }
 
 // HealthcareConfig returns a security config optimized for HIPAA compliance.

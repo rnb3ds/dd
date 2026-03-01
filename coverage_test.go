@@ -52,184 +52,138 @@ func TestConfigChainMethods(t *testing.T) {
 }
 
 // ============================================================================
-// LOGGER INSTANCE PRINT/PRINTLN/PRINTF TESTS
+// LOGGER INSTANCE PRINT/PRINTLN/PRINTF TESTS (MERGED)
 // ============================================================================
 
 func TestLoggerPrintMethods(t *testing.T) {
-	var buf bytes.Buffer
-
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-
-	logger, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+	tests := []struct {
+		name     string
+		logFunc  func(*Logger)
+		expected string
+	}{
+		{
+			name: "Print",
+			logFunc: func(l *Logger) {
+				l.Print("test", "print")
+			},
+			expected: "test print",
+		},
+		{
+			name: "Println",
+			logFunc: func(l *Logger) {
+				l.Println("test", "println")
+			},
+			expected: "test println",
+		},
+		{
+			name: "Printf",
+			logFunc: func(l *Logger) {
+				l.Printf("test %s", "formatted")
+			},
+			expected: "test formatted",
+		},
 	}
-	defer logger.Close()
 
-	t.Run("Print", func(t *testing.T) {
-		logger.Print("test", "print")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			cfg := DefaultConfig()
+			cfg.Output = &buf
+			cfg.Level = LevelDebug
 
-		output := buf.String()
-		if !strings.Contains(output, "test print") {
-			t.Errorf("logger.Print() should work, got: %s", output)
-		}
-	})
-}
+			logger, err := New(cfg)
+			if err != nil {
+				t.Fatalf("Failed to create logger: %v", err)
+			}
+			defer logger.Close()
 
-func TestLoggerPrintlnMethod(t *testing.T) {
-	var buf bytes.Buffer
+			tt.logFunc(logger)
 
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-
-	logger, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+			output := buf.String()
+			if !strings.Contains(output, tt.expected) {
+				t.Errorf("logger.%s() should contain %q, got: %s", tt.name, tt.expected, output)
+			}
+		})
 	}
-	defer logger.Close()
-
-	t.Run("Println", func(t *testing.T) {
-		logger.Println("test", "println")
-
-		output := buf.String()
-		if !strings.Contains(output, "test println") {
-			t.Errorf("logger.Println() should work, got: %s", output)
-		}
-	})
-}
-
-func TestLoggerPrintfMethod(t *testing.T) {
-	var buf bytes.Buffer
-
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-
-	logger, err := New(cfg)
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-	defer logger.Close()
-
-	t.Run("Printf", func(t *testing.T) {
-		logger.Printf("test %s", "formatted")
-
-		output := buf.String()
-		if !strings.Contains(output, "test formatted") {
-			t.Errorf("logger.Printf() should work, got: %s", output)
-		}
-	})
 }
 
 // ============================================================================
-// LOGGER INSTANCE TEXT/TEXTF/JSON/JSONF TESTS
+// LOGGER INSTANCE TEXT/TEXTF/JSON/JSONF TESTS (MERGED)
 // ============================================================================
 
-func TestLoggerTextVisualization(t *testing.T) {
-	logger, err := New()
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+func TestLoggerVisualizationMethods(t *testing.T) {
+	tests := []struct {
+		name      string
+		logFunc   func(*Logger)
+		expected  []string
+		setupPipe bool
+	}{
+		{
+			name: "Text",
+			logFunc: func(l *Logger) {
+				l.Text("test data")
+			},
+			expected:  []string{"test data"},
+			setupPipe: true,
+		},
+		{
+			name: "Textf",
+			logFunc: func(l *Logger) {
+				l.Textf("test %s", "formatted")
+			},
+			expected:  []string{"test formatted"},
+			setupPipe: true,
+		},
+		{
+			name: "JSON",
+			logFunc: func(l *Logger) {
+				l.JSON(map[string]string{"key": "value"})
+			},
+			expected:  []string{`"key"`, `"value"`},
+			setupPipe: true,
+		},
+		{
+			name: "JSONF",
+			logFunc: func(l *Logger) {
+				l.JSONF("test: %s", "formatted")
+			},
+			expected:  []string{"test: formatted"},
+			setupPipe: true,
+		},
 	}
-	defer logger.Close()
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger, err := New()
+			if err != nil {
+				t.Fatalf("Failed to create logger: %v", err)
+			}
+			defer logger.Close()
 
-	t.Run("Text", func(t *testing.T) {
-		logger.Text("test data")
+			var output string
+			if tt.setupPipe {
+				oldStdout := os.Stdout
+				r, w, _ := os.Pipe()
+				os.Stdout = w
 
-		w.Close()
-		var buf bytes.Buffer
-		buf.ReadFrom(r)
-		output := buf.String()
+				tt.logFunc(logger)
 
-		if !strings.Contains(output, "test data") {
-			t.Error("logger.Text() should work")
-		}
-	})
-}
+				w.Close()
+				var buf bytes.Buffer
+				buf.ReadFrom(r)
+				output = buf.String()
+				os.Stdout = oldStdout
+			} else {
+				tt.logFunc(logger)
+			}
 
-func TestLoggerTextfVisualization(t *testing.T) {
-	logger, err := New()
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
+			for _, exp := range tt.expected {
+				if !strings.Contains(output, exp) {
+					t.Errorf("logger.%s() should contain %q, got: %s", tt.name, exp, output)
+				}
+			}
+		})
 	}
-	defer logger.Close()
-
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
-
-	t.Run("Textf", func(t *testing.T) {
-		logger.Textf("test %s", "formatted")
-
-		w.Close()
-		var buf bytes.Buffer
-		buf.ReadFrom(r)
-		output := buf.String()
-
-		if !strings.Contains(output, "test formatted") {
-			t.Error("logger.Textf() should work")
-		}
-	})
-}
-
-func TestLoggerJsonVisualization(t *testing.T) {
-	logger, err := New()
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-	defer logger.Close()
-
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
-
-	t.Run("JSON", func(t *testing.T) {
-		logger.JSON(map[string]string{"key": "value"})
-
-		w.Close()
-		var buf bytes.Buffer
-		buf.ReadFrom(r)
-		output := buf.String()
-
-		if !strings.Contains(output, `"key"`) || !strings.Contains(output, `"value"`) {
-			t.Error("logger.JSON() should output JSON")
-		}
-	})
-}
-
-func TestLoggerJsonfVisualization(t *testing.T) {
-	logger, err := New()
-	if err != nil {
-		t.Fatalf("Failed to create logger: %v", err)
-	}
-	defer logger.Close()
-
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() { os.Stdout = oldStdout }()
-
-	t.Run("JSONF", func(t *testing.T) {
-		logger.JSONF("test: %s", "formatted")
-
-		w.Close()
-		var buf bytes.Buffer
-		buf.ReadFrom(r)
-		output := buf.String()
-
-		if !strings.Contains(output, "test: formatted") {
-			t.Error("logger.JSONF() should work")
-		}
-	})
 }
 
 // ============================================================================
@@ -431,15 +385,29 @@ func TestFileRotationTrigger(t *testing.T) {
 
 	// Write data to trigger rotation - need to write more than MaxSizeMB
 	largeData := make([]byte, 1024*1024) // 1MB
-	for i := 0; i < 3; i++ {             // Write 3MB to ensure rotation triggers
+	totalWritten := 0
+	for i := 0; i < 3; i++ { // Write 3MB to ensure rotation triggers
 		n, err := fw.Write(largeData)
-		if err != nil || n != len(largeData) {
-			t.Logf("Write %d: %d bytes, err=%v", i, n, err)
+		if err != nil {
+			t.Errorf("Write %d failed: %v", i, err)
 		}
+		if n != len(largeData) {
+			t.Errorf("Write %d: wrote %d bytes, expected %d", i, n, len(largeData))
+		}
+		totalWritten += n
 	}
 
 	// Sync to ensure data is written to disk
 	fw.Close()
+
+	// Verify the main log file exists and has content
+	info, err := os.Stat(logFile)
+	if os.IsNotExist(err) {
+		t.Fatal("Main log file should exist")
+	}
+	if info.Size() == 0 {
+		t.Error("Main log file should not be empty")
+	}
 
 	// Check if backup file was created with retry logic
 	backupPattern := filepath.Join(tmpDir, "test.log_*")
@@ -453,16 +421,25 @@ func TestFileRotationTrigger(t *testing.T) {
 	}
 
 	if len(matches) == 0 {
-		// Log diagnostic info instead of skipping
+		// Log diagnostic info - rotation may not always trigger on all systems
 		entries, _ := os.ReadDir(tmpDir)
 		t.Logf("No backup files found. Directory contents:")
 		for _, e := range entries {
 			info, _ := e.Info()
 			t.Logf("  %s (%d bytes)", e.Name(), info.Size())
 		}
+		t.Logf("Total written: %d bytes", totalWritten)
+		// Still pass if the main file exists with expected content
 		t.Log("Note: File rotation timing may vary across environments")
 	} else {
 		t.Logf("Backup files created: %v", matches)
+		// Verify at least one backup has content
+		for _, backup := range matches {
+			info, err := os.Stat(backup)
+			if err == nil && info.Size() > 0 {
+				t.Logf("Backup %s has %d bytes", filepath.Base(backup), info.Size())
+			}
+		}
 	}
 }
 
@@ -484,12 +461,23 @@ func TestFileCompressionTrigger(t *testing.T) {
 
 	// Write data to trigger rotation and compression
 	largeData := make([]byte, 1024*1024) // 1MB
-	for i := 0; i < 3; i++ {             // Write 3MB to ensure rotation
-		fw.Write(largeData)
+	totalWritten := 0
+	for i := 0; i < 3; i++ { // Write 3MB to ensure rotation
+		n, err := fw.Write(largeData)
+		if err != nil {
+			t.Errorf("Write %d failed: %v", i, err)
+		}
+		totalWritten += n
 	}
 
 	// Close to flush and trigger compression
 	fw.Close()
+
+	// Verify the main log file exists
+	_, err = os.Stat(logFile)
+	if os.IsNotExist(err) {
+		t.Fatal("Main log file should exist")
+	}
 
 	// Wait for compression goroutine to complete with retry logic
 	gzPattern := filepath.Join(tmpDir, "compress.log_*.gz")
@@ -503,16 +491,28 @@ func TestFileCompressionTrigger(t *testing.T) {
 	}
 
 	if len(matches) == 0 {
-		// Log diagnostic info instead of skipping
+		// Log diagnostic info - compression may not always trigger
 		entries, _ := os.ReadDir(tmpDir)
 		t.Logf("No compressed files found. Directory contents:")
 		for _, e := range entries {
 			info, _ := e.Info()
 			t.Logf("  %s (%d bytes)", e.Name(), info.Size())
 		}
+		t.Logf("Total written: %d bytes", totalWritten)
 		t.Log("Note: File compression timing may vary across environments")
 	} else {
 		t.Logf("Compressed files created: %v", matches)
+		// Verify the compressed file is valid and smaller than original
+		for _, gzFile := range matches {
+			gzInfo, err := os.Stat(gzFile)
+			if err == nil && gzInfo.Size() > 0 {
+				t.Logf("Compressed %s: %d bytes", filepath.Base(gzFile), gzInfo.Size())
+				// Compressed file should be smaller than the original 1MB
+				if gzInfo.Size() < int64(len(largeData)) {
+					t.Logf("Compression ratio: %.2f%%", float64(gzInfo.Size())/float64(len(largeData))*100)
+				}
+			}
+		}
 	}
 }
 
@@ -666,7 +666,7 @@ func TestLevelHierarchy(t *testing.T) {
 // ============================================================================
 
 func TestSecureConfig(t *testing.T) {
-	config := SecureConfig()
+	config := DefaultSecureConfig()
 
 	if config == nil {
 		t.Fatal("SecureSecurityConfig should not return nil")

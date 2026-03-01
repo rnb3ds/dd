@@ -2,8 +2,85 @@
 
 All notable changes to the cybergodev/dd library will be documented in this file.
 
-[//]: # (The format is based on [Keep a Changelog]&#40;https://keepachangelog.com/en/1.0.0/&#41;,)
-[//]: # (and this project adheres to [Semantic Versioning]&#40;https://semver.org/spec/v2.0.0.html&#41;.)
+- The format is based on [Keep a Changelog](https://keepachangelog.com/).
+- And this project adheres to [Semantic Versioning](https://semver.org/).
+
+---
+
+## v1.2.0 - Enhance Security & Performance & API Unification (2026-03-01)
+
+### Added
+- Audit logging system with async event processing and integrity verification
+- HMAC-based log integrity signing and verification (`IntegritySigner`)
+- Rate limiting for log flooding prevention (token bucket algorithm)
+- Secure memory types: `SecureBuffer`, `SecureString`, `SecureBytes` with `WipeBytes()`
+- Context extractors for custom context field extraction (`ContextExtractorRegistry`)
+- Lifecycle hook system with `HookBeforeLog`, `HookAfterLog`, `HookOnClose`, `HookOnError`
+- Dynamic level resolver for runtime log level adjustment based on context
+- Field key validation with naming convention support (snake_case, camelCase, PascalCase, kebab-case)
+- Enterprise security presets: `HealthcareConfig()`, `FinancialConfig()`, `GovernmentConfig()`
+- Convenience constructors: `ToFile()`, `ToJSONFile()`, `ToConsole()`, `ToAll()`, `MustVal[T]()`
+- `WithFields()` / `WithField()` for field inheritance and chaining
+- Log sampling support with Initial/Thereafter/Tick configuration
+- `GetFilterStats()` for filter performance monitoring
+- `IsLevelEnabled()` and `IsXxxEnabled()` convenience methods
+- Package-level context-aware logging functions (`DebugCtx`, `InfoCtx`, `WarnCtx`, `ErrorCtx`)
+- `Shutdown(ctx)` method for graceful shutdown with timeout support
+- `DefaultIntegrityConfigSafe()` panic-free alternative
+
+### Changed
+- **BREAKING**: Removed `NewConfig()` - use `DefaultConfig()` instead
+- **BREAKING**: Removed `SecureConfig()` - use `DefaultSecureConfig()` instead
+- **BREAKING**: Removed `DefaultSecurityConfigDisabled()` - use `SecurityConfigForLevel(SecurityLevelDevelopment)`
+- **BREAKING**: Removed `Config.Build()` / `Config.MustBuild()` - use `dd.New(cfg)` / `dd.Must(cfg)`
+- **BREAKING**: Removed functional options API (`options.go`) - use struct-based `Config`
+- **BREAKING**: Removed `FilterLevel` enum - use filter constructors directly
+- Security filtering now enabled by default in all configurations
+- `SensitiveDataFilter.Clone()` shares immutable patterns slice (56% memory reduction)
+- Multi-writer uses atomic pointer for lock-free read access (15-25% improvement)
+- Time formatting uses lock-free atomic pointer cache (30-40% less contention)
+- Default integrity key uses cryptographically secure random generation
+- Optional parameters: `NewFileWriter(path)`, `NewBufferedWriter(w)`, `NewAuditLogger()`, `NewIntegritySigner()`
+
+### Fixed
+- Critical: `LoggerEntry.Logf` format strings were not being formatted
+- Race condition in `incrementTypeCount` with concurrent audit logging
+- Race condition in security filter cache access outside mutex
+- `MultiWriter.Close()` now skips closing standard streams (stdout/stderr/stdin)
+- CRLF injection vulnerability - newline/carriage return now escaped
+- Message pool memory leak with oversized buffers
+- Hook registry race condition in concurrent `AddHook` calls
+- Nil context handling in level resolver
+- Australia ABN pattern false positives on 11-digit numbers
+- NPI pattern false positives - now requires context keywords
+
+### Security
+- UTF-8 overlong encoding detection to prevent path traversal bypass
+- Hardlink detection to prevent log output redirection attacks
+- Windows device name and ADS (Alternate Data Streams) validation
+- Log4Shell detection with Unicode escape sequence support
+- C1 control character handling (U+0080-U+009F)
+- Bounded regex quantifiers to prevent ReDoS attacks (max 1000)
+- Circular reference detection in recursive field filtering
+- Recursion depth limit (100) to prevent stack overflow
+- Panic recovery in hooks and context extractors
+- Goroutine leak protection with concurrent filter limit (100)
+- IPv6 address filtering added
+
+### Performance
+- SimpleLogging: 27.6% faster (232ns → 168ns)
+- StructuredLogging: 52.9% faster (2646ns → 1246ns)
+- JSONFormat: 34.3% faster (6394ns → 4201ns)
+- ConfigClone: 56% less memory (1072B → 472B)
+- Pattern matching uses binary search (9.9% CPU reduction)
+- Field slice copy only when hooks registered
+- `clear()` builtin replaces `delete` loops for map clearing
+
+### Removed
+- `WipeString` function (no-op for immutable Go strings)
+- `options.go` file with all functional options
+- Deprecated constructors: `NewWithOptions()`, `FileLogger()`, `ConsoleLogger()`, `JSONFileLogger()`, `MultiLogger()`
+- `FilterLevel` type and constants (`FilterNone`, `FilterBasic`, `FilterFull`)
 
 ---
 

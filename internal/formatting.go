@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -191,13 +192,58 @@ func (f *MessageFormatter) FormatArgsToString(args ...any) string {
 }
 
 // formatArgToString converts a single argument to string.
+// Uses type switch for common types to avoid fmt.Sprint reflection overhead.
 func (f *MessageFormatter) formatArgToString(arg any) string {
-	if IsComplexValue(arg) {
-		if jsonData, err := json.Marshal(ConvertValue(arg)); err == nil {
-			return string(jsonData)
+	switch val := arg.(type) {
+	case string:
+		return val
+	case int:
+		return strconv.FormatInt(int64(val), 10)
+	case int64:
+		return strconv.FormatInt(val, 10)
+	case int32:
+		return strconv.FormatInt(int64(val), 10)
+	case int16:
+		return strconv.FormatInt(int64(val), 10)
+	case int8:
+		return strconv.FormatInt(int64(val), 10)
+	case uint:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint64:
+		return strconv.FormatUint(val, 10)
+	case uint32:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(val), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(val), 10)
+	case float64:
+		return strconv.FormatFloat(val, 'g', -1, 64)
+	case float32:
+		return strconv.FormatFloat(float64(val), 'g', -1, 32)
+	case bool:
+		if val {
+			return "true"
 		}
+		return "false"
+	case time.Duration:
+		return val.String()
+	case time.Time:
+		return val.Format(time.RFC3339)
+	case error:
+		return val.Error()
+	case fmt.Stringer:
+		return val.String()
+	case nil:
+		return "<nil>"
+	default:
+		if IsComplexValue(arg) {
+			if jsonData, err := json.Marshal(ConvertValue(arg)); err == nil {
+				return string(jsonData)
+			}
+		}
+		return fmt.Sprint(arg)
 	}
-	return fmt.Sprint(arg)
 }
 
 // FormatWithMessage formats a complete log message with level, caller, and fields.
@@ -365,33 +411,35 @@ func (f *MessageFormatter) getJSONOptions() *JSONOptions {
 // This method looks for the first non-dd package in the call stack.
 // Returns the depth relative to formatText (not relative to this function).
 //
-// Performance note: This function iterates through the call stack (up to 20 frames)
-// to find user code. The iteration stops as soon as non-dd package is found.
-// For most use cases, this overhead is negligible (< 1µs). If performance is critical
-// and caller information is not needed, consider disabling DynamicCaller in config.
+// Performance note: This function uses runtime.Callers to batch-retrieve the call stack
+// for better performance compared to individual runtime.Caller calls.
 func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 	// Validate base depth
 	if baseDepth < 0 {
 		baseDepth = 0
 	}
 
-	// Find the first non-dd package
-	// Use -1 to indicate "not found" since 0 is a valid depth value
-	userCodeDepth := -1
+	// Use runtime.Callers to get all frames at once (more efficient than individual calls)
+	// We need to skip: runtime.Callers, adjustCallerDepth, FormatWithMessage, and then baseDepth
+	// So total skip = 3 (this function + FormatWithMessage + logging method) + baseDepth
+	skip := baseDepth + 3
+	pcs := make([]uintptr, 24)
+	n := runtime.Callers(skip, pcs)
+	if n == 0 {
+		return baseDepth
+	}
 
-	maxDepth := baseDepth + 20
-	for depth := baseDepth; depth < maxDepth; depth++ {
-		pc, _, _, ok := runtime.Caller(depth)
-		if !ok {
-			break // No more stack frames
+	// Iterate through frames
+	frames := runtime.CallersFrames(pcs[:n])
+	depth := 0
+
+	for {
+		frame, more := frames.Next()
+		if !more {
+			break
 		}
 
-		fn := runtime.FuncForPC(pc)
-		if fn == nil {
-			continue
-		}
-
-		pkgName := fn.Name()
+		pkgName := frame.Function
 
 		// Check if caller is outside the dd package
 		isDDPackage := strings.HasPrefix(pkgName, "github.com/cybergodev/dd.") ||
@@ -400,22 +448,17 @@ func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 			pkgName == "github.com/cybergodev/dd"
 
 		if !isDDPackage {
-			userCodeDepth = depth
-			break // Found user code, no need to continue
+			// Found user code
+			// Add 1 to account for the GetCaller frame when formatText calls it
+			adjustedDepth := baseDepth + depth + 1
+			if adjustedDepth < 0 {
+				adjustedDepth = 0
+			}
+			return adjustedDepth
 		}
+
+		depth++
 	}
 
-	if userCodeDepth < 0 {
-		return baseDepth
-	}
-
-	// The userCodeDepth is relative to adjustCallerDepth's call stack.
-	// When formatText calls GetCaller, the call stack is slightly different because GetCaller adds 1 frame.
-	// We need to add 1 to account for the GetCaller frame.
-	adjustedDepth := userCodeDepth + 1
-	if adjustedDepth < 0 {
-		adjustedDepth = 0
-	}
-
-	return adjustedDepth
+	return baseDepth
 }
