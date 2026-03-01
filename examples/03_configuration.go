@@ -10,167 +10,171 @@ import (
 	"github.com/cybergodev/dd"
 )
 
-// Configuration - File Output, Rotation, and Presets
+// Configuration - Complete Config API Guide
 //
-// This example demonstrates:
-// 1. Preset configurations (Default, Development, JSON)
-// 2. File output with rotation
-// 3. JSON customization
-// 4. Production-ready configurations
+// Topics covered:
+// 1. DefaultConfig and direct modification
+// 2. Preset configurations (Development, JSON)
+// 3. File output with rotation
+// 4. JSON customization
+// 5. Clone for multiple loggers
 func main() {
-	fmt.Println("=== DD Configuration ===\n ")
+	fmt.Println("=== DD Configuration ===\n")
 
-	example1PresetConfigs()
-	example2FileRotation()
-	example3JSONCustomization()
-	example4ProductionSetup()
+	section1BasicConfig()
+	section2Presets()
+	section3FileRotation()
+	section4JSONCustomization()
+	section5Clone()
 
 	fmt.Println("\n✅ Configuration examples completed!")
 	fmt.Println("\nCheck logs/ directory for output files")
 }
 
-// Example 1: Preset configurations
-func example1PresetConfigs() {
-	fmt.Println("1. Preset Configurations")
-	fmt.Println("------------------------")
+// Section 1: Basic configuration
+func section1BasicConfig() {
+	fmt.Println("1. Basic Configuration")
+	fmt.Println("----------------------")
 
-	// DefaultConfig: INFO level, text format, console output
-	logger1, _ := dd.New(dd.DefaultConfig())
-	defer logger1.Close()
-	logger1.Info("Default: production-ready text logging")
+	// DefaultConfig with IDE autocomplete support
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	cfg.Format = dd.FormatJSON
+	cfg.DynamicCaller = true // Show caller file:line
 
-	// DevelopmentConfig: DEBUG level, caller info, dynamic caller detection
-	logger2, _ := dd.New(dd.DevelopmentConfig())
-	defer logger2.Close()
-	logger2.Debug("Development: verbose debugging with caller info")
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
 
-	// JSONConfig: structured JSON output for log aggregation
-	logger3, _ := dd.New(dd.JSONConfig())
-	defer logger3.Close()
-	logger3.InfoWith("JSON: structured logging", dd.String("format", "json"))
+	logger.Debug("Direct field modification with autocomplete")
+
+	// Simple: dd.New() uses defaults
+	simpleLogger, _ := dd.New()
+	defer simpleLogger.Close()
+	simpleLogger.Info("No config needed - uses defaults")
 
 	fmt.Println()
 }
 
-// Example 2: File rotation
-func example2FileRotation() {
-	fmt.Println("2. File Rotation")
-	fmt.Println("----------------")
+// Section 2: Preset configurations
+func section2Presets() {
+	fmt.Println("2. Preset Configurations")
+	fmt.Println("-------------------------")
 
-	// Basic rotation with size, age, and backup limits
-	config, _ := dd.DefaultConfig().WithFile("logs/app.log", dd.FileWriterConfig{
-		MaxSizeMB:  10,                 // Rotate at 10MB
-		MaxBackups: 5,                  // Keep 5 old files
-		MaxAge:     7 * 24 * time.Hour, // Delete after 7 days
-		Compress:   true,               // Compress old logs (.gz)
-	})
+	// Development: Debug level, text format, caller info
+	devLogger := dd.Must(dd.DevelopmentConfig())
+	defer devLogger.Close()
+	devLogger.Debug("Development mode - verbose output")
 
-	logger, _ := dd.New(config)
+	// JSON: Debug level, JSON format, structured for production
+	jsonLogger := dd.Must(dd.JSONConfig())
+	defer jsonLogger.Close()
+	jsonLogger.Info("JSON format ready for log aggregation")
+
+	fmt.Println()
+}
+
+// Section 3: File output with rotation
+func section3FileRotation() {
+	fmt.Println("3. File Rotation")
+	fmt.Println("-----------------")
+
+	cfg := dd.DefaultConfig()
+	cfg.Format = dd.FormatJSON
+	cfg.File = &dd.FileConfig{
+		Path:       "logs/app.log",
+		MaxSizeMB:  100,                 // Rotate at 100MB
+		MaxBackups: 10,                  // Keep 10 old files
+		MaxAge:     30 * 24 * time.Hour, // Delete after 30 days
+		Compress:   true,                // Gzip old files
+	}
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	logger.Info("Logs rotate automatically at 10MB")
-	logger.InfoWith("Rotation config",
-		dd.Int("max_size_mb", 10),
-		dd.Int("max_backups", 5),
-		dd.Int("max_age_days", 7),
+	logger.InfoWith("File rotation configured",
+		dd.Int("max_size_mb", 100),
+		dd.Int("max_backups", 10),
 		dd.Bool("compress", true),
 	)
 
-	fmt.Println()
+	fmt.Println("✓ Logs written to logs/app.log\n")
 }
 
-// Example 3: JSON customization
-func example3JSONCustomization() {
-	fmt.Println("3. JSON Customization")
-	fmt.Println("---------------------")
+// Section 4: JSON customization
+func section4JSONCustomization() {
+	fmt.Println("4. JSON Customization")
+	fmt.Println("----------------------")
 
-	// Custom field names and pretty print
-	config := dd.JSONConfig()
-	config.JSON = &dd.JSONOptions{
-		PrettyPrint: true,
-		Indent:      "  ",
-		FieldNames: &dd.JSONFieldNames{
-			Timestamp: "time",     // Custom field name
-			Level:     "severity", // Custom field name
-			Message:   "msg",      // Custom field name
-			Caller:    "source",
-			// Fields omitted - will use default value "fields"
-		},
+	cfg := dd.JSONConfig()
+
+	// Customize JSON field names (for ELK, CloudWatch, etc.)
+	cfg.JSON.FieldNames = &dd.JSONFieldNames{
+		Timestamp: "@timestamp", // ELK standard
+		Level:     "severity",
+		Message:   "msg",
+		Caller:    "source",
 	}
 
-	logger, _ := dd.New(config)
+	// Pretty print for development
+	cfg.JSON.PrettyPrint = true
+	cfg.JSON.Indent = "  "
+
+	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
 	logger.InfoWith("Custom JSON format",
-		dd.Int("user_id", 123),
-		dd.String("action", "login"),
+		dd.String("service", "user-api"),
+		dd.Int("version", 1),
 	)
 
 	fmt.Println()
 }
 
-// Example 4: Production setup
-func example4ProductionSetup() {
-	fmt.Println("4. Production Setup")
-	fmt.Println("The log is saved in the `logs` directory.")
-	fmt.Println("-------------------")
+// Section 5: Clone for multiple loggers
+func section5Clone() {
+	fmt.Println("5. Clone for Multiple Loggers")
+	fmt.Println("-------------------------------")
 
-	// Application logger: JSON, INFO level, file output
-	appConfig := dd.JSONConfig()
-	appConfig.Level = dd.LevelInfo
-	appConfig, _ = appConfig.WithFile("logs/app.log", dd.FileWriterConfig{
-		MaxSizeMB:  100,
-		MaxBackups: 30,
-		MaxAge:     30 * 24 * time.Hour,
-		Compress:   true,
-	})
+	// Base configuration
+	baseCfg := dd.DefaultConfig()
+	baseCfg.Format = dd.FormatJSON
+	baseCfg.DynamicCaller = true
 
-	appLogger, _ := dd.New(appConfig)
+	// Clone for application logs
+	appCfg := baseCfg.Clone()
+	appCfg.Level = dd.LevelInfo
+	appCfg.File = &dd.FileConfig{Path: "logs/app.log"}
+	appLogger, _ := dd.New(appCfg)
 	defer appLogger.Close()
 
-	appLogger.InfoWith("Application started",
-		dd.String("version", "1.0.0"),
-		dd.Int("pid", os.Getpid()),
-		dd.String("environment", "production"),
-	)
-
-	// Error logger: separate file, longer retention
-	errorConfig := dd.JSONConfig()
-	errorConfig.Level = dd.LevelError
-	errorConfig, _ = errorConfig.WithFileOnly("logs/errors.log", dd.FileWriterConfig{
-		MaxSizeMB:  200,
-		MaxBackups: 100,
-		MaxAge:     90 * 24 * time.Hour,
-		Compress:   true,
-	})
-
-	errorLogger, _ := dd.New(errorConfig)
-	defer errorLogger.Close()
-
-	errorLogger.ErrorWith("Database error",
-		dd.Err(fmt.Errorf("connection timeout")),
-		dd.String("host", "db.example.com"),
-		dd.Int("port", 5432),
-	)
-
-	// Access logger: high volume, shorter retention
-	accessConfig := dd.JSONConfig()
-	accessConfig, _ = accessConfig.WithFileOnly("logs/access.log", dd.FileWriterConfig{
+	// Clone for audit logs (larger size)
+	auditCfg := baseCfg.Clone()
+	auditCfg.Level = dd.LevelInfo
+	auditCfg.File = &dd.FileConfig{
+		Path:       "logs/audit.log",
 		MaxSizeMB:  500,
-		MaxBackups: 20,
-		MaxAge:     14 * 24 * time.Hour,
-		Compress:   true,
-	})
+		MaxBackups: 50,
+	}
+	auditLogger, _ := dd.New(auditCfg)
+	defer auditLogger.Close()
 
-	accessLogger, _ := dd.New(accessConfig)
-	defer accessLogger.Close()
+	// Clone for error logs (errors only)
+	errCfg := baseCfg.Clone()
+	errCfg.Level = dd.LevelError
+	errCfg.File = &dd.FileConfig{Path: "logs/errors.log"}
+	errLogger, _ := dd.New(errCfg)
+	defer errLogger.Close()
 
-	accessLogger.InfoWith("HTTP request",
-		dd.String("method", "GET"),
-		dd.String("path", "/api/users"),
-		dd.Int("status", 200),
-		dd.String("ip", "192.168.1.100"),
+	appLogger.InfoWith("Application started",
+		dd.Int("pid", os.Getpid()),
+	)
+	auditLogger.InfoWith("Audit entry",
+		dd.String("action", "user_login"),
+		dd.String("user_id", "123"),
+	)
+	errLogger.ErrorWith("Error logged",
+		dd.Err(fmt.Errorf("example error")),
 	)
 
-	fmt.Println()
+	fmt.Println("✓ Multiple loggers from cloned config\n")
 }

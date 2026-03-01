@@ -10,147 +10,115 @@ import (
 
 // Quick Start - Master dd logger in 5 minutes
 //
-// This example covers:
-// 1. Creating logger instances
-// 2. Using convenience constructors
-// 3. All log levels (Debug, Info, Warn, Error, Fatal)
-// 4. Formatted logging
-// 5. Dynamic level control
+// Topics covered:
+// 1. Package-level functions (zero setup)
+// 2. Creating loggers with New()
+// 3. Log levels and dynamic control
+// 4. Formatted and structured logging
+// 5. Global logger management
 func main() {
-	fmt.Println("=== DD Logger Quick Start ===\n ")
+	fmt.Println("=== DD Logger Quick Start ===\n")
 
-	example1CreatingLoggers()
-	example2ConvenienceConstructors()
-	example3LogLevels()
-	example4FormattedLogging()
-	example5DynamicLevelControl()
+	section1PackageLevel()
+	section2CreateLogger()
+	section3LogLevels()
+	section4GlobalLogger()
 
 	fmt.Println("\n✅ Quick start completed!")
-	fmt.Println("\nNext steps:")
-	fmt.Println("  • Run 02_structured_logging.go for production patterns")
-	fmt.Println("  • Run 03_configuration.go for file output and rotation")
 }
 
-// Example 1: Creating logger instances
-func example1CreatingLoggers() {
-	fmt.Println("1. Creating Logger Instances")
-	fmt.Println("----------------------------")
+// Section 1: Package-level functions (zero setup required)
+func section1PackageLevel() {
+	fmt.Println("1. Package-Level Functions")
+	fmt.Println("---------------------------")
 
-	// Create a logger with default configuration
-	logger, _ := dd.New()
-	defer logger.Close()
+	// Use directly without any setup - outputs to stdout
+	dd.Debug("Debug: detailed diagnostic info (may not show - default is INFO)")
+	dd.Info("Info: general operational messages")
+	dd.Warn("Warn: warning conditions")
+	dd.Error("Error: error conditions")
+	// dd.Fatal("Fatal: severe errors, exits program") // Uncomment to test
 
-	logger.Info("Logger created with default configuration")
-	logger.Info("Application started successfully")
-
-	// Create a logger with custom configuration
-	customLogger, _ := dd.New(dd.DefaultConfig().WithLevel(dd.LevelDebug))
-	defer customLogger.Close()
-
-	customLogger.Debug("Custom logger with DEBUG level")
-
-	fmt.Println()
-}
-
-// Example 2: Convenience constructors
-func example2ConvenienceConstructors() {
-	fmt.Println("2. Convenience Constructors")
-	fmt.Println("-------------------------")
-
-	// Console only
-	logger1 := dd.ToConsole()
-	defer logger1.Close()
-	logger1.Info("Console only output")
-
-	// File only (default: logs/app.log)
-	logger2 := dd.ToFile()
-	defer logger2.Close()
-	logger2.Info("File only output → logs/app.log")
-
-	// JSON file
-	logger3 := dd.ToJSONFile()
-	defer logger3.Close()
-	logger3.Info("JSON format → logs/app.log")
-
-	// Console + file
-	logger4 := dd.ToAll()
-	defer logger4.Close()
-	logger4.Info("Both console and file output")
-
-	// Custom filename
-	logger5 := dd.ToFile("logs/custom.log")
-	defer logger5.Close()
-	logger5.Info("Custom file → logs/custom.log")
-
-	fmt.Println()
-}
-
-// Example 3: All log levels
-func example3LogLevels() {
-	fmt.Println("3. Log Levels")
-	fmt.Println("-------------")
-
-	logger, _ := dd.NewWithOptions(dd.Options{
-		Level:   dd.LevelDebug, // Show all levels
-		Console: true,
-	})
-	defer logger.Close()
-
-	logger.Debug("DEBUG: Detailed diagnostic information")
-	logger.Info("INFO: General informational messages")
-	logger.Warn("WARN: Warning messages")
-	logger.Error("ERROR: Error messages")
-	// logger.Fatal("FATAL: Fatal error - terminates program")
-
-	fmt.Printf("Current level: %s\n\n", logger.GetLevel().String())
-}
-
-// Example 4: Formatted logging
-func example4FormattedLogging() {
-	fmt.Println("4. Formatted Logging")
-	fmt.Println("--------------------")
-
-	logger := dd.ToConsole()
-	defer logger.Close()
-
-	// Printf-style formatting
-	name := "Alice"
-	age := 30
-	logger.Infof("User: %s, Age: %d", name, age)
-
-	// Multiple arguments (space-separated)
-	logger.Info("User", name, "age", age)
-
-	// Structured logging (recommended for production)
-	logger.InfoWith("User information",
-		dd.String("name", name),
-		dd.Int("age", age),
-		dd.Bool("active", true),
+	// Structured logging with package-level functions
+	dd.InfoWith("Request processed",
+		dd.String("method", "GET"),
+		dd.Int("status", 200),
 	)
 
 	fmt.Println()
 }
 
-// Example 5: Dynamic level control
-func example5DynamicLevelControl() {
-	fmt.Println("5. Dynamic Level Control")
-	fmt.Println("------------------------")
+// Section 2: Creating loggers with New()
+func section2CreateLogger() {
+	fmt.Println("2. Creating Loggers")
+	fmt.Println("--------------------")
 
-	logger := dd.ToConsole()
+	// Simple logger with defaults
+	logger, _ := dd.New()
 	defer logger.Close()
+	logger.Info("Default logger - console output, INFO level")
 
-	// Initial level (default INFO)
-	logger.Debug("Debug message won't show")
-	logger.Info("Info message will show")
+	// Logger with custom config
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	cfg.Format = dd.FormatJSON
+	cfg.DynamicCaller = true
 
-	// Change to DEBUG level
-	logger.SetLevel(dd.LevelDebug)
-	logger.Debug("Now Debug messages are visible!")
+	logger2, _ := dd.New(cfg)
+	defer logger2.Close()
+	logger2.Debug("JSON format with caller info")
 
-	// Change back to INFO
-	logger.SetLevel(dd.LevelInfo)
-	logger.Debug("Debug messages hidden again")
-	logger.Info("Info messages still visible")
+	// Preset configurations
+	devLogger := dd.Must(dd.DevelopmentConfig())
+	defer devLogger.Close()
+	devLogger.Debug("Development preset - debug level enabled")
 
 	fmt.Println()
+}
+
+// Section 3: Log levels and dynamic control
+func section3LogLevels() {
+	fmt.Println("3. Log Levels")
+	fmt.Println("--------------")
+
+	logger, _ := dd.New()
+	defer logger.Close()
+
+	// Level hierarchy: Debug < Info < Warn < Error < Fatal
+	// Default is INFO, so Debug won't show
+	logger.Debug("This won't show (below INFO)")
+	logger.Info("This will show")
+
+	// Dynamic level change
+	logger.SetLevel(dd.LevelDebug)
+	logger.Debug("Now visible! Level changed to DEBUG")
+
+	// Check current level
+	fmt.Printf("Current level: %s\n", logger.GetLevel().String())
+
+	fmt.Println()
+}
+
+// Section 4: Global logger management
+func section4GlobalLogger() {
+	fmt.Println("4. Global Logger")
+	fmt.Println("----------------")
+
+	// Create custom logger and set as global default
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	customLogger, _ := dd.New(cfg)
+
+	// SetDefault affects ALL package-level functions
+	dd.SetDefault(customLogger)
+
+	// Now dd.Info() etc. use the custom logger
+	dd.Debug("Global logger now at DEBUG level")
+
+	// Package-level GetLevel/SetLevel work on global logger
+	fmt.Printf("Global level: %s\n", dd.GetLevel().String())
+	dd.SetLevel(dd.LevelInfo)
+	fmt.Printf("After SetLevel(INFO): %s\n", dd.GetLevel().String())
+
+	fmt.Println("\n💡 Tip: Call SetDefault() in init() or start of main()")
 }

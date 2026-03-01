@@ -1,43 +1,107 @@
 package dd
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"reflect"
-	"strconv"
+	"runtime"
 	"strings"
-	"sync"
+	"time"
+
+	"github.com/cybergodev/dd/internal"
 )
 
-type Field struct {
-	Key   string
-	Value any
-}
+// Field represents a structured log field with a key-value pair.
+// Type alias to internal.Field for API compatibility.
+type Field = internal.Field
 
+// Any creates a field with any value.
 func Any(key string, value any) Field {
 	return Field{Key: key, Value: value}
 }
 
+// String creates a field with a string value.
 func String(key, value string) Field {
 	return Field{Key: key, Value: value}
 }
 
+// Int creates a field with an int value.
 func Int(key string, value int) Field {
 	return Field{Key: key, Value: value}
 }
 
+// Int8 creates a field with an int8 value.
+func Int8(key string, value int8) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Int16 creates a field with an int16 value.
+func Int16(key string, value int16) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Int32 creates a field with an int32 value.
+func Int32(key string, value int32) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Int64 creates a field with an int64 value.
 func Int64(key string, value int64) Field {
 	return Field{Key: key, Value: value}
 }
 
-func Bool(key string, value bool) Field {
+// Uint creates a field with a uint value.
+func Uint(key string, value uint) Field {
 	return Field{Key: key, Value: value}
 }
 
+// Uint8 creates a field with a uint8 value.
+func Uint8(key string, value uint8) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Uint16 creates a field with a uint16 value.
+func Uint16(key string, value uint16) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Uint32 creates a field with a uint32 value.
+func Uint32(key string, value uint32) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Uint64 creates a field with a uint64 value.
+func Uint64(key string, value uint64) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Float32 creates a field with a float32 value.
+func Float32(key string, value float32) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Float64 creates a field with a float64 value.
 func Float64(key string, value float64) Field {
 	return Field{Key: key, Value: value}
 }
 
+// Bool creates a field with a bool value.
+func Bool(key string, value bool) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Duration creates a field with a time.Duration value.
+func Duration(key string, value time.Duration) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Time creates a field with a time.Time value.
+func Time(key string, value time.Time) Field {
+	return Field{Key: key, Value: value}
+}
+
+// Err creates a field from an error.
+// If the error is nil, the value will be nil.
+// Otherwise, the value will be the error's message string.
 func Err(err error) Field {
 	if err == nil {
 		return Field{Key: "error", Value: nil}
@@ -45,140 +109,132 @@ func Err(err error) Field {
 	return Field{Key: "error", Value: err.Error()}
 }
 
-var (
-	fieldPool = sync.Pool{
-		New: func() any {
-			sb := &strings.Builder{}
-			sb.Grow(FieldBuilderCapacity)
-			return sb
-		},
+// ErrWithKey creates a field from an error with a custom key.
+func ErrWithKey(key string, err error) Field {
+	if err == nil {
+		return Field{Key: key, Value: nil}
 	}
-)
-
-func formatFields(fields []Field) string {
-	fieldCount := len(fields)
-	if fieldCount == 0 {
-		return ""
-	}
-
-	sb := fieldPool.Get().(*strings.Builder)
-	sb.Reset()
-	defer fieldPool.Put(sb)
-
-	estimatedSize := fieldCount * EstimatedFieldSize
-	if sb.Cap() < estimatedSize {
-		sb.Grow(estimatedSize - sb.Cap())
-	}
-
-	written := false
-
-	for _, field := range fields {
-		if field.Key == "" {
-			continue
-		}
-
-		if written {
-			sb.WriteByte(' ')
-		}
-		written = true
-
-		sb.WriteString(field.Key)
-		sb.WriteByte('=')
-
-		switch v := field.Value.(type) {
-		case string:
-			if needsQuoting(v) {
-				sb.WriteByte('"')
-				vLen := len(v)
-				for j := 0; j < vLen; j++ {
-					c := v[j]
-					if c == '"' || c == '\\' {
-						sb.WriteByte('\\')
-					}
-					sb.WriteByte(c)
-				}
-				sb.WriteByte('"')
-			} else {
-				sb.WriteString(v)
-			}
-		case int:
-			sb.WriteString(strconv.FormatInt(int64(v), 10))
-		case int64:
-			sb.WriteString(strconv.FormatInt(v, 10))
-		case float64:
-			sb.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
-		case bool:
-			if v {
-				sb.WriteString("true")
-			} else {
-				sb.WriteString("false")
-			}
-		case nil:
-			sb.WriteString("<nil>")
-		default:
-			// For complex types (slices, maps, structs), use JSON formatting
-			if isComplexFieldValue(v) {
-				if jsonData, err := json.Marshal(v); err == nil {
-					sb.Write(jsonData)
-				} else {
-					sb.WriteString(fmt.Sprintf("%v", v))
-				}
-			} else {
-				sb.WriteString(fmt.Sprintf("%v", v))
-			}
-		}
-	}
-
-	return sb.String()
+	return Field{Key: key, Value: err.Error()}
 }
 
-func needsQuoting(s string) bool {
-	if len(s) == 0 {
-		return true
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c <= ' ' || c == '"' || c == '\\' {
-			return true
-		}
-	}
-	return false
+// NamedErr creates a field from an error with a custom key name.
+// This is an alias for ErrWithKey, provided for naming consistency
+// with other field constructors like NamedError.
+func NamedErr(key string, err error) Field {
+	return ErrWithKey(key, err)
 }
 
+// ErrWithStack creates a field from an error including its stack trace.
+// Note: Stack trace capture has a small performance overhead.
+func ErrWithStack(err error) Field {
+	if err == nil {
+		return Field{Key: "error", Value: nil}
+	}
+
+	const maxDepth = 32
+	var pcs [maxDepth]uintptr
+	n := runtime.Callers(3, pcs[:])
+
+	frames := runtime.CallersFrames(pcs[:n])
+	var sb strings.Builder
+	sb.WriteString(err.Error())
+	sb.WriteString("\nStack:")
+
+	for {
+		frame, more := frames.Next()
+		if !strings.Contains(frame.File, "runtime/") &&
+			!strings.Contains(frame.File, "github.com/cybergodev/dd/") {
+			sb.WriteString(fmt.Sprintf("\n\t%s:%d: %s",
+				frame.File, frame.Line, frame.Function))
+		}
+		if !more {
+			break
+		}
+	}
+
+	return Field{Key: "error", Value: sb.String()}
+}
+
+// Package-level structured logging functions using the default logger.
+
+// DebugWith logs a structured debug message with the default logger.
 func DebugWith(msg string, fields ...Field) { Default().LogWith(LevelDebug, msg, fields...) }
-func InfoWith(msg string, fields ...Field)  { Default().LogWith(LevelInfo, msg, fields...) }
-func WarnWith(msg string, fields ...Field)  { Default().LogWith(LevelWarn, msg, fields...) }
+
+// InfoWith logs a structured info message with the default logger.
+func InfoWith(msg string, fields ...Field) { Default().LogWith(LevelInfo, msg, fields...) }
+
+// WarnWith logs a structured warning message with the default logger.
+func WarnWith(msg string, fields ...Field) { Default().LogWith(LevelWarn, msg, fields...) }
+
+// ErrorWith logs a structured error message with the default logger.
 func ErrorWith(msg string, fields ...Field) { Default().LogWith(LevelError, msg, fields...) }
+
+// FatalWith logs a structured fatal message with the default logger and exits.
 func FatalWith(msg string, fields ...Field) { Default().LogWith(LevelFatal, msg, fields...) }
 
-// isComplexFieldValue checks if a field value is a complex type that should be JSON-formatted.
-// This is used in formatFields to determine if a value needs JSON marshaling.
-func isComplexFieldValue(v any) bool {
-	if v == nil {
-		return false
-	}
+// Context-aware package-level functions
 
-	val := reflect.ValueOf(v)
-	kind := val.Kind()
+// DebugCtx logs a debug message with context support using the default logger.
+func DebugCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelDebug, args...) }
 
-	// Handle pointers
-	if kind == reflect.Ptr {
-		if val.IsNil() {
-			return false
-		}
-		val = val.Elem()
-		kind = val.Kind()
-	}
+// InfoCtx logs an info message with context support using the default logger.
+func InfoCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelInfo, args...) }
 
-	// Check for complex types that benefit from JSON formatting
-	switch kind {
-	case reflect.Slice, reflect.Array, reflect.Map, reflect.Struct:
-		// Special case: time.Time and time.Duration have good String() methods
-		if _, ok := v.(interface{ String() string }); ok {
-			return false
-		}
-		return true
-	default:
-		return false
-	}
+// WarnCtx logs a warning message with context support using the default logger.
+func WarnCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelWarn, args...) }
+
+// ErrorCtx logs an error message with context support using the default logger.
+func ErrorCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelError, args...) }
+
+// DebugfCtx logs a formatted debug message with context support using the default logger.
+func DebugfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelDebug, format, args...)
+}
+
+// InfofCtx logs a formatted info message with context support using the default logger.
+func InfofCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelInfo, format, args...)
+}
+
+// WarnfCtx logs a formatted warning message with context support using the default logger.
+func WarnfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelWarn, format, args...)
+}
+
+// ErrorfCtx logs a formatted error message with context support using the default logger.
+func ErrorfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelError, format, args...)
+}
+
+// DebugWithCtx logs a structured debug message with context support using the default logger.
+func DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelDebug, msg, fields...)
+}
+
+// InfoWithCtx logs a structured info message with context support using the default logger.
+func InfoWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelInfo, msg, fields...)
+}
+
+// WarnWithCtx logs a structured warning message with context support using the default logger.
+func WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelWarn, msg, fields...)
+}
+
+// ErrorWithCtx logs a structured error message with context support using the default logger.
+func ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelError, msg, fields...)
+}
+
+// FatalCtx logs a fatal message with context support using the default logger.
+func FatalCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelFatal, args...) }
+
+// FatalfCtx logs a formatted fatal message with context support using the default logger.
+func FatalfCtx(ctx context.Context, format string, args ...any) {
+	Default().LogfCtx(ctx, LevelFatal, format, args...)
+}
+
+// FatalWithCtx logs a structured fatal message with context support using the default logger.
+func FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
+	Default().LogWithCtx(ctx, LevelFatal, msg, fields...)
 }

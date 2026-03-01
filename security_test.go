@@ -1,11 +1,13 @@
 package dd
 
 import (
-	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/cybergodev/dd/internal"
 )
 
 // NOTE: TestSensitiveDataFilter, TestBasicSensitiveDataFilter, and TestDefaultSecurityConfig
@@ -241,7 +243,7 @@ func TestFilterFieldValueSubstring(t *testing.T) {
 	}
 }
 
-func TestFilterValue(t *testing.T) {
+func TestFilterValueRecursive(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
 	tests := []struct {
@@ -259,10 +261,10 @@ func TestFilterValue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := filter.FilterValue(tt.value)
+			result := filter.FilterValueRecursive("", tt.value)
 			// Should not panic
 			if result == nil && tt.value != nil {
-				t.Error("FilterValue should not return nil for non-nil input")
+				t.Error("FilterValueRecursive should not return nil for non-nil input")
 			}
 		})
 	}
@@ -308,6 +310,138 @@ func TestNilFilterClone(t *testing.T) {
 // REDOS PROTECTION TESTS
 // ============================================================================
 
+func TestFilterValueRecursiveCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	type Node struct {
+		Value int
+		Next  *Node
+	}
+
+	a := &Node{Value: 1}
+	b := &Node{Value: 2}
+	a.Next = b
+	b.Next = a // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", a)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+
+	// Check that circular reference is detected
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map result, got %T", result)
+	}
+
+	next, ok := resultMap["Next"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected Next to be a map, got %T", resultMap["Next"])
+	}
+
+	// The circular reference should be marked
+	if next["Next"] != "[CIRCULAR_REFERENCE]" {
+		t.Errorf("Expected [CIRCULAR_REFERENCE], got %v", next["Next"])
+	}
+}
+
+func TestFilterValueRecursiveSliceCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	type Container struct {
+		Items []*Container
+	}
+
+	a := &Container{}
+	b := &Container{}
+	a.Items = []*Container{b}
+	b.Items = []*Container{a} // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", a)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+}
+
+func TestFilterValueRecursiveMapCircularReference(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create maps with circular references
+	mapA := make(map[string]any)
+	mapB := make(map[string]any)
+	mapA["ref"] = mapB
+	mapB["ref"] = mapA // Circular reference
+
+	// Should not panic or hang
+	result := filter.FilterValueRecursive("", mapA)
+	if result == nil {
+		t.Error("Should handle circular reference without returning nil")
+	}
+
+	resultMap, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("Expected map result, got %T", result)
+	}
+
+	ref, ok := resultMap["ref"].(map[string]any)
+	if !ok {
+		t.Fatalf("Expected ref to be a map, got %T", resultMap["ref"])
+	}
+
+	// The circular reference should be marked
+	if ref["ref"] != "[CIRCULAR_REFERENCE]" {
+		t.Errorf("Expected [CIRCULAR_REFERENCE], got %v", ref["ref"])
+	}
+}
+
+func TestReDoSAlternationPattern(t *testing.T) {
+	filter := NewEmptySensitiveDataFilter()
+
+	tests := []struct {
+		name    string
+		pattern string
+		safe    bool
+	}{
+		// Dangerous alternation patterns
+		{"alternation with quantifier first", "(a+|b)+", false},
+		{"alternation with quantifier second", "(a|b+)+", false},
+		{"alternation both quantified", "(a+|b+)+", false},
+		{"alternation with star", "(a*|b)+", false},
+		{"nested alternation", "((a|b)+|c)+", false},
+
+		// Safe alternation patterns
+		{"simple alternation", "(a|b)", true},
+		{"alternation optional", "(a|b)?", true},
+		{"alternation with count", "(a|b){3}", true},
+		{"alternation with range", "(a|b){1,5}", true},
+
+		// Dangerous excessive ranges
+		{"excessive range", "a{1,10000}", false},
+		{"exact excessive", "a{5000}", false},
+
+		// Safe ranges
+		{"safe range", "a{1,100}", true},
+		{"safe exact", "a{50}", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := filter.AddPattern(tt.pattern)
+			if tt.safe {
+				if err != nil {
+					t.Errorf("Pattern %q should be safe, got error: %v", tt.pattern, err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("Pattern %q should be rejected as dangerous", tt.pattern)
+				}
+			}
+		})
+	}
+}
+
 func TestReDoSProtection(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
@@ -332,13 +466,20 @@ func TestReDoSProtection(t *testing.T) {
 func TestFilterTimeout(t *testing.T) {
 	filter := NewSensitiveDataFilter()
 
-	// Add a complex pattern that might timeout
+	// Try to add a dangerous ReDoS pattern - should be rejected
 	err := filter.AddPattern(`(a+)+b`)
-	if err != nil {
-		t.Fatalf("Failed to add pattern: %v", err)
+	if err == nil {
+		t.Error("Should reject dangerous nested quantifier pattern (a+)+b")
 	}
 
-	// Input that could cause backtracking
+	// Add a safe pattern instead
+	err = filter.AddPattern(`a+b`)
+	if err != nil {
+		t.Fatalf("Failed to add safe pattern: %v", err)
+	}
+
+	// Input that could cause backtracking with the dangerous pattern
+	// but is safe with the simple pattern
 	input := strings.Repeat("a", 50)
 
 	result := filter.Filter(input)
@@ -423,8 +564,8 @@ func TestConcurrentFilterAccess(t *testing.T) {
 func TestSecurityIntegrationWithLogger(t *testing.T) {
 	var buf strings.Builder
 	config := DefaultConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		MaxMessageSize:  1024,
 		MaxWriters:      10,
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
@@ -451,8 +592,8 @@ func TestSecurityIntegrationWithLogger(t *testing.T) {
 func TestSecurityMessageSizeLimit(t *testing.T) {
 	var buf strings.Builder
 	config := DefaultConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		MaxMessageSize: 100, // Small limit for testing
 		MaxWriters:     10,
 	}
@@ -480,8 +621,8 @@ func TestSecurityMessageSizeLimit(t *testing.T) {
 func TestSecurityFieldFiltering(t *testing.T) {
 	var buf strings.Builder
 	config := JSONConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 
@@ -609,10 +750,13 @@ func TestPhoneNumberFiltering(t *testing.T) {
 		},
 
 		// Chinese mobile numbers
+		// Note: Standalone 11-digit numbers are NOT filtered to avoid over-matching
+		// order IDs, timestamps, user IDs, etc. They ARE filtered when used with
+		// sensitive field names like "phone", "mobile", etc.
 		{
-			name:     "Chinese mobile 11 digits",
+			name:     "Chinese mobile 11 digits (standalone - not filtered)",
 			input:    "13812345678",
-			contains: "[REDACTED]",
+			contains: "13812345678",
 		},
 		{
 			name:     "Chinese mobile with country code",
@@ -625,19 +769,19 @@ func TestPhoneNumberFiltering(t *testing.T) {
 			contains: "[REDACTED]",
 		},
 		{
-			name:     "Chinese mobile starts with 13",
+			name:     "Chinese mobile starts with 13 (standalone - not filtered)",
 			input:    "13123456789",
-			contains: "[REDACTED]",
+			contains: "13123456789",
 		},
 		{
-			name:     "Chinese mobile starts with 18",
+			name:     "Chinese mobile starts with 18 (standalone - not filtered)",
 			input:    "18123456789",
-			contains: "[REDACTED]",
+			contains: "18123456789",
 		},
 		{
-			name:     "Chinese mobile starts with 19",
+			name:     "Chinese mobile starts with 19 (standalone - not filtered)",
 			input:    "19123456789",
-			contains: "[REDACTED]",
+			contains: "19123456789",
 		},
 
 		// UK mobile numbers
@@ -721,8 +865,8 @@ func TestPhoneNumberFiltering(t *testing.T) {
 func TestPhoneNumberFieldFiltering(t *testing.T) {
 	var buf strings.Builder
 	config := JSONConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 
@@ -750,8 +894,10 @@ func TestPhoneNumberFieldFiltering(t *testing.T) {
 	if strings.Contains(output, "13812345678") {
 		t.Error("Mobile value should be filtered")
 	}
-	if strings.Contains(output, "john@example.com") {
-		t.Error("Email value should be filtered")
+	// Note: Email is NOT filtered in basic mode to avoid false positives on user@host format
+	// Email filtering is only available in full filter mode (NewSensitiveDataFilter)
+	if !strings.Contains(output, "john@example.com") {
+		t.Error("Email should NOT be filtered in basic mode")
 	}
 	if !strings.Contains(output, "[REDACTED]") {
 		t.Error("Sensitive fields should be redacted")
@@ -958,8 +1104,8 @@ func TestDatabaseConnectionFiltering(t *testing.T) {
 func TestDatabaseConnectionFieldFiltering(t *testing.T) {
 	var buf strings.Builder
 	config := JSONConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 
@@ -998,8 +1144,8 @@ func TestDatabaseConnectionFieldFiltering(t *testing.T) {
 func TestDatabaseConnectionInMessage(t *testing.T) {
 	var buf strings.Builder
 	config := JSONConfig()
-	config.Writers = []io.Writer{&buf}
-	config.SecurityConfig = &SecurityConfig{
+	config.Output = &buf
+	config.Security = &SecurityConfig{
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 
@@ -1025,5 +1171,433 @@ func TestDatabaseConnectionInMessage(t *testing.T) {
 	}
 	if !strings.Contains(output, "postgresql://[REDACTED]") {
 		t.Error("Should contain redacted PostgreSQL connection")
+	}
+}
+
+// ============================================================================
+// BOUNDARY SECURITY TESTS (Truncation & Chunking)
+// ============================================================================
+
+// TestTruncationBoundarySensitiveData tests that sensitive data patterns spanning
+// the truncation boundary are still detected and redacted.
+func TestTruncationBoundarySensitiveData(t *testing.T) {
+	// Initialize patterns first
+	internal.InitPatterns()
+
+	// Create a custom filter with smaller max input length for testing
+	smallFilter := &SensitiveDataFilter{
+		maxInputLength: 1000, // Small limit for testing
+		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+	}
+	smallFilter.enabled.Store(true)
+
+	// Copy patterns from default filter
+	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
+	copy(patterns, internal.CompiledBasicPatterns)
+	smallFilter.patternsPtr.Store(&patterns)
+
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+		description      string
+	}{
+		{
+			name: "password at truncation boundary",
+			// Create input where password spans the 1000 byte boundary (must exceed maxInputLength)
+			input:            strings.Repeat("x", 950) + "password=supersecret123 more text here that exceeds the limit",
+			shouldNotContain: "supersecret123",
+			description:      "Password value should be redacted even at truncation boundary",
+		},
+		{
+			name: "credit card at truncation boundary",
+			// Credit card format: 4532-0151-1283-0366 matches the pattern
+			input:            strings.Repeat("x", 930) + "card=4532-0151-1283-0366 end of message",
+			shouldNotContain: "4532-0151-1283-0366",
+			description:      "Credit card should be redacted even at truncation boundary",
+		},
+		{
+			name: "api key at truncation boundary",
+			// API key format: sk- followed by 16-48 alphanumeric chars
+			input:            strings.Repeat("x", 920) + "api_key=sk-1234567890abcdefghijkl more data here",
+			shouldNotContain: "sk-1234567890abcdefghijkl",
+			description:      "API key should be redacted even at truncation boundary",
+		},
+		{
+			name:             "connection string at truncation boundary",
+			input:            strings.Repeat("x", 880) + "mysql://user:pass@localhost:3306/db tail of message",
+			shouldNotContain: "user:pass@localhost:3306",
+			description:      "Connection string should be redacted even at truncation boundary",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Ensure input exceeds maxInputLength
+			if len(tt.input) <= 1000 {
+				tt.input = tt.input + strings.Repeat("x", 1001-len(tt.input))
+			}
+
+			result := smallFilter.Filter(tt.input)
+
+			// Check that the sensitive data was redacted
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("%s\nInput length: %d, Result contains sensitive data: %s\nResult preview: %s",
+					tt.description, len(tt.input), tt.shouldNotContain, result[:min(200, len(result))])
+			}
+
+			// Verify the result contains truncation marker
+			if !strings.Contains(result, "[TRUNCATED") {
+				t.Errorf("Expected [TRUNCATED] marker for input length %d", len(tt.input))
+			}
+		})
+	}
+}
+
+// TestChunkedProcessingBoundarySensitiveData tests that sensitive data patterns
+// spanning chunk boundaries during chunked processing are still detected.
+func TestChunkedProcessingBoundarySensitiveData(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create large inputs that will trigger chunked processing
+	// Chunk size is 4096, so we create inputs larger than that
+	// NOTE: Test inputs must have word boundaries (spaces) around sensitive data
+	// for the patterns to match correctly.
+
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+		description      string
+	}{
+		{
+			name: "credit card spanning chunk boundary",
+			// Place credit card number at chunk boundary (4096 byte mark) with spaces for word boundary
+			input:            strings.Repeat("x ", 2045) + " 4532-0151-1283-0366 " + strings.Repeat(" y", 500),
+			shouldNotContain: "4532-0151-1283-0366",
+			description:      "Credit card spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "password spanning chunk boundary",
+			input:            strings.Repeat("x ", 2040) + " password=supersecretvalue " + strings.Repeat(" y", 500),
+			shouldNotContain: "supersecretvalue",
+			description:      "Password spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "SSN spanning chunk boundary",
+			input:            strings.Repeat("x ", 2045) + " 123-45-6789 " + strings.Repeat(" y", 500),
+			shouldNotContain: "123-45-6789",
+			description:      "SSN spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "API key spanning chunk boundary",
+			input:            strings.Repeat("x ", 2035) + " sk-1234567890abcdefghijklmnop " + strings.Repeat(" y", 500),
+			shouldNotContain: "sk-1234567890abcdefghijklmnop",
+			description:      "API key spanning chunk boundary should be redacted",
+		},
+		{
+			name:             "connection string spanning chunk boundary",
+			input:            strings.Repeat("x ", 2000) + " mysql://admin:secretpass@db.host:3306/prod " + strings.Repeat(" y", 500),
+			shouldNotContain: "admin:secretpass@db.host:3306",
+			description:      "Connection string spanning chunk boundary should be redacted",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filter.Filter(tt.input)
+
+			// Check that the sensitive data was redacted
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("%s\nInput length: %d, Result still contains: %s",
+					tt.description, len(tt.input), tt.shouldNotContain)
+			}
+
+			// Verify result contains [REDACTED]
+			if !strings.Contains(result, "[REDACTED]") {
+				t.Errorf("Expected [REDACTED] in result for: %s", tt.name)
+			}
+		})
+	}
+}
+
+// TestChunkedProcessingPreservesNonSensitiveData tests that chunked processing
+// doesn't corrupt non-sensitive data.
+func TestChunkedProcessingPreservesNonSensitiveData(t *testing.T) {
+	filter := NewSensitiveDataFilter()
+
+	// Create a large input without any sensitive data
+	input := strings.Repeat("hello world ", 1000) // ~12KB
+
+	result := filter.Filter(input)
+
+	// The result should be very similar (may have some differences due to final pass)
+	// but should not contain [REDACTED] since there's no sensitive data
+	if strings.Contains(result, "[REDACTED]") {
+		t.Error("Non-sensitive data should not be redacted")
+	}
+
+	// Most of the content should be preserved
+	if len(result) < len(input)/2 {
+		t.Errorf("Result too short: got %d, input was %d", len(result), len(input))
+	}
+}
+
+// TestTruncationWithNoSensitiveDataAtBoundary tests that truncation works
+// correctly when there's no sensitive data at the boundary.
+func TestTruncationWithNoSensitiveDataAtBoundary(t *testing.T) {
+	// Create a filter with small max input length
+	smallFilter := &SensitiveDataFilter{
+		maxInputLength: 500,
+		timeout:        DefaultFilterTimeout,
+		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+	}
+	smallFilter.enabled.Store(true)
+
+	// Copy patterns from default filter
+	patterns := make([]*regexp.Regexp, len(internal.CompiledBasicPatterns))
+	copy(patterns, internal.CompiledBasicPatterns)
+	smallFilter.patternsPtr.Store(&patterns)
+
+	// Create input with no sensitive data near the boundary
+	input := strings.Repeat("normal text ", 100) // ~1200 bytes, no sensitive data
+
+	result := smallFilter.Filter(input)
+
+	// Should contain truncation marker
+	if !strings.Contains(result, "[TRUNCATED") {
+		t.Error("Large input should be truncated")
+	}
+
+	// Should not contain [REDACTED] since there's no sensitive data
+	if strings.Contains(result, "[REDACTED]") {
+		t.Error("Non-sensitive data should not be redacted")
+	}
+}
+
+// ============================================================================
+// SECURITY PRESET CONFIGURATION TESTS
+// ============================================================================
+
+func TestHealthcareConfig(t *testing.T) {
+	config := HealthcareConfig()
+
+	if config == nil {
+		t.Fatal("HealthcareConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("HealthcareConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("HealthcareConfig filter should be enabled")
+	}
+
+	// Test healthcare-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// NPI with context
+		{
+			name:             "NPI with context",
+			input:            "provider_id=1234567890",
+			shouldNotContain: "1234567890",
+		},
+		// Medical Record Number with context
+		{
+			name:             "MRN with context",
+			input:            "mrn=PATIENT123456",
+			shouldNotContain: "PATIENT123456",
+		},
+		// Patient ID with context
+		{
+			name:             "Patient ID with context",
+			input:            "patient_id=AB12345678",
+			shouldNotContain: "AB12345678",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in healthcare",
+			input:            "password=healthsecret123",
+			shouldNotContain: "healthsecret123",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("HealthcareConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestFinancialConfig(t *testing.T) {
+	config := FinancialConfig()
+
+	if config == nil {
+		t.Fatal("FinancialConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("FinancialConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("FinancialConfig filter should be enabled")
+	}
+
+	// Test financial-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// CVV with context
+		{
+			name:             "CVV with context",
+			input:            "cvv=123",
+			shouldNotContain: "123",
+		},
+		// Account number with context
+		{
+			name:             "account number with context",
+			input:            "account_number=12345678901",
+			shouldNotContain: "12345678901",
+		},
+		// Bank account with context
+		{
+			name:             "bank account with context",
+			input:            "bank_account=98765432100",
+			shouldNotContain: "98765432100",
+		},
+		// Standard credit card
+		{
+			name:             "credit card in financial",
+			input:            "card=4532-0151-1283-0366",
+			shouldNotContain: "4532-0151-1283-0366",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in financial",
+			input:            "password=financesecret",
+			shouldNotContain: "financesecret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("FinancialConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestGovernmentConfig(t *testing.T) {
+	config := GovernmentConfig()
+
+	if config == nil {
+		t.Fatal("GovernmentConfig() should not return nil")
+	}
+
+	if config.SensitiveFilter == nil {
+		t.Fatal("GovernmentConfig should have a sensitive filter")
+	}
+
+	if !config.SensitiveFilter.IsEnabled() {
+		t.Error("GovernmentConfig filter should be enabled")
+	}
+
+	// Test government-specific pattern detection
+	tests := []struct {
+		name             string
+		input            string
+		shouldNotContain string
+	}{
+		// Passport number with context
+		{
+			name:             "passport with context",
+			input:            "passport_number=123456789",
+			shouldNotContain: "123456789",
+		},
+		// Driver's license with context
+		{
+			name:             "driver license with context",
+			input:            "driver_license=AB1234567",
+			shouldNotContain: "AB1234567",
+		},
+		// Case number with context
+		{
+			name:             "case number with context",
+			input:            "case_number=CASE12345",
+			shouldNotContain: "CASE12345",
+		},
+		// Standard sensitive data should also be filtered
+		{
+			name:             "password in government",
+			input:            "password=govsecret",
+			shouldNotContain: "govsecret",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := config.SensitiveFilter.Filter(tt.input)
+			if strings.Contains(result, tt.shouldNotContain) {
+				t.Errorf("GovernmentConfig should filter %q, got: %s", tt.shouldNotContain, result)
+			}
+		})
+	}
+}
+
+func TestSecurityConfigCloning(t *testing.T) {
+	original := HealthcareConfig()
+	clone := original.Clone()
+
+	if clone == nil {
+		t.Fatal("Clone should not return nil")
+	}
+
+	if clone.SensitiveFilter == nil {
+		t.Fatal("Cloned config should have a sensitive filter")
+	}
+
+	// Modify clone
+	clone.SensitiveFilter.AddPattern(`test_pattern=\w+`)
+
+	// Original should not be affected
+	if original.SensitiveFilter.PatternCount() == clone.SensitiveFilter.PatternCount() {
+		t.Error("Modifying clone should not affect original")
+	}
+}
+
+func TestPresetConfigsHaveMaxWriters(t *testing.T) {
+	configs := []struct {
+		name   string
+		config *SecurityConfig
+	}{
+		{"HealthcareConfig", HealthcareConfig()},
+		{"FinancialConfig", FinancialConfig()},
+		{"GovernmentConfig", GovernmentConfig()},
+		{"DefaultSecureConfig", DefaultSecureConfig()},
+		{"DefaultSecurityConfig", DefaultSecurityConfig()},
+	}
+
+	for _, tc := range configs {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.config.MaxWriters <= 0 {
+				t.Errorf("%s should have MaxWriters > 0", tc.name)
+			}
+			if tc.config.MaxMessageSize <= 0 {
+				t.Errorf("%s should have MaxMessageSize > 0", tc.name)
+			}
+		})
 	}
 }

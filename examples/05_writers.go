@@ -1,0 +1,184 @@
+//go:build examples
+
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/cybergodev/dd"
+)
+
+// Writers - Advanced Output Management
+//
+// Topics covered:
+// 1. FileWriter with rotation
+// 2. BufferedWriter for high throughput
+// 3. MultiWriter for multiple outputs
+// 4. Dynamic writer management
+// 5. Error handling
+func main() {
+	fmt.Println("=== DD Writers Management ===\n")
+
+	section1FileWriter()
+	section2BufferedWriter()
+	section3MultiWriter()
+	section4DynamicManagement()
+	section5ErrorHandling()
+
+	fmt.Println("\n✅ Writers examples completed!")
+}
+
+// Section 1: FileWriter with rotation
+func section1FileWriter() {
+	fmt.Println("1. FileWriter")
+	fmt.Println("--------------")
+
+	// Direct FileWriter creation
+	fileWriter, err := dd.NewFileWriter("logs/direct.log", dd.FileWriterConfig{
+		MaxSizeMB:  100,
+		MaxBackups: 10,
+		MaxAge:     7 * 24 * time.Hour,
+		Compress:   true,
+	})
+	if err != nil {
+		fmt.Printf("Failed: %v\n", err)
+		return
+	}
+	defer fileWriter.Close()
+
+	// Use with logger
+	cfg := dd.DefaultConfig()
+	cfg.Output = fileWriter
+
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
+
+	logger.Info("Direct file writer output")
+
+	fmt.Println("✓ File: logs/direct.log\n")
+}
+
+// Section 2: BufferedWriter for high throughput
+func section2BufferedWriter() {
+	fmt.Println("2. BufferedWriter (High Throughput)")
+	fmt.Println("-------------------------------------")
+
+	// Create underlying file writer
+	fileWriter, _ := dd.NewFileWriter("logs/buffered.log")
+
+	// Wrap with buffer (default 4KB buffer)
+	bufferedWriter, err := dd.NewBufferedWriter(fileWriter)
+	if err != nil {
+		fmt.Printf("Failed: %v\n", err)
+		return
+	}
+	defer bufferedWriter.Close() // IMPORTANT: Always call Close to flush!
+
+	cfg := dd.DefaultConfig()
+	cfg.Output = bufferedWriter
+
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
+
+	// High-throughput logging
+	start := time.Now()
+	for i := 0; i < 1000; i++ {
+		logger.InfoWith("Buffered entry",
+			dd.Int("seq", i),
+		)
+	}
+	duration := time.Since(start)
+
+	fmt.Printf("✓ 1000 messages in %v\n", duration)
+	fmt.Println("  Note: Close() flushes the buffer\n")
+}
+
+// Section 3: MultiWriter for multiple outputs
+func section3MultiWriter() {
+	fmt.Println("3. MultiWriter (Multiple Outputs)")
+	fmt.Println("-----------------------------------")
+
+	// Create MultiWriter combining outputs
+	fileWriter, _ := dd.NewFileWriter("logs/multi.log")
+	multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
+
+	cfg := dd.DefaultConfig()
+	cfg.Output = multiWriter
+
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
+
+	logger.Info("This appears in BOTH console and file")
+	logger.InfoWith("Structured data",
+		dd.String("source", "multiwriter"),
+	)
+
+	fmt.Println()
+}
+
+// Section 4: Dynamic writer management
+func section4DynamicManagement() {
+	fmt.Println("4. Dynamic Writer Management")
+	fmt.Println("-----------------------------")
+
+	logger, _ := dd.New()
+	defer logger.Close()
+
+	fmt.Printf("Initial writers: %d\n", logger.WriterCount())
+
+	// Add writers dynamically
+	fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
+	logger.AddWriter(fileWriter)
+	fmt.Printf("After adding file: %d writers\n", logger.WriterCount())
+
+	logger.Info("Goes to console + file")
+
+	// Remove writer
+	logger.RemoveWriter(fileWriter)
+	fmt.Printf("After removing file: %d writers\n", logger.WriterCount())
+
+	// Logger state inspection
+	fmt.Printf("Is closed: %v\n", logger.IsClosed())
+	fmt.Printf("Level: %s\n", logger.GetLevel().String())
+
+	fmt.Println()
+}
+
+// Section 5: Error handling
+func section5ErrorHandling() {
+	fmt.Println("5. Error Handling")
+	fmt.Println("------------------")
+
+	var errorCount int
+	var mu sync.Mutex
+
+	// Custom error handler
+	handler := func(writer io.Writer, err error) {
+		mu.Lock()
+		errorCount++
+		mu.Unlock()
+		fmt.Printf("  [Write Error] %T: %v\n", writer, err)
+	}
+
+	cfg := dd.DefaultConfig()
+	cfg.WriteErrorHandler = handler
+
+	logger, _ := dd.New(cfg)
+	defer logger.Close()
+
+	// Set handler at runtime
+	logger.SetWriteErrorHandler(func(w io.Writer, err error) {
+		fmt.Printf("  [Runtime Handler] Error: %v\n", err)
+	})
+
+	logger.Info("Normal logging works fine")
+
+	// Flush to ensure all data is written
+	logger.Flush()
+
+	fmt.Println("  Errors captured by handler\n")
+}

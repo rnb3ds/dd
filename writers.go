@@ -3,11 +3,11 @@ package dd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,18 +38,30 @@ type FileWriterConfig struct {
 	Compress   bool
 }
 
-func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
-	securePath, err := validateAndSecurePath(path)
+// DefaultFileWriterConfig returns FileWriterConfig with sensible defaults.
+// Default values: MaxSizeMB=100, MaxAge=30 days, MaxBackups=10, Compress=false.
+func DefaultFileWriterConfig() FileWriterConfig {
+	return FileWriterConfig{
+		MaxSizeMB:  DefaultMaxSizeMB,
+		MaxAge:     DefaultMaxAge,
+		MaxBackups: DefaultMaxBackups,
+		Compress:   false,
+	}
+}
+
+func NewFileWriter(path string, opts ...FileWriterConfig) (*FileWriter, error) {
+	var config FileWriterConfig
+	if len(opts) > 0 {
+		config = opts[0]
+	}
+
+	securePath, err := internal.ValidateAndSecurePath(path, MaxPathLength, ErrEmptyFilePath, ErrNullByte, ErrPathTooLong, ErrPathTraversal, ErrInvalidPath)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := validateFileWriterConfig(&config); err != nil {
 		return nil, err
-	}
-
-	if config.MaxAge > 0 && config.MaxBackups <= 0 {
-		return nil, fmt.Errorf("MaxAge is set but MaxBackups is not configured, set MaxBackups to enable cleanup")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,53 +98,33 @@ func NewFileWriter(path string, config FileWriterConfig) (*FileWriter, error) {
 	return fw, nil
 }
 
-func validateAndSecurePath(path string) (string, error) {
-	if path == "" {
-		return "", ErrEmptyFilePath
-	}
-
-	if strings.Contains(path, "\x00") {
-		return "", ErrNullByte
-	}
-
-	if len(path) > MaxPathLength {
-		return "", fmt.Errorf("%w (max %d characters)", ErrPathTooLong, MaxPathLength)
-	}
-
-	cleanPath := filepath.Clean(path)
-	if strings.Contains(cleanPath, "..") {
-		return "", ErrPathTraversal
-	}
-
-	// Convert to absolute path
-	// Note: Symlink checking is done AFTER opening the file in internal.OpenFile
-	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities
-	absPath, err := filepath.Abs(cleanPath)
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrInvalidPath, err)
-	}
-
-	return absPath, nil
-}
-
 func validateFileWriterConfig(config *FileWriterConfig) error {
-	maxSize := config.MaxSizeMB
-	if maxSize <= 0 {
-		maxSize = DefaultMaxSizeMB
-	}
-	maxAge := config.MaxAge
-	if maxAge <= 0 {
-		maxAge = DefaultMaxAge
-	}
-	maxBackups := config.MaxBackups
-	if maxBackups < 0 {
-		maxBackups = DefaultMaxBackups
+	// Apply defaults for zero/negative MaxSizeMB
+	if config.MaxSizeMB <= 0 {
+		config.MaxSizeMB = DefaultMaxSizeMB
 	}
 
-	if maxSize > MaxFileSizeMB {
+	// Cleanup is enabled only when at least one cleanup parameter is configured.
+	// Apply defaults based on what the user has specified:
+	// - Both zero: use full defaults (MaxAge + MaxBackups)
+	// - Only MaxBackups set: use count-based cleanup only (MaxAge = 0)
+	// - Only MaxAge set: use time-based cleanup with default MaxBackups
+	if config.MaxAge == 0 && config.MaxBackups == 0 {
+		config.MaxAge = DefaultMaxAge
+		config.MaxBackups = DefaultMaxBackups
+	} else if config.MaxAge == 0 && config.MaxBackups > 0 {
+		// User set MaxBackups but not MaxAge - disable time-based cleanup
+		config.MaxAge = 0
+	} else if config.MaxAge > 0 && config.MaxBackups == 0 {
+		// User set MaxAge but not MaxBackups - use default MaxBackups
+		config.MaxBackups = DefaultMaxBackups
+	}
+
+	// Validate limits
+	if config.MaxSizeMB > MaxFileSizeMB {
 		return fmt.Errorf("%w: maximum %dMB", ErrMaxSizeExceeded, MaxFileSizeMB)
 	}
-	if maxBackups > MaxBackupCount {
+	if config.MaxBackups > MaxBackupCount {
 		return fmt.Errorf("%w: maximum %d", ErrMaxBackupsExceeded, MaxBackupCount)
 	}
 
@@ -235,13 +227,18 @@ func (fw *FileWriter) cleanupRoutine() {
 			return
 		case <-ticker.C:
 			if err := internal.CleanupOldFiles(fw.path, fw.maxAge); err != nil {
-				// Log the error but continue running
-				// The cleanup is a background task, errors shouldn't stop the logger
+				// Log to stderr as fallback - cleanup errors should not be silent
+				fmt.Fprintf(os.Stderr, "dd: cleanup old files %s: %v\n", fw.path, err)
 			}
 		}
 	}
 }
 
+// BufferedWriter wraps an io.Writer with buffering capabilities.
+// It automatically flushes when the buffer reaches a certain size or after a timeout.
+//
+// IMPORTANT: Always call Close() when done to ensure all buffered data is flushed.
+// Failure to call Close() may result in data loss.
 type BufferedWriter struct {
 	writer    io.Writer
 	buffer    *bufio.Writer
@@ -256,11 +253,19 @@ type BufferedWriter struct {
 	closed    atomic.Bool
 }
 
-func NewBufferedWriter(w io.Writer, bufferSize int) (*BufferedWriter, error) {
+// NewBufferedWriter creates a new BufferedWriter with the specified buffer size.
+// The writer automatically flushes when the buffer is half full or every 100ms.
+// Remember to call Close() to ensure all buffered data is written to the underlying writer.
+// If bufferSize is not specified or is 0, DefaultBufferSizeKB (4KB) is used.
+func NewBufferedWriter(w io.Writer, bufferSizes ...int) (*BufferedWriter, error) {
 	if w == nil {
 		return nil, ErrNilWriter
 	}
 
+	bufferSize := 0
+	if len(bufferSizes) > 0 {
+		bufferSize = bufferSizes[0]
+	}
 	if bufferSize < DefaultBufferSizeKB*1024 {
 		bufferSize = DefaultBufferSizeKB * 1024
 	}
@@ -336,17 +341,21 @@ func (bw *BufferedWriter) Close() error {
 	bw.mu.Lock()
 	defer bw.mu.Unlock()
 
+	var errs []error
+
 	if bw.buffer != nil {
 		if err := bw.buffer.Flush(); err != nil {
-			return err
+			errs = append(errs, fmt.Errorf("flush: %w", err))
 		}
 	}
 
 	if closer, ok := bw.writer.(io.Closer); ok {
-		return closer.Close()
+		if err := closer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close writer: %w", err))
+		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (bw *BufferedWriter) autoFlushRoutine() {
@@ -360,9 +369,15 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 		case <-bw.ctx.Done():
 			return
 		case <-ticker.C:
+			// Check if closed before attempting to flush
+			if bw.closed.Load() {
+				return
+			}
 			bw.mu.Lock()
 			if bw.buffer.Buffered() > 0 && time.Since(bw.lastFlush) >= bw.flushTime {
-				_ = bw.buffer.Flush()
+				if err := bw.buffer.Flush(); err != nil {
+					fmt.Fprintf(os.Stderr, "dd: autoflush error: %v\n", err)
+				}
 				bw.lastFlush = time.Now()
 			}
 			bw.mu.Unlock()
@@ -371,8 +386,11 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 }
 
 type MultiWriter struct {
-	writers []io.Writer
-	mu      sync.RWMutex
+	// writersPtr stores an immutable slice of writers using atomic pointer.
+	// This eliminates slice copying during write operations (hot path).
+	// The slice is replaced atomically when writers are added/removed.
+	writersPtr atomic.Pointer[[]io.Writer]
+	mu         sync.Mutex // protects AddWriter/RemoveWriter operations
 }
 
 func NewMultiWriter(writers ...io.Writer) *MultiWriter {
@@ -383,9 +401,9 @@ func NewMultiWriter(writers ...io.Writer) *MultiWriter {
 		}
 	}
 
-	return &MultiWriter{
-		writers: validWriters,
-	}
+	mw := &MultiWriter{}
+	mw.writersPtr.Store(&validWriters)
+	return mw
 }
 
 func (mw *MultiWriter) Write(p []byte) (int, error) {
@@ -394,39 +412,32 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 
-	mw.mu.RLock()
-	writerCount := len(mw.writers)
-	if writerCount == 0 {
-		mw.mu.RUnlock()
+	// Fast path: atomic load of writers pointer (lock-free read)
+	writersPtr := mw.writersPtr.Load()
+	if writersPtr == nil || len(*writersPtr) == 0 {
 		return pLen, nil
 	}
 
+	writers := *writersPtr
+	writerCount := len(writers)
+
 	// Fast path: single writer optimization
 	if writerCount == 1 {
-		w := mw.writers[0]
-		mw.mu.RUnlock()
-		return w.Write(p)
+		return writers[0].Write(p)
 	}
 
-	writers := make([]io.Writer, writerCount)
-	copy(writers, mw.writers)
-	mw.mu.RUnlock()
-
-	var firstErr error
+	// Iterate directly over the immutable slice - no copy needed
+	var allErrors MultiWriterError
 	successCount := 0
 
 	for i := 0; i < writerCount; i++ {
 		n, err := writers[i].Write(p)
 		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("writer[%d]: %w", i, err)
-			}
+			allErrors.AddError(i, writers[i], err)
 			continue
 		}
 		if n != pLen {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("writer[%d]: short write (%d/%d bytes)", i, n, pLen)
-			}
+			allErrors.AddError(i, writers[i], fmt.Errorf("short write (%d/%d bytes)", n, pLen))
 			continue
 		}
 		successCount++
@@ -434,72 +445,105 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 
 	// If all writers failed, return error
 	if successCount == 0 {
-		return 0, firstErr
+		return 0, &allErrors
 	}
 
 	// If partial success, return bytes written but include error info
-	if firstErr != nil {
-		return pLen, fmt.Errorf("partial write failure (%d/%d succeeded): %w", successCount, writerCount, firstErr)
+	if allErrors.HasErrors() {
+		return pLen, &allErrors
 	}
 
 	return pLen, nil
 }
 
-func (mw *MultiWriter) AddWriter(w io.Writer) {
-	if w == nil || mw == nil {
-		return
+func (mw *MultiWriter) AddWriter(w io.Writer) error {
+	if mw == nil {
+		return fmt.Errorf("%w", ErrNilWriter)
+	}
+	if w == nil {
+		return ErrNilWriter
 	}
 
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
-	// Check for duplicates and max limit
-	for _, existing := range mw.writers {
+	// Load current writers slice
+	currentWriters := mw.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrNilWriter
+	}
+
+	// Check for duplicates
+	for _, existing := range *currentWriters {
 		if existing == w {
-			return // Already exists
+			return nil // Already exists, not an error
 		}
 	}
 
-	if len(mw.writers) >= MaxWriterCount {
-		return // Silently ignore if max reached
+	if len(*currentWriters) >= MaxWriterCount {
+		return ErrMaxWritersExceeded
 	}
 
-	mw.writers = append(mw.writers, w)
+	// Create new slice with the new writer added
+	newWriters := make([]io.Writer, len(*currentWriters)+1)
+	copy(newWriters, *currentWriters)
+	newWriters[len(*currentWriters)] = w
+
+	// Atomically swap the pointer
+	mw.writersPtr.Store(&newWriters)
+	return nil
 }
 
-func (mw *MultiWriter) RemoveWriter(w io.Writer) {
+func (mw *MultiWriter) RemoveWriter(w io.Writer) error {
 	if mw == nil {
-		return
+		return ErrNilWriter
 	}
 
 	mw.mu.Lock()
 	defer mw.mu.Unlock()
 
-	for i := 0; i < len(mw.writers); i++ {
-		if mw.writers[i] == w {
-			// Prevent memory leak by clearing reference
-			mw.writers[i] = mw.writers[len(mw.writers)-1]
-			mw.writers[len(mw.writers)-1] = nil
-			mw.writers = mw.writers[:len(mw.writers)-1]
-			break
+	// Load current writers slice
+	currentWriters := mw.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrWriterNotFound
+	}
+
+	writerCount := len(*currentWriters)
+	for i := 0; i < writerCount; i++ {
+		if (*currentWriters)[i] == w {
+			// Create new slice without the removed writer
+			newWriters := make([]io.Writer, writerCount-1)
+			copy(newWriters, (*currentWriters)[:i])
+			copy(newWriters[i:], (*currentWriters)[i+1:])
+
+			// Atomically swap the pointer
+			mw.writersPtr.Store(&newWriters)
+			return nil
 		}
 	}
+
+	return ErrWriterNotFound
 }
 
 func (mw *MultiWriter) Close() error {
-	mw.mu.RLock()
-	writers := make([]io.Writer, len(mw.writers))
-	copy(writers, mw.writers)
-	mw.mu.RUnlock()
+	// Load writers atomically
+	writersPtr := mw.writersPtr.Load()
+	if writersPtr == nil {
+		return nil
+	}
+	writers := *writersPtr
 
-	var lastErr error
+	var errs []error
 	for _, w := range writers {
 		if closer, ok := w.(io.Closer); ok {
-			if err := closer.Close(); err != nil {
-				lastErr = err
+			// Skip standard streams to prevent closing os.Stdout/Stderr/Stdin
+			if w != os.Stdout && w != os.Stderr && w != os.Stdin {
+				if err := closer.Close(); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }

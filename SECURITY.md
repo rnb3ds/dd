@@ -1,5 +1,47 @@
 # Security Policy
 
+## ⚠️ IMPORTANT: Security Configuration Warning
+
+**By default, sensitive data filtering is DISABLED for maximum performance.**
+
+This means passwords, API keys, credit card numbers, and other sensitive data may appear in your logs unless you explicitly enable security filtering.
+
+### How to Enable Security Filtering
+
+```go
+// Option 1: Basic filtering (recommended for most production systems)
+cfg := dd.DefaultConfig()
+cfg.Security = dd.DefaultSecurityConfig()
+logger, _ := dd.New(cfg)
+
+// Option 2: Full filtering (maximum security for sensitive environments)
+cfg := dd.DefaultConfig()
+cfg.Security = dd.DefaultSecureConfig()
+logger, _ := dd.New(cfg)
+
+// Option 3: Industry-specific presets
+cfg := dd.DefaultConfig()
+cfg.Security = dd.HealthcareConfig()   // HIPAA compliance
+// OR
+cfg.Security = dd.FinancialConfig()    // PCI-DSS compliance
+// OR
+cfg.Security = dd.GovernmentConfig()   // Government/defense systems
+logger, _ := dd.New(cfg)
+```
+
+### Risk Assessment
+
+| Configuration | Risk Level | Use Case |
+|---------------|------------|----------|
+| No filtering (default) | **HIGH** | Development only |
+| `DefaultSecurityConfig()` | **MEDIUM** | General production |
+| `DefaultSecureConfig()` | **LOW** | High-security environments |
+| Industry presets | **LOW** | Compliance requirements |
+
+**Never use the default (no filtering) configuration in production systems that handle sensitive data.**
+
+---
+
 ## Overview
 
 The DD logging library is designed with security as a core principle. This document outlines the security features, best practices, and vulnerability reporting procedures for the DD library.
@@ -16,23 +58,31 @@ DD provides built-in protection against accidental logging of sensitive informat
 
 #### Filtering Levels
 
-**Basic Filtering** (6 patterns - recommended for most use cases):
+**Basic Filtering** (recommended for most use cases):
 - Credit card numbers (13-19 digits)
 - Social Security Numbers (SSN format: XXX-XX-XXXX)
 - Password fields (password/passwd/pwd with values)
 - API keys and tokens
 - OpenAI API keys (sk-* format)
 - Private key headers (PEM format)
+- Phone numbers (multiple formats)
+- Database connection strings
 
-**Full Filtering** (12 patterns - comprehensive protection):
+**Full Filtering** (comprehensive protection):
 - All basic patterns plus:
 - JWT tokens (eyJ* format)
 - AWS access keys (AKIA* format)
-- UUID/GUID patterns
+- Google API keys (AIza* format)
 - Email addresses
-- IP addresses
-- Bitcoin addresses
-- Database connection strings (MySQL, PostgreSQL, MongoDB)
+- IPv4 and IPv6 addresses
+- JDBC connection strings
+- Server/data source patterns
+
+**Enterprise Patterns** (available in full filtering and industry presets):
+- **Financial Services**: SWIFT/BIC codes, IBAN, CVV/CVC codes
+- **Healthcare**: ICD-10 codes, NPI, MRN, HICN
+- **Government**: Passport numbers, Driver's License, Tax ID/EIN, UK NI, Canadian SIN
+- **Cloud Providers**: GitHub tokens, Slack tokens, Stripe keys, GCP service accounts, Azure connection strings
 
 #### Usage Examples
 
@@ -98,6 +148,23 @@ logger.Info("User input: \nmalicious\nlog\nentry")
 - Filters characters < 32 (except \t)
 - Filters character 127 (DEL)
 - Preserves UTF-8 characters (≥ 128)
+
+**ANSI Escape Sequence Removal**: Strips all ANSI escape sequences
+- CSI (Control Sequence Introducer): Colors, cursor movement
+- OSC (Operating System Command): Window titles, hyperlinks
+- DCS (Device Control String): Device control data
+- APC (Application Program Command): Application-specific data
+- PM (Privacy Message): Privacy messages
+- SOS (Start of String): String delimiters
+
+**Unicode Control Character Removal**: Removes invisible Unicode characters that can be used for log injection or obfuscation
+- Zero Width Space (ZWSP, U+200B)
+- Zero Width Non-Joiner (ZWNJ, U+200C)
+- Zero Width Joiner (ZWJ, U+200D)
+- Left-to-Right/Right-to-Left Marks (U+200E, U+200F)
+- Line/Paragraph Separators (U+2028, U+2029)
+- Bidirectional Formatting (U+202A-U+202E)
+- Byte Order Mark (BOM, U+FEFF)
 
 **Message Size Limiting**: Prevents memory exhaustion attacks
 ```go
@@ -176,10 +243,28 @@ logger.InfoWith("Test",
 File writers automatically validate paths to prevent directory traversal attacks:
 ```go
 // Safe: Creates file in logs directory
-fileWriter, _ := dd.NewFileWriter("logs/app.log", nil)
+fileWriter, _ := dd.NewFileWriter("logs/app.log")
 
 // Protected: Path traversal attempts are blocked
-fileWriter, _ := dd.NewFileWriter("../../../etc/passwd", nil) // Returns error
+fileWriter, _ := dd.NewFileWriter("../../../etc/passwd") // Returns error
+```
+
+#### Symlink and Hardlink Protection
+
+After opening a log file, the library validates the file handle to detect and prevent symlink and hardlink attacks:
+
+- **Symlink Detection**: Files that are symbolic links are rejected to prevent attackers from redirecting log output to sensitive files.
+- **Hardlink Detection**: Files with multiple hard links are rejected to prevent attackers from accessing log content through alternative paths.
+- **TOCTOU Prevention**: Validation is performed on the opened file handle (not the path) to prevent time-of-check-time-of-use vulnerabilities.
+
+#### UTF-8 Overlong Encoding Detection
+
+The library detects UTF-8 overlong encoding attacks, which can be used to bypass path traversal checks:
+```go
+// These attacks are blocked:
+// - 0xC0 0xAE represents '.' (overlong encoding)
+// - 0xC0 0xAF represents '/' (overlong encoding)
+// - 0xE0 0x80 0xAF represents '/' (3-byte overlong)
 ```
 
 ### 6. Thread Safety
@@ -334,6 +419,44 @@ if err := logger.Close(); err != nil {
 }
 ```
 
+For production environments, use the `Shutdown` method with a timeout for graceful shutdown:
+
+```go
+logger, _ := dd.New(dd.DefaultConfig())
+defer func() {
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := logger.Shutdown(ctx); err != nil {
+        fmt.Fprintf(os.Stderr, "Logger shutdown error: %v\n", err)
+    }
+}()
+```
+
+### 9. Monitor Hook Errors
+
+Use the HookErrorRecorder to monitor hook health in production:
+
+```go
+recorder := dd.NewHookErrorRecorder()
+
+// Create registry with error handler
+registry := dd.NewHookRegistryWithErrorHandler(recorder.Handler())
+
+// Add hooks that may fail
+registry.Add(dd.HookAfterLog, myUnreliableHook)
+
+// Attach to logger
+logger.SetHooks(registry)
+
+// Periodically check for errors
+if recorder.HasErrors() {
+    for _, err := range recorder.Errors() {
+        fmt.Fprintf(os.Stderr, "Hook error: %v\n", err)
+    }
+    recorder.Clear()
+}
+```
+
 ## Security Configuration Reference
 
 ### Minimal Security Configuration
@@ -424,8 +547,7 @@ If you discover a security vulnerability in the DD library, please report it res
 ## Additional Resources
 
 - [README.md](README.md) - General documentation
-- [examples/04_security_features.go](examples/04_security_features.go) - Security examples
-- [security_advanced_test.go](security_advanced_test.go) - Security test cases
+- [examples/04_security_features.go](examples/04_security.go) - Security examples
 
 ---
 

@@ -11,8 +11,14 @@ import (
 	"time"
 )
 
+// MaxDecompressSize limits the maximum bytes to read during gzip verification.
+// This protects against decompression bombs (zip bombs) that could exhaust memory.
+const MaxDecompressSize = 100 * 1024 * 1024 // 100MB
+
 func OpenFile(path string) (*os.File, int64, error) {
-	// Open file first with O_EXCL if creating new file to prevent TOCTOU
+	// Open file first to get a file handle, then validate the handle (not the path)
+	// to prevent TOCTOU (time-of-check-time-of-use) vulnerabilities.
+	// We use O_APPEND to ensure atomic appends on POSIX systems.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, FilePermissions)
 	if err != nil {
 		return nil, 0, fmt.Errorf("open file: %w", err)
@@ -30,6 +36,19 @@ func OpenFile(path string) (*os.File, int64, error) {
 	if fileInfo.Mode()&os.ModeSymlink != 0 {
 		file.Close()
 		return nil, 0, fmt.Errorf("symlinks not allowed")
+	}
+
+	// Check if the file has multiple hard links
+	// Attackers can create hard links to redirect log output to sensitive files
+	// or to bypass log rotation by having the same file accessible from multiple paths
+	isHardlinked, err := isHardlink(file)
+	if err != nil {
+		file.Close()
+		return nil, 0, fmt.Errorf("check hardlink: %w", err)
+	}
+	if isHardlinked {
+		file.Close()
+		return nil, 0, fmt.Errorf("hardlinks not allowed")
 	}
 
 	return file, fileInfo.Size(), nil
@@ -149,6 +168,9 @@ func cleanupExcessBackups(basePath string, maxBackups int, compress bool) {
 
 	for i := 0; i < excessCount; i++ {
 		filePath := filepath.Join(bp.dir, backups[i].name)
+		// Intentionally ignore removal errors - this is a cleanup operation
+		// and failure shouldn't affect the main logging functionality.
+		// The file may have been removed by another process or be locked.
 		_ = os.Remove(filePath)
 	}
 }
@@ -234,7 +256,9 @@ func verifyGzipFile(path string) error {
 	}
 	defer gr.Close()
 
-	_, err = io.Copy(io.Discard, gr)
+	// Limit bytes read to prevent decompression bombs
+	limited := io.LimitReader(gr, MaxDecompressSize)
+	_, err = io.Copy(io.Discard, limited)
 	if err != nil {
 		return fmt.Errorf("decompress: %w", err)
 	}
@@ -255,29 +279,36 @@ func CleanupOldFiles(basePath string, maxAge time.Duration) error {
 
 	prefix := baseNameWithoutExt + "_" + strings.TrimPrefix(ext, ".")
 
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("read directory: %w", err)
+	}
+
 	var firstErr error
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		fileName := entry.Name()
+		if !strings.HasPrefix(fileName, prefix+"_") || fileName == baseName {
+			continue
+		}
+
+		info, err := entry.Info()
 		if err != nil {
 			if firstErr == nil {
-				firstErr = fmt.Errorf("walk error: %w", err)
+				firstErr = fmt.Errorf("get file info %s: %w", fileName, err)
 			}
-			return nil
+			continue
 		}
 
-		fileName := filepath.Base(path)
-		if strings.HasPrefix(fileName, prefix+"_") &&
-			fileName != baseName &&
-			info.ModTime().Before(cutoff) {
-			if removeErr := os.Remove(path); removeErr != nil && firstErr == nil {
-				firstErr = fmt.Errorf("remove %s: %w", path, removeErr)
+		if info.ModTime().Before(cutoff) {
+			filePath := filepath.Join(dir, fileName)
+			if removeErr := os.Remove(filePath); removeErr != nil && firstErr == nil {
+				firstErr = fmt.Errorf("remove %s: %w", filePath, removeErr)
 			}
 		}
-
-		return nil
-	})
-
-	if err != nil && firstErr == nil {
-		firstErr = err
 	}
 
 	return firstErr
