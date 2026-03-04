@@ -86,7 +86,7 @@ func defaultConfig() *Config {
 		IncludeTime:   true,
 		IncludeLevel:  true,
 		FullPath:      false,
-		DynamicCaller: false,
+		DynamicCaller: true,                    // Enable dynamic caller detection by default
 		Security:      DefaultSecurityConfig(), // Security enabled by default
 		FatalHandler:  defaultFatalHandler,
 	}
@@ -231,6 +231,15 @@ func (c *Config) createFileWriter() (*FileWriter, error) {
 }
 
 // Clone creates a copy of the configuration.
+//
+// Clone behavior:
+//   - Deep copy: File, JSON, Sampling, Security, Hooks configs
+//   - Shallow copy: Output, Outputs, FatalHandler, WriteErrorHandler, FieldValidation
+//     (io.Writer instances and function pointers are shared)
+//   - ContextExtractors slice is copied but extractor instances are shared
+//
+// The shallow copy behavior for io.Writer is intentional since writers are
+// typically shared resources that should not be duplicated.
 //
 // Example:
 //

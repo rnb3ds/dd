@@ -37,6 +37,15 @@ var argsBuilderPool = sync.Pool{
 	},
 }
 
+// pcsPool pools []uintptr slices for runtime.Callers
+// to reduce memory allocations in adjustCallerDepth.
+var pcsPool = sync.Pool{
+	New: func() any {
+		pcs := make([]uintptr, 32) // typical call stack depth
+		return &pcs
+	},
+}
+
 // jsonEntryMapPool pools map[string]any objects for JSON formatting
 // to reduce memory allocations during high-frequency JSON logging.
 var jsonEntryMapPool = sync.Pool{
@@ -409,21 +418,25 @@ func (f *MessageFormatter) getJSONOptions() *JSONOptions {
 
 // adjustCallerDepth adjusts the caller depth based on dynamic caller detection.
 // This method looks for the first non-dd package in the call stack.
-// Returns the depth relative to formatText (not relative to this function).
+// Returns the depth relative to GetCaller in formatText.
 //
 // Performance note: This function uses runtime.Callers to batch-retrieve the call stack
 // for better performance compared to individual runtime.Caller calls.
+// Uses pooled []uintptr slice to reduce allocations.
 func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 	// Validate base depth
 	if baseDepth < 0 {
 		baseDepth = 0
 	}
 
-	// Use runtime.Callers to get all frames at once (more efficient than individual calls)
-	// We need to skip: runtime.Callers, adjustCallerDepth, FormatWithMessage, and then baseDepth
-	// So total skip = 3 (this function + FormatWithMessage + logging method) + baseDepth
-	skip := baseDepth + 3
-	pcs := make([]uintptr, 24)
+	// Get pooled []uintptr slice
+	pcsPtr := pcsPool.Get().(*[]uintptr)
+	pcs := *pcsPtr
+	defer pcsPool.Put(pcsPtr)
+
+	// Use runtime.Callers to get all frames at once
+	// Skip: runtime.Callers (0), adjustCallerDepth (1), FormatWithMessage (2)
+	skip := 3
 	n := runtime.Callers(skip, pcs)
 	if n == 0 {
 		return baseDepth
@@ -431,33 +444,39 @@ func (f *MessageFormatter) adjustCallerDepth(baseDepth int) int {
 
 	// Iterate through frames
 	frames := runtime.CallersFrames(pcs[:n])
-	depth := 0
 
-	for {
+	for depth := 0; ; depth++ {
 		frame, more := frames.Next()
 		if !more {
 			break
 		}
 
-		pkgName := frame.Function
-
-		// Check if caller is outside the dd package
-		isDDPackage := strings.HasPrefix(pkgName, "github.com/cybergodev/dd.") ||
-			strings.HasPrefix(pkgName, "github.com/cybergodev/dd/") ||
-			strings.HasPrefix(pkgName, "github.com/cybergodev/dd(") ||
-			pkgName == "github.com/cybergodev/dd"
-
-		if !isDDPackage {
-			// Found user code
-			// Add 1 to account for the GetCaller frame when formatText calls it
-			adjustedDepth := baseDepth + depth + 1
-			if adjustedDepth < 0 {
-				adjustedDepth = 0
+		// Fast check: use direct byte comparison for common prefix
+		fn := frame.Function
+		if len(fn) >= 22 && fn[:22] == "github.com/cybergodev/" {
+			// Check if it's the dd package specifically
+			rest := fn[22:]
+			if len(rest) >= 2 && rest[:2] == "dd" {
+				// Check the character after "dd"
+				if len(rest) == 2 || rest[2] == '.' || rest[2] == '/' || rest[2] == '(' {
+					continue // Still in dd package
+				}
 			}
-			return adjustedDepth
+			continue
 		}
 
-		depth++
+		// Found user code - calculate adjusted depth
+		// From adjustCallerDepth's perspective (skip=3):
+		//   depth=0 = Log method, depth=1 = Print method, depth=2 = user code
+		// From GetCaller's perspective (called from formatText):
+		//   Caller(0) = GetCaller, Caller(1) = formatText, Caller(2) = FormatWithMessage
+		//   Caller(3) = Log, Caller(4) = Print, Caller(5) = user code
+		// So GetCaller needs depth + 3 to reach the same frame
+		adjustedDepth := depth + 3
+		if adjustedDepth < 0 {
+			adjustedDepth = 0
+		}
+		return adjustedDepth
 	}
 
 	return baseDepth

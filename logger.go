@@ -21,6 +21,15 @@ var (
 			return &buf
 		},
 	}
+
+	// filteredFieldsPool pools []Field slices for field filtering
+	// to reduce memory allocations when sensitive data filtering is needed.
+	filteredFieldsPool = sync.Pool{
+		New: func() any {
+			s := make([]Field, 0, 16) // typical field count
+			return &s
+		},
+	}
 )
 
 // Compile-time interface verification
@@ -216,7 +225,7 @@ func newFromInternalConfig(config *internalConfig) (*Logger, error) {
 	}
 
 	// Initialize context extractors
-	if config.contextExtractors != nil && len(config.contextExtractors) > 0 {
+	if len(config.contextExtractors) > 0 {
 		registry := NewContextExtractorRegistry()
 		for _, extractor := range config.contextExtractors {
 			registry.Add(extractor)
@@ -1056,16 +1065,17 @@ func (l *Logger) processFields(fields []Field) []Field {
 		return fields
 	}
 
-	// Only allocate when actually filtering
-	filtered := make([]Field, len(fields))
-	for i, field := range fields {
-		filtered[i] = Field{
+	// Pre-allocate result slice to exact size needed
+	result := make([]Field, 0, len(fields))
+
+	for _, field := range fields {
+		result = append(result, Field{
 			Key:   field.Key,
 			Value: secConfig.SensitiveFilter.FilterValueRecursive(field.Key, field.Value),
-		}
+		})
 	}
 
-	return filtered
+	return result
 }
 
 // applyMessageSecurity applies sensitive data filtering to the raw message (before formatting)
@@ -1527,24 +1537,24 @@ func (l *Logger) Flush() error {
 // Always use logger.Print/Printf/Println for production logging.
 
 // Print writes to configured writers with caller info and newline.
-// Uses LevelDebug for filtering. Arguments are joined with spaces.
+// Uses LevelInfo for filtering. Arguments are joined with spaces.
 // Applies sensitive data filtering based on SecurityConfig.
 // Note: Both Print() and Println() behave identically because Log() already adds a newline.
 func (l *Logger) Print(args ...any) {
-	l.Log(LevelDebug, args...)
+	l.Log(LevelInfo, args...)
 }
 
 // Println writes to configured writers with caller info, spaces between operands, and a newline.
-// Uses LevelDebug for filtering. Applies sensitive data filtering based on SecurityConfig.
+// Uses LevelInfo for filtering. Applies sensitive data filtering based on SecurityConfig.
 // Note: Behaves identically to Print() because Log() already adds a newline.
 func (l *Logger) Println(args ...any) {
-	l.Log(LevelDebug, args...)
+	l.Log(LevelInfo, args...)
 }
 
 // Printf formats according to a format specifier and writes to configured writers with caller info.
-// Uses LevelDebug for filtering.
+// Uses LevelInfo for filtering.
 func (l *Logger) Printf(format string, args ...any) {
-	l.Logf(LevelDebug, format, args...)
+	l.Logf(LevelInfo, format, args...)
 }
 
 // Debug utilities - Text and JSON output for debugging

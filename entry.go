@@ -24,6 +24,40 @@ func newLoggerEntry(logger *Logger, fields []Field) *LoggerEntry {
 	}
 }
 
+// mergeFieldSlices combines two field slices, with newFields overriding existingFields.
+// This is a shared utility function used by both WithFields and mergeFields.
+func mergeFieldSlices(existingFields, newFields []Field) []Field {
+	// Fast path: no existing fields
+	if len(existingFields) == 0 {
+		return newFields
+	}
+	// Fast path: no new fields
+	if len(newFields) == 0 {
+		return existingFields
+	}
+
+	// Merge fields: start with existing, add new (allowing override)
+	merged := make([]Field, 0, len(existingFields)+len(newFields))
+
+	// Track which keys have been set by new fields
+	newKeys := make(map[string]struct{}, len(newFields))
+	for _, f := range newFields {
+		newKeys[f.Key] = struct{}{}
+	}
+
+	// Add existing fields that aren't overridden
+	for _, f := range existingFields {
+		if _, exists := newKeys[f.Key]; !exists {
+			merged = append(merged, f)
+		}
+	}
+
+	// Add all new fields
+	merged = append(merged, newFields...)
+
+	return merged
+}
+
 // WithFields returns a new LoggerEntry with additional fields.
 // Fields are merged with existing fields, with new fields overriding existing ones.
 //
@@ -42,26 +76,7 @@ func (e *LoggerEntry) WithFields(fields ...Field) *LoggerEntry {
 		return newLoggerEntry(e.logger, fields)
 	}
 
-	// Merge fields: start with existing, add new (allowing override)
-	merged := make([]Field, 0, len(e.fields)+len(fields))
-
-	// Track which keys have been set by new fields
-	newKeys := make(map[string]struct{}, len(fields))
-	for _, f := range fields {
-		newKeys[f.Key] = struct{}{}
-	}
-
-	// Add existing fields that aren't overridden
-	for _, f := range e.fields {
-		if _, exists := newKeys[f.Key]; !exists {
-			merged = append(merged, f)
-		}
-	}
-
-	// Add all new fields
-	merged = append(merged, fields...)
-
-	return newLoggerEntry(e.logger, merged)
+	return newLoggerEntry(e.logger, mergeFieldSlices(e.fields, fields))
 }
 
 // WithField returns a new LoggerEntry with a single additional field.
@@ -75,34 +90,9 @@ func (e *LoggerEntry) WithField(key string, value any) *LoggerEntry {
 }
 
 // mergeFields combines entry fields with method fields.
+// Method fields can override entry fields with the same key.
 func (e *LoggerEntry) mergeFields(fields []Field) []Field {
-	if len(e.fields) == 0 {
-		return fields
-	}
-	if len(fields) == 0 {
-		return e.fields
-	}
-
-	// Merge: entry fields + method fields (method can override)
-	merged := make([]Field, 0, len(e.fields)+len(fields))
-
-	// Track which keys are in method fields
-	methodKeys := make(map[string]struct{}, len(fields))
-	for _, f := range fields {
-		methodKeys[f.Key] = struct{}{}
-	}
-
-	// Add entry fields that aren't overridden
-	for _, f := range e.fields {
-		if _, exists := methodKeys[f.Key]; !exists {
-			merged = append(merged, f)
-		}
-	}
-
-	// Add method fields
-	merged = append(merged, fields...)
-
-	return merged
+	return mergeFieldSlices(e.fields, fields)
 }
 
 // Log logs a message at the specified level with the entry's fields.
@@ -213,6 +203,27 @@ func (e *LoggerEntry) ErrorWithCtx(ctx context.Context, msg string, fields ...Fi
 }
 func (e *LoggerEntry) FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
 	e.LogWithCtx(ctx, LevelFatal, msg, fields...)
+}
+
+// Print methods - output via logger's writers with caller info and entry's fields.
+// These methods use LevelInfo for filtering and apply sensitive data filtering.
+
+// Print writes to configured writers with caller info and the entry's fields.
+// Uses LevelInfo for filtering. Arguments are joined with spaces.
+func (e *LoggerEntry) Print(args ...any) {
+	e.Log(LevelInfo, args...)
+}
+
+// Println writes to configured writers with caller info and the entry's fields.
+// Uses LevelInfo for filtering. Note: Behaves identically to Print() because Log() already adds a newline.
+func (e *LoggerEntry) Println(args ...any) {
+	e.Log(LevelInfo, args...)
+}
+
+// Printf formats according to a format specifier and writes to configured writers
+// with caller info and the entry's fields. Uses LevelInfo for filtering.
+func (e *LoggerEntry) Printf(format string, args ...any) {
+	e.Logf(LevelInfo, format, args...)
 }
 
 // Logger methods for WithFields

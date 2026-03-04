@@ -1,6 +1,6 @@
 # DD - High-Performance Go Logging Library
 
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![pkg.go.dev](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue.svg)](SECURITY.md)
@@ -78,11 +78,18 @@ func main() {
 ### Convenience Constructors
 
 ```go
-// Quick constructors (panic on error - use Must* for safety)
-logger, _ := dd.ToFile()              // → logs/app.log (text)
-logger, _ := dd.ToJSONFile()          // → logs/app.log (JSON)
-logger, _ := dd.ToConsole()           // → stdout only
-logger, _ := dd.ToAll()               // → console + file
+// Quick constructors (return error)
+logger, err := dd.ToFile()              // → logs/app.log (text)
+if err != nil { /* handle error */ }
+
+logger, err = dd.ToJSONFile()          // → logs/app.log (JSON)
+if err != nil { /* handle error */ }
+
+logger, err = dd.ToConsole()           // → stdout only
+if err != nil { /* handle error */ }
+
+logger, err = dd.ToAll()               // → console + file
+if err != nil { /* handle error */ }
 
 // Must* variants (panic on error, return *Logger)
 logger := dd.MustToFile("logs/app.log")
@@ -99,13 +106,13 @@ defer logger.Close()
 
 ```go
 // Production (default) - Info level, text format
-logger, _ := dd.New(dd.DefaultConfig())
+logger, err := dd.New(dd.DefaultConfig())
 
 // Development - Debug level, caller info
-logger, _ := dd.New(dd.DevelopmentConfig())
+logger, err := dd.New(dd.DevelopmentConfig())
 
 // Cloud-native - JSON format, debug level
-logger, _ := dd.New(dd.JSONConfig())
+logger, err := dd.New(dd.JSONConfig())
 ```
 
 ### Custom Configuration
@@ -125,7 +132,7 @@ cfg.File = &dd.FileConfig{
     Compress:   true,                // Gzip old files
 }
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
 defer logger.Close()
 ```
 
@@ -141,7 +148,7 @@ cfg.JSON.FieldNames = &dd.JSONFieldNames{
 }
 cfg.JSON.PrettyPrint = true  // For development
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
 ```
 
 ## 🛡️ Security Features
@@ -152,7 +159,7 @@ logger, _ := dd.New(cfg)
 cfg := dd.DefaultConfig()
 cfg.Security = dd.DefaultSecurityConfig()  // Enable basic filtering
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
 
 // Automatic filtering
 logger.Info("password=secret123")           // → password=[REDACTED]
@@ -238,32 +245,39 @@ requestLogger.Info("Processing request")
 logger := dd.MustToAll("logs/app.log")
 
 // Or use MultiWriter
-fileWriter, _ := dd.NewFileWriter("logs/app.log")
+fileWriter, err := dd.NewFileWriter("logs/app.log")
+if err != nil { /* handle error */ }
+
 multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 cfg := dd.DefaultConfig()
 cfg.Output = multiWriter
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
 ```
 
 ### Buffered Writes (High Throughput)
 
 ```go
-fileWriter, _ := dd.NewFileWriter("logs/app.log")
-bufferedWriter, _ := dd.NewBufferedWriter(fileWriter)  // Default 4KB buffer
+fileWriter, err := dd.NewFileWriter("logs/app.log")
+if err != nil { /* handle error */ }
+
+bufferedWriter, err := dd.NewBufferedWriter(fileWriter)  // Default 4KB buffer
+if err != nil { /* handle error */ }
 defer bufferedWriter.Close()  // IMPORTANT: Flush on close
 
 cfg := dd.DefaultConfig()
 cfg.Output = bufferedWriter
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
 ```
 
 ### Dynamic Writer Management
 
 ```go
-logger, _ := dd.New()
+logger, err := dd.New()
 
-fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
+fileWriter, err := dd.NewFileWriter("logs/dynamic.log")
+if err != nil { /* handle error */ }
+
 logger.AddWriter(fileWriter)        // Add at runtime
 logger.RemoveWriter(fileWriter)     // Remove at runtime
 
@@ -342,7 +356,8 @@ auditLogger.LogSecurityViolation("LOG4SHELL", "Pattern detected", map[string]any
 ```go
 // Create signer with secret key
 integrityCfg := dd.DefaultIntegrityConfig()
-signer, _ := dd.NewIntegritySigner(integrityCfg)
+signer, err := dd.NewIntegritySigner(integrityCfg)
+if err != nil { /* handle error */ }
 
 // Sign log messages
 message := "Critical audit event"
@@ -390,6 +405,11 @@ dd.InfoWith(msg string, fields ...dd.Field)
 dd.ErrorWith(msg string, fields ...dd.Field)
 // ... DebugWith, WarnWith, FatalWith
 
+// Context-aware logging
+dd.InfoCtx(ctx context.Context, args ...any)
+dd.InfoWithCtx(ctx context.Context, msg string, fields ...dd.Field)
+// ... DebugCtx, WarnCtx, ErrorCtx, FatalCtx
+
 // Global logger management
 dd.SetDefault(logger *Logger)
 dd.SetLevel(level LogLevel)
@@ -399,7 +419,7 @@ dd.GetLevel() LogLevel
 ### Logger Methods
 
 ```go
-logger, _ := dd.New()
+logger, err := dd.New()
 
 // Simple logging
 logger.Info(args ...any)
@@ -414,7 +434,7 @@ logger.InfoWithCtx(ctx context.Context, msg string, fields ...Field)
 logger.SetLevel(level LogLevel)
 logger.GetLevel() LogLevel
 logger.AddWriter(w io.Writer) error
-logger.RemoveWriter(w io.Writer)
+logger.RemoveWriter(w io.Writer) error
 logger.Close() error
 logger.Flush()
 
@@ -436,6 +456,20 @@ dd.Duration(key string, value time.Duration)
 dd.Err(err error)
 dd.ErrWithStack(err error)  // Include stack trace
 dd.Any(key string, value any)
+```
+
+### Context Functions
+
+```go
+// Set context values
+dd.WithTraceID(ctx context.Context, id string) context.Context
+dd.WithSpanID(ctx context.Context, id string) context.Context
+dd.WithRequestID(ctx context.Context, id string) context.Context
+
+// Get context values
+dd.GetTraceID(ctx context.Context) string
+dd.GetSpanID(ctx context.Context) string
+dd.GetRequestID(ctx context.Context) string
 ```
 
 ## 📁 Examples

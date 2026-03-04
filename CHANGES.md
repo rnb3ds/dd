@@ -2,8 +2,41 @@
 
 All notable changes to the cybergodev/dd library will be documented in this file.
 
-- The format is based on [Keep a Changelog](https://keepachangelog.com/).
-- And this project adheres to [Semantic Versioning](https://semver.org/).
+[//]: # (- The format is based on [Keep a Changelog]&#40;https://keepachangelog.com/&#41;.)
+[//]: # (- And this project adheres to [Semantic Versioning]&#40;https://semver.org/&#41;.)
+
+---
+
+## v1.2.1 - Performance & Quality Improvements (2026-03-05)
+
+### Added
+- Package-level `Print()`, `Println()`, `Printf()` functions for quick console output
+- `Print()`, `Println()`, `Printf()` methods for `LoggerEntry` (created via `WithFields()`)
+- `FatalWith()` package-level function to match `Logger.FatalWith()` method
+- `sync.Pool` optimizations for caller depth detection, JSON encoding, and field filtering
+
+### Changed
+- `DefaultConfig()` now enables `DynamicCaller: true` by default for accurate caller locations
+- JSON encoding uses fast path for simple types, avoiding reflection overhead
+- Integrity signature format enhanced to include timestamp and sequence for replay attack prevention
+
+### Fixed
+- Dynamic caller detection now correctly shows user code location instead of internal logger code
+- Caller depth calculation offset for accurate file:line display
+- Integrity signature verification now validates all signed data components
+- Sensitive data detection at truncation boundaries to prevent leakage
+- Redaction count accuracy after truncation
+- FileWriter rotation error recovery when `OpenFile` fails after successful rename
+- Package-level Print functions documentation (LevelInfo not LevelDebug)
+
+### Performance
+- JSON format: 19-28% faster, 47-67% fewer allocations
+- Buffer pooling reduces GC pressure for high-frequency logging
+
+### Testing
+- Internal package coverage: 47.5% → 84.9% (+37.4%)
+- Main package coverage: 73.7% → 78.5% (+4.8%)
+- 35+ new test cases with table-driven approach
 
 ---
 

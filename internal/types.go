@@ -109,25 +109,8 @@ func IsComplexValue(v any) bool {
 	case time.Time, time.Duration:
 		return false
 
-	// Types with String() method - use their formatting
-	case interface{ String() string }:
-		return false
-
-	// Error interface - use Error() method
-	case error:
-		return false
-
-	// fmt.Stringer interface - use String() method
-	case fmt.Stringer:
-		return false
-
-	// Pointer types - dereference and check
-	case *string, *bool,
-		*int, *int8, *int16, *int32, *int64,
-		*uint, *uint8, *uint16, *uint32, *uint64,
-		*float32, *float64:
-		return false
-
+	// Pointer types - must be before interface types to avoid being shadowed
+	// These specific pointer types implement fmt.Stringer, so they must come first
 	case *time.Time:
 		return false
 
@@ -136,6 +119,23 @@ func IsComplexValue(v any) bool {
 
 	// Pointer to Stringer - use String() method
 	case *interface{ String() string }:
+		return false
+
+	// Types with String() method - use their formatting
+	// Note: fmt.Stringer is equivalent to interface{ String() string }
+	// This must come AFTER specific pointer types that implement Stringer
+	case fmt.Stringer:
+		return false
+
+	// Error interface - use Error() method
+	case error:
+		return false
+
+	// Pointer types - dereference and check
+	case *string, *bool,
+		*int, *int8, *int16, *int32, *int64,
+		*uint, *uint8, *uint16, *uint32, *uint64,
+		*float32, *float64:
 		return false
 
 	// nil pointer check for interface types
