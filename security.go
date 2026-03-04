@@ -13,6 +13,9 @@ import (
 	"github.com/cybergodev/dd/internal"
 )
 
+// cacheTTLSeconds defines how long cache entries are valid (5 minutes)
+const cacheTTLSeconds = 300
+
 type SensitiveDataFilter struct {
 	// patternsPtr stores an immutable slice of patterns using atomic pointer.
 	// This eliminates slice copying during filter operations (hot path).
@@ -366,12 +369,16 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		if f.cache != nil {
 			hash := hashString(input)
 			if entry, ok := f.cache[hash]; ok && entry.input == input {
-				f.cacheMu.RUnlock()
-				f.cacheHits.Add(1)
-				f.totalFiltered.Add(1)
-				// Record minimal latency for cache hit
-				f.totalLatencyNs.Add(1)
-				return entry.result
+				// Check TTL - entries older than cacheTTLSeconds are considered stale
+				if time.Now().Unix()-entry.created < cacheTTLSeconds {
+					f.cacheMu.RUnlock()
+					f.cacheHits.Add(1)
+					f.totalFiltered.Add(1)
+					// Record minimal latency for cache hit
+					f.totalLatencyNs.Add(1)
+					return entry.result
+				}
+				// Entry expired, will be refreshed below (fall through)
 			}
 		}
 		f.cacheMu.RUnlock()
@@ -383,33 +390,11 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	patterns := *patternsPtr
 	timeout := f.timeout
 
-	// Quick rejection: check if input could possibly contain sensitive data
-	// This avoids running all regex patterns on obviously safe input
-	// Note: We still need to handle truncation for large inputs
-	if !f.couldContainSensitiveData(input) {
-		// Handle truncation for large inputs even if no sensitive data detected
-		if f.maxInputLength > 0 && inputLen > f.maxInputLength {
-			input = input[:f.maxInputLength] + "... [TRUNCATED]"
-		}
-		// Still track metrics for monitoring
-		// Ensure at least 1ns to avoid zero average latency for very fast operations
-		latencyNs := time.Since(startTime).Nanoseconds()
-		if latencyNs == 0 {
-			latencyNs = 1
-		}
-		f.totalFiltered.Add(1)
-		f.totalLatencyNs.Add(latencyNs)
-
-		// Cache the result for small inputs
-		if inputLen <= 1024 && f.cache != nil {
-			f.cacheResult(hashString(input), input, input)
-		}
-		return input
-	}
-
-	// Handle truncation with boundary-aware sensitive data detection.
+	// Handle truncation with boundary-aware sensitive data detection FIRST.
 	// This prevents sensitive data patterns that span the truncation boundary
-	// from being leaked.
+	// from being leaked, regardless of couldContainSensitiveData result.
+	// IMPORTANT: Boundary check must happen before early exit to prevent
+	// sensitive data leakage at truncation boundaries.
 	if f.maxInputLength > 0 && inputLen > f.maxInputLength {
 		// Check the boundary region for sensitive data before truncating
 		boundaryStart := f.maxInputLength - BoundaryCheckSize
@@ -442,15 +427,38 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 			// No sensitive data in boundary, safe to truncate directly
 			input = input[:f.maxInputLength] + "... [TRUNCATED FOR SECURITY]"
 		}
+
+		// Update inputLen after truncation for subsequent checks
+		inputLen = len(input)
+	}
+
+	// Quick rejection: check if input could possibly contain sensitive data
+	// This avoids running all regex patterns on obviously safe input
+	// Note: Truncation is already handled above
+	if !f.couldContainSensitiveData(input) {
+		// Still track metrics for monitoring
+		// Ensure at least 1ns to avoid zero average latency for very fast operations
+		latencyNs := time.Since(startTime).Nanoseconds()
+		if latencyNs == 0 {
+			latencyNs = 1
+		}
+		f.totalFiltered.Add(1)
+		f.totalLatencyNs.Add(latencyNs)
+
+		// Cache the result for small inputs
+		if inputLen <= 1024 && f.cache != nil {
+			f.cacheResult(hashString(input), input, input)
+		}
+		return input
 	}
 
 	result := input
 	redactionCount := int64(0)
 	for i := range patterns {
-		originalLen := len(result)
+		beforeFilter := result
 		result = f.filterWithTimeout(result, patterns[i], timeout)
-		// Track redactions (result changed)
-		if len(result) != originalLen || result != input {
+		// Track redactions (result changed by this pattern)
+		if result != beforeFilter {
 			redactionCount++
 		}
 		// Early exit if result becomes empty or redacted
@@ -484,18 +492,33 @@ func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 		return
 	}
 
-	// Evict old entries if cache is full
-	if f.cacheSize >= f.maxCacheSz {
-		// Simple eviction: clear half the cache
-		count := 0
-		for k := range f.cache {
-			delete(f.cache, k)
-			count++
-			if count >= f.maxCacheSz/2 {
-				break
+	// Check if this is a new entry or an update (handles hash collision case)
+	_, exists := f.cache[hash]
+
+	// Evict old entries if cache is full AND this is a new entry
+	if !exists && f.cacheSize >= f.maxCacheSz {
+		// Simple eviction: clear expired entries first
+		now := time.Now().Unix()
+		for k, entry := range f.cache {
+			if now-entry.created >= cacheTTLSeconds {
+				delete(f.cache, k)
+				f.cacheSize--
 			}
 		}
-		f.cacheSize = len(f.cache)
+
+		// If still full after removing expired, clear half the cache
+		if f.cacheSize >= f.maxCacheSz {
+			count := 0
+			toDelete := f.maxCacheSz / 2
+			for k := range f.cache {
+				delete(f.cache, k)
+				count++
+				if count >= toDelete {
+					break
+				}
+			}
+			f.cacheSize -= count
+		}
 	}
 
 	f.cache[hash] = filterCacheEntry{
@@ -504,7 +527,11 @@ func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 		result:  result,
 		created: time.Now().Unix(),
 	}
-	f.cacheSize++
+
+	// Only increment size counter for new entries
+	if !exists {
+		f.cacheSize++
+	}
 }
 
 // Pre-computed lowercase credential keywords for fast case-insensitive matching
@@ -598,9 +625,31 @@ func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
 		hasCredentialKeyword = containsCredentialKeyword(input)
 	}
 
+	// Check for base64-like patterns (common for tokens, keys, certificates)
+	// Look for sequences of base64 characters (A-Z, a-z, 0-9, +, /, =)
+	hasBase64Pattern := false
+	if !hasDigits && !hasCredentialKeyword && !hasAPIKeyPrefix && inputLen >= 20 {
+		// Only check if we haven't found other indicators
+		// Look for a sequence of at least 16 consecutive base64 chars
+		base64Run := 0
+		for i := 0; i < inputLen; i++ {
+			c := input[i]
+			if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+				(c >= '0' && c <= '9') || c == '+' || c == '/' || c == '=' {
+				base64Run++
+				if base64Run >= 16 {
+					hasBase64Pattern = true
+					break
+				}
+			} else {
+				base64Run = 0
+			}
+		}
+	}
+
 	// If input has none of the characteristics, it's very unlikely to contain sensitive data
 	// Most patterns require at least one of these characteristics
-	return hasDigits || hasAtSign || hasProtocol || hasCredentialKeyword || hasAPIKeyPrefix
+	return hasDigits || hasAtSign || hasProtocol || hasCredentialKeyword || hasAPIKeyPrefix || hasBase64Pattern
 }
 
 // containsCredentialKeyword checks if input contains any credential keyword.

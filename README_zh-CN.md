@@ -1,6 +1,6 @@
 # DD - 高性能 Go 日志库
 
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![pkg.go.dev](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue.svg)](SECURITY.md)
@@ -14,10 +14,10 @@
 
 | 特性 | 说明 |
 |------|------|
-| 🚀 **高性能** | 简单日志 3M+ ops/sec，针对高吞吐场景优化 |
+| 🚀 **高性能** | 篮单日志 3M+ ops/sec，针对高吞吐场景优化 |
 | 🔒 **线程安全** | 原子操作 + 无锁设计，完全并发安全 |
 | 🛡️ **内置安全** | 敏感数据过滤、注入攻击防护 |
-| 📊 **结构化日志** | 类型安全字段、JSON/文本格式、可自定义字段名 |
+| 📊 **结构化日志** | 类型安全字段、 JSON/文本格式、可自定义字段名 |
 | 📁 **智能轮转** | 按大小自动轮转、自动压缩、自动清理 |
 | 📦 **零依赖** | 仅使用 Go 标准库 |
 | 🎯 **简单易用** | 30 秒快速上手，直观的 API |
@@ -79,10 +79,17 @@ func main() {
 
 ```go
 // 快速构造函数（出错时返回 error）
-logger, _ := dd.ToFile()              // → logs/app.log (文本格式)
-logger, _ := dd.ToJSONFile()          // → logs/app.log (JSON 格式)
-logger, _ := dd.ToConsole()           // → 仅控制台
-logger, _ := dd.ToAll()               // → 控制台 + 文件
+logger, err := dd.ToFile()              // → logs/app.log (文本格式)
+if err != nil { /* 处理错误 */ }
+
+logger, err = dd.ToJSONFile()          // → logs/app.log (JSON 格式)
+if err != nil { /* 处理错误 */ }
+
+logger, err = dd.ToConsole()           // → 仅控制台
+if err != nil { /* 处理错误 */ }
+
+logger, err = dd.ToAll()               // → 控制台 + 文件
+if err != nil { /* 处理错误 */ }
 
 // Must* 变体（出错时 panic，返回 *Logger）
 logger := dd.MustToFile("logs/app.log")
@@ -99,13 +106,13 @@ defer logger.Close()
 
 ```go
 // 生产环境（默认）- Info 级别，文本格式
-logger, _ := dd.New(dd.DefaultConfig())
+logger, err := dd.New(dd.DefaultConfig())
 
 // 开发环境 - Debug 级别，带调用者信息
-logger, _ := dd.New(dd.DevelopmentConfig())
+logger, err := dd.New(dd.DevelopmentConfig())
 
-// 云原生 - JSON 格式，Debug 级别
-logger, _ := dd.New(dd.JSONConfig())
+// 云原生 - JSON 格式， Debug 级别
+logger, err := dd.New(dd.JSONConfig())
 ```
 
 ### 自定义配置
@@ -125,7 +132,8 @@ cfg.File = &dd.FileConfig{
     Compress:   true,                // Gzip 压缩旧文件
 }
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
 defer logger.Close()
 ```
 
@@ -141,7 +149,8 @@ cfg.JSON.FieldNames = &dd.JSONFieldNames{
 }
 cfg.JSON.PrettyPrint = true  // 开发环境美化输出
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
 ```
 
 ## 🛡️ 安全特性
@@ -152,7 +161,8 @@ logger, _ := dd.New(cfg)
 cfg := dd.DefaultConfig()
 cfg.Security = dd.DefaultSecurityConfig()  // 启用基础过滤
 
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
 
 // 自动过滤
 logger.Info("password=secret123")           // → password=[REDACTED]
@@ -163,7 +173,7 @@ logger.Info("email=user@example.com")       // → email=[REDACTED]
 
 **基础过滤** 覆盖：密码、API Key、信用卡号、手机号、数据库连接串
 
-**完整过滤** 额外覆盖：JWT、AWS Key、IP 地址、SSN
+**完整过滤** 额外覆盖: JWT、AWS Key、IP 地址、 SSN
 
 ```go
 cfg.Security = dd.DefaultSecureConfig()  // 完整过滤
@@ -182,6 +192,23 @@ cfg := dd.DefaultConfig()
 cfg.Security = &dd.SecurityConfig{
     SensitiveFilter: filter,
 }
+
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
+```
+
+### 知行业配置
+
+```go
+// 医疗行业 - HIPAA 合规
+cfg := dd.DefaultConfig()
+cfg.Security = dd.HealthcareConfig()
+
+// 金融行业 - PCI-DSS 合规
+cfg.Security = dd.FinancialConfig()
+
+// 政府机构
+cfg.Security = dd.GovernmentConfig()
 ```
 
 ### 禁用安全过滤（最高性能）
@@ -238,32 +265,42 @@ requestLogger.Info("处理请求")
 logger := dd.MustToAll("logs/app.log")
 
 // 或使用 MultiWriter
-fileWriter, _ := dd.NewFileWriter("logs/app.log")
+fileWriter, err := dd.NewFileWriter("logs/app.log")
+if err != nil { /* 处理错误 */ }
+
 multiWriter := dd.NewMultiWriter(os.Stdout, fileWriter)
 
 cfg := dd.DefaultConfig()
 cfg.Output = multiWriter
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
 ```
 
-### 缓冲写入（高吞吐场景）
+### 缓冲写入（高吞吐场景)
 
 ```go
-fileWriter, _ := dd.NewFileWriter("logs/app.log")
-bufferedWriter, _ := dd.NewBufferedWriter(fileWriter)  // 默认 4KB 缓冲
-defer bufferedWriter.Close()  // 重要：关闭时刷新缓冲
+fileWriter, err := dd.NewFileWriter("logs/app.log")
+if err != nil { /* 处理错误 */ }
+
+bufferedWriter, err := dd.NewBufferedWriter(fileWriter)  // 默认 4KB 缓冲
+if err != nil { /* 夌理错误 */ }
+defer bufferedWriter.Close()  // 重要:关闭时刷新缓冲
 
 cfg := dd.DefaultConfig()
 cfg.Output = bufferedWriter
-logger, _ := dd.New(cfg)
+logger, err := dd.New(cfg)
+if err != nil { /* 处理错误 */ }
 ```
 
 ### 动态 Writer 管理
 
 ```go
-logger, _ := dd.New()
+logger, err := dd.New()
+if err != nil { /* 处理错误 */ }
 
-fileWriter, _ := dd.NewFileWriter("logs/dynamic.log")
+fileWriter, err := dd.NewFileWriter("logs/dynamic.log")
+if err != nil { /* 处理错误 */ }
+
 logger.AddWriter(fileWriter)        // 运行时添加
 logger.RemoveWriter(fileWriter)     // 运行时移除
 
@@ -290,7 +327,7 @@ logger.InfoWithCtx(ctx, "用户操作", dd.String("action", "login"))
 ```go
 tenantExtractor := func(ctx context.Context) []dd.Field {
     if tenantID := ctx.Value("tenant_id"); tenantID != nil {
-        return []dd.Field{dd.String("tenant_id", tenantID.(string))}
+        return []dd.Field{dd.String("tenant_id", tenantID.(string)}
     }
     return nil
 }
@@ -342,7 +379,8 @@ auditLogger.LogSecurityViolation("LOG4SHELL", "检测到可疑模式", map[strin
 ```go
 // 使用密钥创建签名器
 integrityCfg := dd.DefaultIntegrityConfig()
-signer, _ := dd.NewIntegritySigner(integrityCfg)
+signer, err := dd.NewIntegritySigner(integrityCfg)
+if err != nil { /* 处理错误 */ }
 
 // 签名日志消息
 message := "关键审计事件"
@@ -390,6 +428,11 @@ dd.InfoWith(msg string, fields ...dd.Field)
 dd.ErrorWith(msg string, fields ...dd.Field)
 // ... DebugWith, WarnWith, FatalWith
 
+// Context 感知日志
+dd.InfoCtx(ctx context.Context, args ...any)
+dd.InfoWithCtx(ctx context.Context, msg string, fields ...dd.Field)
+// ... DebugCtx, DebugfCtx, DebugWithCtx, etc.
+
 // 全局 logger 管理
 dd.SetDefault(logger *Logger)
 dd.SetLevel(level LogLevel)
@@ -399,7 +442,7 @@ dd.GetLevel() LogLevel
 ### Logger 方法
 
 ```go
-logger, _ := dd.New()
+logger, err := dd.New()
 
 // 简单日志
 logger.Info(args ...any)
@@ -414,7 +457,7 @@ logger.InfoWithCtx(ctx context.Context, msg string, fields ...Field)
 logger.SetLevel(level LogLevel)
 logger.GetLevel() LogLevel
 logger.AddWriter(w io.Writer) error
-logger.RemoveWriter(w io.Writer)
+logger.RemoveWriter(w io.Writer) error
 logger.Close() error
 logger.Flush()
 
@@ -438,14 +481,42 @@ dd.ErrWithStack(err error)  // 包含堆栈信息
 dd.Any(key string, value any)
 ```
 
+### Context 函数
+
+```go
+// 设置 context 值
+dd.WithTraceID(ctx context.Context, id string) context.Context
+dd.WithSpanID(ctx context.Context, id string) context.Context
+dd.WithRequestID(ctx context.Context, id string) context.Context
+
+// 获取 context 值
+dd.GetTraceID(ctx context.Context) string
+dd.GetSpanID(ctx context.Context) string
+dd.GetRequestID(ctx context.Context) string
+```
+
+### 安全配置函数
+
+```go
+// 预设配置
+dd.DefaultSecurityConfig()     // 基础过滤
+dd.DefaultSecureConfig()       // 完整过滤
+dd.HealthcareConfig()          // 医疗行业 HIPAA
+dd.FinancialConfig()           // 金融行业 PCI-DSS
+dd.GovernmentConfig()          // 政府机构
+
+// 安全级别
+dd.SecurityConfigForLevel(level SecurityLevel) *SecurityConfig
+```
+
 ## 📁 示例代码
 
-查看 [examples](examples) 目录获取完整可运行示例：
+查看 [examples](examples) 目录获取完整可运行示例:
 
 | 文件 | 说明 |
 |------|------|
 | [01_quick_start.go](examples/01_quick_start.go) | 5 分钟快速入门 |
-| [02_structured_logging.go](examples/02_structured_logging.go) | 类型安全字段、WithFields |
+| [02_structured_logging.go](examples/02_structured_logging.go) | 类型安全字段、 WithFields |
 | [03_configuration.go](examples/03_configuration.go) | 配置 API、预设配置、轮转 |
 | [04_security.go](examples/04_security.go) | 过滤、自定义规则 |
 | [05_writers.go](examples/05_writers.go) | 文件、缓冲、多 Writer |
@@ -457,7 +528,7 @@ dd.Any(key string, value any)
 
 ## 🤝 参与贡献
 
-欢迎贡献代码！提交 PR 前请阅读贡献指南。
+欢迎贡献代码! 提交 PR 前请阅读贡献指南。
 
 ## 📄 许可证
 
@@ -467,4 +538,4 @@ MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
 **为 Go 社区用心打造** ❤️
 
-如果这个项目对你有帮助，请给一个 ⭐️ Star！
+如果这个项目对你有帮助, 请给一个 ⭐️ Star!

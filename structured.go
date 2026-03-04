@@ -170,6 +170,7 @@ func WarnWith(msg string, fields ...Field) { Default().LogWith(LevelWarn, msg, f
 func ErrorWith(msg string, fields ...Field) { Default().LogWith(LevelError, msg, fields...) }
 
 // FatalWith logs a structured fatal message with the default logger and exits.
+// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorWith() with custom logic.
 func FatalWith(msg string, fields ...Field) { Default().LogWith(LevelFatal, msg, fields...) }
 
 // Context-aware package-level functions

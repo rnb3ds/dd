@@ -182,6 +182,7 @@ func (fw *FileWriter) rotate() error {
 	backupPath := internal.GetBackupPath(fw.path, nextIndex, false)
 
 	if err := os.Rename(fw.path, backupPath); err != nil {
+		// Rename failed, try to reopen the original file
 		file, size, reopenErr := internal.OpenFile(fw.path)
 		if reopenErr != nil {
 			return fmt.Errorf("rename to backup failed and cannot reopen file: rename=%w, reopen=%w", err, reopenErr)
@@ -191,19 +192,36 @@ func (fw *FileWriter) rotate() error {
 		return fmt.Errorf("rename to backup: %w", err)
 	}
 
+	// Rename succeeded, now open new file
+	// If this fails, we need to handle it carefully to avoid data loss
+	file, size, err := internal.OpenFile(fw.path)
+	if err != nil {
+		// Try to recover by renaming backup back to original
+		if renameBackErr := os.Rename(backupPath, fw.path); renameBackErr != nil {
+			// Recovery failed - this is a critical error
+			// Log to stderr as we cannot return this error without losing the rotation error
+			fmt.Fprintf(os.Stderr, "dd: CRITICAL - failed to open new log file and failed to recover backup: open=%v, recover=%v\n", err, renameBackErr)
+			return fmt.Errorf("open new file failed and recovery failed: open=%w, recovery=%w", err, renameBackErr)
+		}
+		// Recovery succeeded, try to reopen the original file
+		file, size, reopenErr := internal.OpenFile(fw.path)
+		if reopenErr != nil {
+			return fmt.Errorf("open new file failed, recovery succeeded but reopen failed: open=%w, reopen=%w", err, reopenErr)
+		}
+		fw.file = file
+		fw.currentSize.Store(size)
+		return fmt.Errorf("open new file failed (recovered): %w", err)
+	}
+	fw.file = file
+	fw.currentSize.Store(size)
+
+	// Only perform cleanup and compression after successful file open
 	internal.RotateBackups(fw.path, fw.maxBackups, fw.compress)
 
 	if fw.compress {
 		fw.wg.Add(1)
 		go fw.compressBackup(backupPath)
 	}
-
-	file, size, err := internal.OpenFile(fw.path)
-	if err != nil {
-		return fmt.Errorf("open new file: %w", err)
-	}
-	fw.file = file
-	fw.currentSize.Store(size)
 
 	return nil
 }
