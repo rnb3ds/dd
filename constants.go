@@ -162,20 +162,27 @@ const (
 )
 
 // Rate limiting constants for DoS protection.
+// NOTE: These constants are reserved for future rate limiting functionality
+// and are not currently used by the library. They will be enabled in a future
+// version when rate limiting is implemented.
 const (
 	// DefaultMaxMessagesPerSecond is the default rate limit for log messages.
 	// This prevents log flooding attacks while allowing reasonable throughput.
+	// Reserved for future use; not currently applied.
 	DefaultMaxMessagesPerSecond = 10000
 
 	// DefaultMaxBytesPerSecond is the default byte rate limit (10MB).
 	// This prevents memory exhaustion from large log messages.
+	// Reserved for future use; not currently applied.
 	DefaultMaxBytesPerSecond = 10 * 1024 * 1024
 
 	// DefaultBurstSize is the default burst capacity for the token bucket.
 	// Allows temporary spikes in log volume without dropping messages.
+	// Reserved for future use; not currently applied.
 	DefaultBurstSize = 1000
 
 	// DefaultSamplingRate is the default sampling rate when rate limiting.
 	// Keeps 1 in 100 messages when rate limited.
+	// Reserved for future use; not currently applied.
 	DefaultSamplingRate = 100
 )

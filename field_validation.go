@@ -184,6 +184,10 @@ func (c *FieldValidationConfig) ValidateFieldKey(key string) error {
 	return nil
 }
 
+// commonSuffixes contains suffixes that indicate a common abbreviation pattern.
+// Pre-computed to avoid allocation on every call to isCommonAbbreviation.
+var commonSuffixes = []string{"_id", "_url", "_uri", "_ip", "_api"}
+
 // Common abbreviations that are allowed regardless of naming convention
 var commonAbbreviations = map[string]bool{
 	"id":    true,
@@ -230,8 +234,7 @@ func isCommonAbbreviation(key string) bool {
 
 	// Check if key ends with a common abbreviation suffix
 	lowerKey := strings.ToLower(key)
-	suffixes := []string{"_id", "_url", "_uri", "_ip", "_api"}
-	for _, suffix := range suffixes {
+	for _, suffix := range commonSuffixes {
 		if strings.HasSuffix(lowerKey, suffix) {
 			prefix := key[:len(key)-len(suffix)]
 			if len(prefix) > 0 {

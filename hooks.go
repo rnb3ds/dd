@@ -316,7 +316,7 @@ func (r *HookRegistry) executeHookWithRecovery(ctx context.Context, hook Hook, h
 	return hook(ctx, hookCtx)
 }
 
-// Clone creates a copy of the registry with the same hooks.
+// Clone creates a copy of the registry with the same hooks and error handler.
 // The hooks themselves are shared (functions are not copied).
 func (r *HookRegistry) Clone() *HookRegistry {
 	if r == nil {
@@ -327,7 +327,8 @@ func (r *HookRegistry) Clone() *HookRegistry {
 	defer r.mu.RUnlock()
 
 	clone := &HookRegistry{
-		hooks: make(map[HookEvent][]Hook, len(r.hooks)),
+		hooks:        make(map[HookEvent][]Hook, len(r.hooks)),
+		errorHandler: r.errorHandler,
 	}
 
 	for event, hooks := range r.hooks {

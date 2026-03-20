@@ -109,6 +109,48 @@ var errorCodeToSentinel = map[string]error{
 	ErrCodeMultipleConfigs:    ErrMultipleConfigs,
 }
 
+// init validates that all error codes have a corresponding sentinel error mapping.
+// This catches developer mistakes when adding new error codes without updating the map.
+func init() {
+	allCodes := []string{
+		ErrCodeNilConfig,
+		ErrCodeNilWriter,
+		ErrCodeNilFilter,
+		ErrCodeNilHook,
+		ErrCodeNilExtractor,
+		ErrCodeLoggerClosed,
+		ErrCodeWriterNotFound,
+		ErrCodeInvalidLevel,
+		ErrCodeInvalidFormat,
+		ErrCodeMaxWritersExceeded,
+		ErrCodeEmptyFilePath,
+		ErrCodePathTooLong,
+		ErrCodePathTraversal,
+		ErrCodeNullByte,
+		ErrCodeInvalidPath,
+		ErrCodeSymlinkNotAllowed,
+		ErrCodeHardlinkNotAllowed,
+		ErrCodeOverlongEncoding,
+		ErrCodeMaxSizeExceeded,
+		ErrCodeMaxBackupsExceeded,
+		ErrCodeBufferSizeTooLarge,
+		ErrCodeInvalidPattern,
+		ErrCodeEmptyPattern,
+		ErrCodePatternTooLong,
+		ErrCodeReDoSPattern,
+		ErrCodePatternFailed,
+		ErrCodeConfigValidation,
+		ErrCodeWriterAdd,
+		ErrCodeMultipleConfigs,
+	}
+
+	for _, code := range allCodes {
+		if _, ok := errorCodeToSentinel[code]; !ok {
+			panic(fmt.Sprintf("dd: error code %q missing from errorCodeToSentinel mapping", code))
+		}
+	}
+}
+
 // Is enables matching against sentinel errors using errors.Is().
 // This allows LoggerError instances to match their corresponding sentinel errors.
 func (e *LoggerError) Is(target error) bool {

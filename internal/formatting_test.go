@@ -26,11 +26,11 @@ func TestNewMessageFormatter(t *testing.T) {
 		{
 			name: "json format",
 			config: &FormatterConfig{
-				Format:     LogFormatJSON,
-				TimeFormat: time.RFC3339,
-				IncludeTime: true,
+				Format:       LogFormatJSON,
+				TimeFormat:   time.RFC3339,
+				IncludeTime:  true,
 				IncludeLevel: true,
-				FullPath:   true,
+				FullPath:     true,
 				JSON: &JSONOptions{
 					PrettyPrint: true,
 					Indent:      "  ",
@@ -155,12 +155,12 @@ func TestFormatArgsToStringComplexTypes(t *testing.T) {
 
 func TestFormatWithMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		config         *FormatterConfig
-		level          LogLevel
-		message        string
-		fields         []Field
-		wantContains   []string
+		name             string
+		config           *FormatterConfig
+		level            LogLevel
+		message          string
+		fields           []Field
+		wantContains     []string
 		dontWantContains []string
 	}{
 		{
@@ -173,9 +173,9 @@ func TestFormatWithMessage(t *testing.T) {
 				FullPath:      false,
 				DynamicCaller: false,
 			},
-			level:    LevelInfo,
-			message:  "test message",
-			fields:   []Field{{Key: "key", Value: "value"}},
+			level:        LevelInfo,
+			message:      "test message",
+			fields:       []Field{{Key: "key", Value: "value"}},
 			wantContains: []string{"INFO", "test message", "key=value"},
 		},
 		{
@@ -187,8 +187,8 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  true,
 				DynamicCaller: false,
 			},
-			level:    LevelDebug,
-			message:  "debug msg",
+			level:        LevelDebug,
+			message:      "debug msg",
 			wantContains: []string{"DEBUG", "debug msg"},
 		},
 		{
@@ -200,8 +200,8 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  false,
 				DynamicCaller: false,
 			},
-			level:    LevelWarn,
-			message:  "warning msg",
+			level:            LevelWarn,
+			message:          "warning msg",
 			dontWantContains: []string{"WARN"},
 		},
 		{
@@ -213,9 +213,9 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  true,
 				DynamicCaller: false,
 			},
-			level:    LevelError,
-			message:  "error message",
-			fields:   []Field{{Key: "error_code", Value: 500}},
+			level:        LevelError,
+			message:      "error message",
+			fields:       []Field{{Key: "error_code", Value: 500}},
 			wantContains: []string{`"level":"ERROR"`, `"message":"error message"`, `"error_code"`},
 		},
 		{
@@ -235,8 +235,8 @@ func TestFormatWithMessage(t *testing.T) {
 					},
 				},
 			},
-			level:    LevelInfo,
-			message:  "custom fields",
+			level:        LevelInfo,
+			message:      "custom fields",
 			wantContains: []string{`"lvl":"INFO"`, `"msg":"custom fields"`},
 		},
 	}

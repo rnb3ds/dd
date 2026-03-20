@@ -526,16 +526,12 @@ dd.SecurityConfigForLevel(level SecurityLevel) *SecurityConfig
 | [09_advanced.go](examples/09_advanced.go) | 采样、验证 |
 | [10_audit_integrity.go](examples/10_audit_integrity.go) | 审计、完整性 |
 
-## 🤝 参与贡献
+---
 
-欢迎贡献代码! 提交 PR 前请阅读贡献指南。
-
-## 📄 许可证
+## 许可证
 
 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件。
 
 ---
 
-**为 Go 社区用心打造** ❤️
-
-如果这个项目对你有帮助, 请给一个 ⭐️ Star!
+如果这个项目对你有帮助，请给一个 Star! ⭐

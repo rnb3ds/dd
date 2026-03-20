@@ -21,15 +21,6 @@ var (
 			return &buf
 		},
 	}
-
-	// filteredFieldsPool pools []Field slices for field filtering
-	// to reduce memory allocations when sensitive data filtering is needed.
-	filteredFieldsPool = sync.Pool{
-		New: func() any {
-			s := make([]Field, 0, 16) // typical field count
-			return &s
-		},
-	}
 )
 
 // Compile-time interface verification
@@ -835,6 +826,7 @@ func (l *Logger) shouldSample() bool {
 
 // SetSampling enables or disables log sampling at runtime (thread-safe).
 // Pass nil to disable sampling.
+// Note: This method creates a copy of the config to avoid mutating the caller's data.
 func (l *Logger) SetSampling(config *SamplingConfig) {
 	if l.closed.Load() {
 		return
@@ -850,21 +842,29 @@ func (l *Logger) SetSampling(config *SamplingConfig) {
 		return
 	}
 
-	// Apply defaults
-	if config.Initial < 0 {
-		config.Initial = 0
+	// Create a copy to avoid mutating caller's config
+	cfg := &SamplingConfig{
+		Enabled:    config.Enabled,
+		Initial:    config.Initial,
+		Thereafter: config.Thereafter,
+		Tick:       config.Tick,
+	}
+
+	// Apply defaults to the copy
+	if cfg.Initial < 0 {
+		cfg.Initial = 0
 	}
 	// Thereafter=0 is valid and means "log nothing after Initial"
 	// Thereafter<0 is treated as "log everything" (set to 1)
-	if config.Thereafter < 0 {
-		config.Thereafter = 1
+	if cfg.Thereafter < 0 {
+		cfg.Thereafter = 1
 	}
-	if config.Tick <= 0 {
-		config.Tick = 0 // No tick reset
+	if cfg.Tick <= 0 {
+		cfg.Tick = 0 // No tick reset
 	}
 
 	newState := &samplingState{
-		config: config,
+		config: cfg,
 		start:  time.Now(),
 	}
 	newState.counter.Store(0)
@@ -897,28 +897,30 @@ func (l *Logger) getSecurityConfig() *SecurityConfig {
 	return DefaultSecurityConfig()
 }
 
-// Log logs a message at the specified level
-func (l *Logger) Log(level LogLevel, args ...any) {
-	if !l.shouldLog(level) {
-		return
-	}
+// logEntry contains the data needed to write a log entry
+type logEntry struct {
+	msg            string
+	fields         []Field
+	originalFields []Field // fields before processing (for hooks)
+}
 
-	// Format args to string first, then apply security filtering before adding timestamp/level/caller
-	msg := l.formatter.FormatArgsToString(args...)
-	msg = l.applyMessageSecurity(msg)
-
+// logCore is the internal implementation for all log methods.
+// It handles security filtering, hooks, formatting, writing, and fatal handling.
+func (l *Logger) logCore(level LogLevel, entry logEntry) {
 	// Trigger BeforeLog hook
 	hookCtx := &HookContext{
-		Event:     HookBeforeLog,
-		Level:     level,
-		Message:   msg,
-		Timestamp: time.Now(),
+		Event:          HookBeforeLog,
+		Level:          level,
+		Message:        entry.msg,
+		Fields:         entry.fields,
+		OriginalFields: entry.originalFields,
+		Timestamp:      time.Now(),
 	}
 	if err := l.triggerHooks(context.Background(), hookCtx); err != nil {
 		return // Hook aborted the log
 	}
 
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, nil)
+	message := l.formatter.FormatWithMessage(level, l.callerDepth, entry.msg, toInternalFields(entry.fields))
 	l.writeMessage(l.applySizeLimit(message))
 
 	// Trigger AfterLog hook
@@ -930,37 +932,24 @@ func (l *Logger) Log(level LogLevel, args ...any) {
 	}
 }
 
+// Log logs a message at the specified level
+func (l *Logger) Log(level LogLevel, args ...any) {
+	if !l.shouldLog(level) {
+		return
+	}
+
+	msg := l.applyMessageSecurity(l.formatter.FormatArgsToString(args...))
+	l.logCore(level, logEntry{msg: msg})
+}
+
 // Logf logs a formatted message at the specified level
 func (l *Logger) Logf(level LogLevel, format string, args ...any) {
 	if !l.shouldLog(level) {
 		return
 	}
 
-	// Format with sprintf first, then apply security filtering before adding timestamp/level/caller
-	msg := fmt.Sprintf(format, args...)
-	msg = l.applyMessageSecurity(msg)
-
-	// Trigger BeforeLog hook
-	hookCtx := &HookContext{
-		Event:     HookBeforeLog,
-		Level:     level,
-		Message:   msg,
-		Timestamp: time.Now(),
-	}
-	if err := l.triggerHooks(context.Background(), hookCtx); err != nil {
-		return // Hook aborted the log
-	}
-
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, nil)
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(context.Background(), hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
+	msg := l.applyMessageSecurity(fmt.Sprintf(format, args...))
+	l.logCore(level, logEntry{msg: msg})
 }
 
 // LogWith logs a structured message with fields at the specified level
@@ -979,29 +968,11 @@ func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
 	msg = l.applyMessageSecurity(msg)
 	processedFields := l.processFields(fields)
 
-	// Trigger BeforeLog hook
-	hookCtx := &HookContext{
-		Event:          HookBeforeLog,
-		Level:          level,
-		Message:        msg,
-		Fields:         processedFields,
-		OriginalFields: originalFields,
-		Timestamp:      time.Now(),
-	}
-	if err := l.triggerHooks(context.Background(), hookCtx); err != nil {
-		return // Hook aborted the log
-	}
-
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(processedFields))
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(context.Background(), hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
+	l.logCore(level, logEntry{
+		msg:            msg,
+		fields:         processedFields,
+		originalFields: originalFields,
+	})
 }
 
 // toInternalFields converts dd.Field slice to internal.Field slice.
@@ -1704,6 +1675,54 @@ func SetDefault(logger *Logger) {
 			time.Sleep(DefaultLoggerCloseDelay)
 			_ = oldLogger.Close()
 		}()
+	}
+}
+
+// InitDefault initializes the default logger with the provided configuration.
+// Returns an error if initialization fails. If a default logger already exists,
+// it is closed and replaced with a new one.
+//
+// Example:
+//
+//	cfg := dd.DefaultConfig()
+//	cfg.Level = dd.LevelDebug
+//	if err := dd.InitDefault(cfg); err != nil {
+//	    log.Fatalf("Failed to initialize logger: %v", err)
+//	}
+func InitDefault(cfg *Config) error {
+	if cfg == nil {
+		cfg = DefaultConfig()
+	}
+
+	logger, err := New(cfg)
+	if err != nil {
+		return err
+	}
+
+	oldLogger := defaultLogger.Swap(logger)
+	if oldLogger != nil {
+		go func() {
+			time.Sleep(DefaultLoggerCloseDelay)
+			_ = oldLogger.Close()
+		}()
+	}
+
+	// Clear any previous initialization error
+	defaultInitErr.Store(nil)
+	defaultUsedFallback.Store(false)
+
+	return nil
+}
+
+// MustInitDefault initializes the default logger and panics on error.
+// This is useful for initialization code where failure should be fatal.
+//
+// Example:
+//
+//	dd.MustInitDefault(dd.DevelopmentConfig())
+func MustInitDefault(cfg *Config) {
+	if err := InitDefault(cfg); err != nil {
+		panic("dd: failed to initialize default logger: " + err.Error())
 	}
 }
 

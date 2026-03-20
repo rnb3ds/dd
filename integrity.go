@@ -168,24 +168,18 @@ func (s *IntegritySigner) putHasher(h hash.Hash) {
 	hasherPool.Put(h)
 }
 
-// Sign generates an HMAC signature for a log message.
-// The signature includes the message, timestamp, and sequence number (if configured).
-// Returns the signature string that should be appended to the log entry.
-// This method is thread-safe and can be called concurrently.
-//
-// Signature format: [SIG:timestamp:sequence:signature] where timestamp and sequence
-// are included only if configured. This allows proper verification of all signed data.
-func (s *IntegritySigner) Sign(message string) string {
-	if s == nil {
-		return ""
-	}
+// signResult contains the components needed to build a signature string
+type signResult struct {
+	timestamp int64
+	sequence  uint64
+	signature []byte
+}
 
+// signData computes the HMAC signature for the given data builder content.
+// It appends timestamp and sequence if configured, then computes the signature.
+func (s *IntegritySigner) signData(data *strings.Builder) signResult {
 	var timestamp int64
 	var sequence uint64
-
-	// Build the data to sign
-	var data strings.Builder
-	data.WriteString(message)
 
 	if s.config.IncludeTimestamp {
 		timestamp = time.Now().UnixNano()
@@ -206,26 +200,51 @@ func (s *IntegritySigner) Sign(message string) string {
 	hasher.Write([]byte(data.String()))
 	signature := hasher.Sum(nil)
 
-	// Encode signature
-	encodedSig := base64.RawURLEncoding.EncodeToString(signature)
+	return signResult{
+		timestamp: timestamp,
+		sequence:  sequence,
+		signature: signature,
+	}
+}
 
-	// Build signature output with metadata for verification
-	// Format: [SIG:ts:seq:sig] or [SIG::seq:sig] or [SIG:ts::sig] or [SIG:::sig]
+// buildSignatureString constructs the signature output string from the sign result.
+func (s *IntegritySigner) buildSignatureString(result signResult) string {
+	encodedSig := base64.RawURLEncoding.EncodeToString(result.signature)
+
 	var sigBuilder strings.Builder
 	sigBuilder.WriteString(s.config.SignaturePrefix)
 
 	if s.config.IncludeTimestamp {
-		sigBuilder.WriteString(strconv.FormatInt(timestamp, 10))
+		sigBuilder.WriteString(strconv.FormatInt(result.timestamp, 10))
 	}
 	sigBuilder.WriteString(":")
 	if s.config.IncludeSequence {
-		sigBuilder.WriteString(strconv.FormatUint(sequence, 10))
+		sigBuilder.WriteString(strconv.FormatUint(result.sequence, 10))
 	}
 	sigBuilder.WriteString(":")
 	sigBuilder.WriteString(encodedSig)
 	sigBuilder.WriteString("]")
 
 	return sigBuilder.String()
+}
+
+// Sign generates an HMAC signature for a log message.
+// The signature includes the message, timestamp, and sequence number (if configured).
+// Returns the signature string that should be appended to the log entry.
+// This method is thread-safe and can be called concurrently.
+//
+// Signature format: [SIG:timestamp:sequence:signature] where timestamp and sequence
+// are included only if configured. This allows proper verification of all signed data.
+func (s *IntegritySigner) Sign(message string) string {
+	if s == nil {
+		return ""
+	}
+
+	var data strings.Builder
+	data.WriteString(message)
+
+	result := s.signData(&data)
+	return s.buildSignatureString(result)
 }
 
 // SignFields generates an HMAC signature for a message with fields.
@@ -239,10 +258,6 @@ func (s *IntegritySigner) SignFields(message string, fields []Field) string {
 		return ""
 	}
 
-	var timestamp int64
-	var sequence uint64
-
-	// Build the data to sign including fields
 	var data strings.Builder
 	data.WriteString(message)
 
@@ -253,44 +268,8 @@ func (s *IntegritySigner) SignFields(message string, fields []Field) string {
 		data.WriteString(fmt.Sprintf("%v", f.Value))
 	}
 
-	if s.config.IncludeTimestamp {
-		timestamp = time.Now().UnixNano()
-		data.WriteString("|")
-		data.WriteString(strconv.FormatInt(timestamp, 10))
-	}
-
-	if s.config.IncludeSequence {
-		sequence = s.sequence.Add(1)
-		data.WriteString("|")
-		data.WriteString(strconv.FormatUint(sequence, 10))
-	}
-
-	// Get hasher from pool and compute HMAC
-	hasher := s.getHasher()
-	defer s.putHasher(hasher)
-
-	hasher.Write([]byte(data.String()))
-	signature := hasher.Sum(nil)
-
-	encodedSig := base64.RawURLEncoding.EncodeToString(signature)
-
-	// Build signature output with metadata for verification
-	// Format: [SIG:ts:seq:sig] or [SIG::seq:sig] or [SIG:ts::sig] or [SIG:::sig]
-	var sigBuilder strings.Builder
-	sigBuilder.WriteString(s.config.SignaturePrefix)
-
-	if s.config.IncludeTimestamp {
-		sigBuilder.WriteString(strconv.FormatInt(timestamp, 10))
-	}
-	sigBuilder.WriteString(":")
-	if s.config.IncludeSequence {
-		sigBuilder.WriteString(strconv.FormatUint(sequence, 10))
-	}
-	sigBuilder.WriteString(":")
-	sigBuilder.WriteString(encodedSig)
-	sigBuilder.WriteString("]")
-
-	return sigBuilder.String()
+	result := s.signData(&data)
+	return s.buildSignatureString(result)
 }
 
 // LogIntegrity contains the result of integrity verification.
@@ -440,7 +419,10 @@ func (s *IntegritySigner) verifyLegacy(message, sigStr string) (*LogIntegrity, e
 	expectedSig := hasher.Sum(nil)
 
 	// Compare signatures (constant-time comparison)
-	if !hmac.Equal(signature, expectedSig[:len(signature)]) {
+	// Note: We compare the full expected signature, not a truncated version.
+	// Truncating the expected signature to match the provided signature length
+	// would significantly weaken the HMAC verification.
+	if !hmac.Equal(signature, expectedSig) {
 		return &LogIntegrity{
 			Valid:   false,
 			Message: message,

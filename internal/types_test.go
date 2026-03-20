@@ -87,8 +87,8 @@ func TestJSONFieldNamesIsComplete(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "empty",
-			names: &JSONFieldNames{},
+			name:     "empty",
+			names:    &JSONFieldNames{},
 			expected: false,
 		},
 		{
@@ -184,9 +184,9 @@ func ptr[T any](v T) *T {
 
 func TestConvertValue(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    any
-		check    func(any) bool
+		name  string
+		input any
+		check func(any) bool
 	}{
 		{
 			name:  "nil",
@@ -339,9 +339,9 @@ func TestConvertValueMaxDepth(t *testing.T) {
 
 func TestConvertValueStructWithJSONTags(t *testing.T) {
 	type TestStruct struct {
-		Name    string `json:"name"`
-		Value   int    `json:"value"`
-		NoTag   string
+		Name     string `json:"name"`
+		Value    int    `json:"value"`
+		NoTag    string
 		EmptyTag string `json:""`
 	}
 

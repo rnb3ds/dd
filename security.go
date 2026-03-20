@@ -3,6 +3,7 @@ package dd
 import (
 	"context"
 	"fmt"
+	"hash/maphash"
 	"reflect"
 	"regexp"
 	"strings"
@@ -46,6 +47,10 @@ type SensitiveDataFilter struct {
 	cacheHits  atomic.Int64
 	cacheMiss  atomic.Int64
 	maxCacheSz int
+
+	// hashSeed is used for maphash-based hashing of cache keys.
+	// Initialized once during filter creation for better collision resistance.
+	hashSeed maphash.Seed
 }
 
 // filterCacheEntry stores a cached filter result
@@ -56,14 +61,19 @@ type filterCacheEntry struct {
 	created int64 // unix timestamp for TTL
 }
 
-// FNV-1a hash implementation for string hashing (fast, no allocations)
-func hashString(s string) uint64 {
-	h := uint64(14695981039346656037) // FNV offset basis
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= 1099511628211 // FNV prime
+// hashString computes a hash of the input string using maphash.
+// This provides better collision resistance than FNV-1a while maintaining
+// good performance. Each filter instance uses a unique seed for security.
+func (f *SensitiveDataFilter) hashString(s string) uint64 {
+	// Safety check: initialize seed if not already done (defensive programming)
+	if f.hashSeed == (maphash.Seed{}) {
+		f.hashSeed = maphash.MakeSeed()
 	}
-	return h
+
+	var h maphash.Hash
+	h.SetSeed(f.hashSeed)
+	h.WriteString(s)
+	return h.Sum64()
 }
 
 // newSensitiveDataFilterWithPatterns is the internal constructor for SensitiveDataFilter.
@@ -76,6 +86,7 @@ func newSensitiveDataFilterWithPatterns(patterns []*regexp.Regexp, timeout time.
 		cache:          make(map[uint64]filterCacheEntry),
 		cacheSize:      0,
 		maxCacheSz:     1000, // Maximum cache entries
+		hashSeed:       maphash.MakeSeed(),
 	}
 	filter.enabled.Store(true)
 
@@ -335,6 +346,7 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 		maxInputLength: f.maxInputLength,
 		timeout:        f.timeout,
 		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		hashSeed:       f.hashSeed, // Share the same seed (read-only after initialization)
 	}
 	clone.enabled.Store(f.enabled.Load())
 
@@ -362,13 +374,18 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	// Pre-compute hash for cache operations (avoid redundant hash calculations)
+	// This hash is for the original input; will recompute if input is truncated
+	var inputHash uint64
+	useCache := inputLen <= 1024
+
 	// Check cache for repeated messages (only for small inputs to avoid memory bloat)
 	// Skip cache if not initialized (for filters created without using constructor)
-	if inputLen <= 1024 {
+	if useCache {
+		inputHash = f.hashString(input)
 		f.cacheMu.RLock()
 		if f.cache != nil {
-			hash := hashString(input)
-			if entry, ok := f.cache[hash]; ok && entry.input == input {
+			if entry, ok := f.cache[inputHash]; ok && entry.input == input {
 				// Check TTL - entries older than cacheTTLSeconds are considered stale
 				if time.Now().Unix()-entry.created < cacheTTLSeconds {
 					f.cacheMu.RUnlock()
@@ -395,6 +412,7 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	// from being leaked, regardless of couldContainSensitiveData result.
 	// IMPORTANT: Boundary check must happen before early exit to prevent
 	// sensitive data leakage at truncation boundaries.
+	inputTruncated := false
 	if f.maxInputLength > 0 && inputLen > f.maxInputLength {
 		// Check the boundary region for sensitive data before truncating
 		boundaryStart := f.maxInputLength - BoundaryCheckSize
@@ -430,6 +448,12 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 
 		// Update inputLen after truncation for subsequent checks
 		inputLen = len(input)
+		inputTruncated = true
+	}
+
+	// Recompute hash if input was truncated (since content changed)
+	if useCache && inputTruncated {
+		inputHash = f.hashString(input)
 	}
 
 	// Quick rejection: check if input could possibly contain sensitive data
@@ -445,9 +469,9 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		f.totalFiltered.Add(1)
 		f.totalLatencyNs.Add(latencyNs)
 
-		// Cache the result for small inputs
-		if inputLen <= 1024 && f.cache != nil {
-			f.cacheResult(hashString(input), input, input)
+		// Cache the result for small inputs (use pre-computed hash)
+		if useCache && f.cache != nil {
+			f.cacheResult(inputHash, input, input)
 		}
 		return input
 	}
@@ -462,8 +486,8 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 			redactionCount++
 		}
 		// Early exit if result becomes empty or redacted
+		// Note: redactionCount already incremented above when result changed
 		if result == "" || result == "[REDACTED]" {
-			redactionCount++
 			break
 		}
 	}
@@ -476,9 +500,9 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	latencyNs := time.Since(startTime).Nanoseconds()
 	f.totalLatencyNs.Add(latencyNs)
 
-	// Cache the result for small inputs
-	if inputLen <= 1024 && f.cache != nil {
-		f.cacheResult(hashString(input), input, result)
+	// Cache the result for small inputs (use pre-computed hash)
+	if useCache && f.cache != nil {
+		f.cacheResult(inputHash, input, result)
 	}
 
 	return result
@@ -1182,6 +1206,9 @@ func (sc *SecurityConfig) Clone() *SecurityConfig {
 // NewFullSensitiveDataFilter creates a filter with all built-in sensitive data patterns.
 // This is an alias for NewSensitiveDataFilter() with a clearer name indicating
 // that it includes all available patterns.
+//
+// Deprecated: Use NewSensitiveDataFilter() directly. This alias provides no additional
+// functionality and will be removed in a future major version.
 func NewFullSensitiveDataFilter() *SensitiveDataFilter {
 	return NewSensitiveDataFilter()
 }
@@ -1220,7 +1247,7 @@ func DefaultSecureConfig() *SecurityConfig {
 
 // HealthcareConfig returns a security config optimized for HIPAA compliance.
 // This includes all patterns from DefaultSecureConfig plus healthcare-specific patterns:
-//   - ICD-10 diagnosis codes
+//   - ICD-10 diagnosis codes (with medical context)
 //   - US National Provider Identifier (NPI)
 //   - Medical Record Numbers (MRN)
 //   - Health Insurance Claim Numbers (HICN)
@@ -1232,8 +1259,10 @@ func HealthcareConfig() *SecurityConfig {
 
 	// Add healthcare-specific patterns
 	healthcarePatterns := []string{
-		// ICD-10 Diagnosis codes
-		`\b[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`,
+		// ICD-10 Diagnosis codes with medical context keywords
+		// Requires context like "diagnosis:", "icd10:", "dx:" to reduce false positives
+		// Matches codes like "A12.3", "S72.0", "Z99.9" when preceded by medical keywords
+		`(?i)(?:icd[-_]?10?|diagnosis|diag|dx|diagnostic[_-]?code|clinical[_-]?code)[\s:=]+[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`,
 		// Medical Record Numbers with context
 		`(?i)(?:mrn|medical[_-]?record[_-]?number|patient[_-]?id|health[_-]?record)[\s:=]+[A-Za-z0-9]{6,20}\b`,
 		// Health Insurance Claim Number (Medicare)
