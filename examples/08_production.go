@@ -27,7 +27,7 @@ import (
 // 5. Performance optimization
 // 6. Caller detection
 func main() {
-	fmt.Println("=== DD Production Patterns ===\n")
+	fmt.Println("=== DD Production Patterns ===")
 
 	section1ErrorHandling()
 	section2RequestTracing()
@@ -78,7 +78,7 @@ func section1ErrorHandling() {
 		panic("nil pointer dereference")
 	}()
 
-	fmt.Println("✓ Errors logged, panic recovered\n")
+	fmt.Println("✓ Errors logged, panic recovered")
 }
 
 // Section 2: Request tracing pattern
@@ -101,23 +101,29 @@ func section2RequestTracing() {
 		ctx = dd.WithRequestID(ctx, requestID)
 		ctx = dd.WithTraceID(ctx, "trace-from-header")
 
-		// Log request start
-		logger.InfoWithCtx(ctx, "Request started",
+		// Create request-scoped logger with context fields
+		reqLogger := logger.WithFields(
+			dd.String("trace_id", dd.GetTraceID(ctx)),
+			dd.String("request_id", dd.GetRequestID(ctx)),
 			dd.String("path", path),
+		)
+
+		// Log request start
+		reqLogger.InfoWith("Request started",
 			dd.String("method", "POST"),
 		)
 
 		// Simulate processing steps
-		logger.DebugWithCtx(ctx, "Validating input",
+		reqLogger.DebugWith("Validating input",
 			dd.String("step", "validation"),
 		)
 
-		logger.DebugWithCtx(ctx, "Processing business logic",
+		reqLogger.DebugWith("Processing business logic",
 			dd.String("step", "processing"),
 		)
 
 		// Log request completion
-		logger.InfoWithCtx(ctx, "Request completed",
+		reqLogger.InfoWith("Request completed",
 			dd.Int("status", 200),
 			dd.Duration("duration", time.Since(start)),
 		)
@@ -127,7 +133,7 @@ func section2RequestTracing() {
 	processRequest(ctx, "/api/users")
 	processRequest(ctx, "/api/orders")
 
-	fmt.Println("✓ Request flow logged with trace IDs\n")
+	fmt.Println("✓ Request flow logged with trace IDs")
 }
 
 // Section 3: Graceful shutdown
@@ -187,7 +193,7 @@ func section3GracefulShutdown() {
 	logger.Info("Shutting down gracefully")
 	logger.Close()
 
-	fmt.Println("✓ Graceful shutdown completed\n")
+	fmt.Println("✓ Graceful shutdown completed")
 }
 
 // Section 4: Concurrent logging

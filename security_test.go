@@ -1187,8 +1187,8 @@ func TestTruncationBoundarySensitiveData(t *testing.T) {
 	// Create a custom filter with smaller max input length for testing
 	smallFilter := &SensitiveDataFilter{
 		maxInputLength: 1000, // Small limit for testing
-		timeout:        DefaultFilterTimeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		timeout:        defaultFilterTimeout,
+		semaphore:      make(chan struct{}, maxConcurrentFilters),
 	}
 	smallFilter.enabled.Store(true)
 
@@ -1350,8 +1350,8 @@ func TestTruncationWithNoSensitiveDataAtBoundary(t *testing.T) {
 	// Create a filter with small max input length
 	smallFilter := &SensitiveDataFilter{
 		maxInputLength: 500,
-		timeout:        DefaultFilterTimeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		timeout:        defaultFilterTimeout,
+		semaphore:      make(chan struct{}, maxConcurrentFilters),
 	}
 	smallFilter.enabled.Store(true)
 

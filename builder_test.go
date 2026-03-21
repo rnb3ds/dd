@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -62,20 +63,6 @@ func TestNewConfig(t *testing.T) {
 		if !strings.Contains(output, `"message":"test message"`) {
 			t.Errorf("Expected JSON output with message, got: %s", output)
 		}
-	})
-
-	t.Run("MustBuild panics on error", func(t *testing.T) {
-		cfg := DefaultConfig()
-		// Use a path with invalid characters on Windows
-		cfg.File = &FileConfig{Path: "Z:\\\\nonexistent\\\\drive\\\\app.log"}
-
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("Expected panic for invalid file path")
-			}
-		}()
-
-		Must(cfg)
 	})
 }
 
@@ -243,6 +230,138 @@ func TestBuilderConfigClone(t *testing.T) {
 		}
 		if errCfg.Level != LevelError {
 			t.Errorf("Error config Level should be LevelError")
+		}
+	})
+
+	t.Run("clone nil config", func(t *testing.T) {
+		var nilCfg *Config
+		cloned := nilCfg.Clone()
+		if cloned != nil {
+			t.Error("Clone of nil config should return nil")
+		}
+	})
+
+	t.Run("clone with all fields populated", func(t *testing.T) {
+		original := &Config{
+			Level:         LevelDebug,
+			Format:        FormatJSON,
+			TimeFormat:    time.RFC3339Nano,
+			IncludeTime:   false,
+			IncludeLevel:  false,
+			FullPath:      true,
+			DynamicCaller: true,
+			Output:        io.Discard,
+			Outputs:       []io.Writer{io.Discard, os.Stdout},
+			File: &FileConfig{
+				Path:       "test.log",
+				MaxSizeMB:  50,
+				MaxBackups: 10,
+				MaxAge:     24 * time.Hour,
+				Compress:   true,
+			},
+			JSON: &JSONOptions{
+				PrettyPrint: true,
+				Indent:      "    ",
+				FieldNames: &JSONFieldNames{
+					Timestamp: "ts",
+					Level:     "lvl",
+					Caller:    "src",
+					Message:   "msg",
+					Fields:    "data",
+				},
+			},
+			Security: &SecurityConfig{
+				MaxMessageSize:  1000,
+				MaxWriters:      50,
+				SensitiveFilter: NewSensitiveDataFilter(),
+			},
+			FieldValidation: &FieldValidationConfig{
+				Mode: FieldValidationStrict,
+			},
+			Sampling: &SamplingConfig{
+				Enabled:    true,
+				Initial:    100,
+				Thereafter: 10,
+				Tick:       time.Minute,
+			},
+		}
+
+		cloned := original.Clone()
+
+		// Verify all fields copied correctly
+		if cloned.Level != original.Level {
+			t.Error("Level mismatch")
+		}
+		if cloned.Format != original.Format {
+			t.Error("Format mismatch")
+		}
+		if cloned.TimeFormat != original.TimeFormat {
+			t.Error("TimeFormat mismatch")
+		}
+		if cloned.IncludeTime != original.IncludeTime {
+			t.Error("IncludeTime mismatch")
+		}
+		if cloned.FullPath != original.FullPath {
+			t.Error("FullPath mismatch")
+		}
+		if cloned.File == nil || cloned.File.Path != "test.log" {
+			t.Error("File config not cloned properly")
+		}
+		if cloned.JSON == nil || !cloned.JSON.PrettyPrint {
+			t.Error("JSON config not cloned properly")
+		}
+		if cloned.JSON.FieldNames == nil || cloned.JSON.FieldNames.Timestamp != "ts" {
+			t.Error("JSON FieldNames not cloned properly")
+		}
+		if cloned.Security == nil || cloned.Security.MaxMessageSize != 1000 {
+			t.Error("Security config not cloned properly")
+		}
+		if cloned.Sampling == nil || !cloned.Sampling.Enabled {
+			t.Error("Sampling config not cloned properly")
+		}
+		if len(cloned.Outputs) != 2 {
+			t.Error("Outputs not cloned properly")
+		}
+
+		// Verify independence
+		cloned.File.Path = "modified.log"
+		if original.File.Path == "modified.log" {
+			t.Error("Modifying clone should not affect original")
+		}
+
+		cloned.JSON.FieldNames.Timestamp = "modified_ts"
+		if original.JSON.FieldNames.Timestamp == "modified_ts" {
+			t.Error("Modifying clone JSON.FieldNames should not affect original")
+		}
+	})
+
+	t.Run("clone with nil optional fields", func(t *testing.T) {
+		original := &Config{
+			Level:   LevelInfo,
+			Format:  FormatText,
+			File:    nil,
+			JSON:    nil,
+			Security: nil,
+			Sampling: nil,
+			Outputs:  nil,
+		}
+
+		cloned := original.Clone()
+
+		if cloned.File != nil {
+			t.Error("Cloned File should be nil")
+		}
+		if cloned.JSON != nil {
+			t.Error("Cloned JSON should be nil")
+		}
+		if cloned.Security != nil {
+			t.Error("Cloned Security should be nil")
+		}
+		if cloned.Sampling != nil {
+			t.Error("Cloned Sampling should be nil")
+		}
+		if cloned.Outputs != nil {
+			t.Error("Cloned Outputs should be nil")
 		}
 	})
 }

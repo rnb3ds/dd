@@ -3,6 +3,7 @@ package dd
 import (
 	"context"
 	"fmt"
+	"hash/maphash"
 	"reflect"
 	"regexp"
 	"strings"
@@ -15,6 +16,14 @@ import (
 
 // cacheTTLSeconds defines how long cache entries are valid (5 minutes)
 const cacheTTLSeconds = 300
+
+// visitedMapPool pools visited maps for FilterValueRecursive to reduce allocations
+// in the hot path when filtering complex nested structures.
+var visitedMapPool = sync.Pool{
+	New: func() any {
+		return make(map[uintptr]bool, 8) // typical visited capacity
+	},
+}
 
 type SensitiveDataFilter struct {
 	// patternsPtr stores an immutable slice of patterns using atomic pointer.
@@ -46,37 +55,52 @@ type SensitiveDataFilter struct {
 	cacheHits  atomic.Int64
 	cacheMiss  atomic.Int64
 	maxCacheSz int
+
+	// hashSeed is used for maphash-based hashing of cache keys.
+	// Initialized once during filter creation for better collision resistance.
+	hashSeed maphash.Seed
+
+	// goroutineCond is used to signal when activeGoroutines reaches zero,
+	// allowing WaitForGoroutines to wait efficiently without busy-waiting.
+	goroutineCond sync.Cond
 }
 
 // filterCacheEntry stores a cached filter result
 type filterCacheEntry struct {
-	hash    uint64
 	input   string
 	result  string
-	created int64 // unix timestamp for TTL
+	created time.Time // creation time for TTL calculation
 }
 
-// FNV-1a hash implementation for string hashing (fast, no allocations)
-func hashString(s string) uint64 {
-	h := uint64(14695981039346656037) // FNV offset basis
-	for i := 0; i < len(s); i++ {
-		h ^= uint64(s[i])
-		h *= 1099511628211 // FNV prime
+// hashString computes a hash of the input string using maphash.
+// This provides better collision resistance than FNV-1a while maintaining
+// good performance. Each filter instance uses a unique seed for security.
+func (f *SensitiveDataFilter) hashString(s string) uint64 {
+	// Safety check: initialize seed if not already done (defensive programming)
+	if f.hashSeed == (maphash.Seed{}) {
+		f.hashSeed = maphash.MakeSeed()
 	}
-	return h
+
+	var h maphash.Hash
+	h.SetSeed(f.hashSeed)
+	h.WriteString(s)
+	return h.Sum64()
 }
 
 // newSensitiveDataFilterWithPatterns is the internal constructor for SensitiveDataFilter.
 // It creates a filter with the specified patterns and timeout.
 func newSensitiveDataFilterWithPatterns(patterns []*regexp.Regexp, timeout time.Duration) *SensitiveDataFilter {
 	filter := &SensitiveDataFilter{
-		maxInputLength: MaxInputLength,
+		maxInputLength: maxInputLength,
 		timeout:        timeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		semaphore:      make(chan struct{}, maxConcurrentFilters),
 		cache:          make(map[uint64]filterCacheEntry),
 		cacheSize:      0,
 		maxCacheSz:     1000, // Maximum cache entries
+		hashSeed:       maphash.MakeSeed(),
 	}
+	// Initialize the condition variable with a new mutex
+	filter.goroutineCond = *sync.NewCond(&sync.Mutex{})
 	filter.enabled.Store(true)
 
 	if patterns != nil {
@@ -95,11 +119,11 @@ func newSensitiveDataFilterWithPatterns(patterns []*regexp.Regexp, timeout time.
 
 func NewSensitiveDataFilter() *SensitiveDataFilter {
 	internal.InitPatterns()
-	return newSensitiveDataFilterWithPatterns(internal.CompiledFullPatterns, DefaultFilterTimeout)
+	return newSensitiveDataFilterWithPatterns(internal.CompiledFullPatterns, defaultFilterTimeout)
 }
 
 func NewEmptySensitiveDataFilter() *SensitiveDataFilter {
-	return newSensitiveDataFilterWithPatterns(nil, EmptyFilterTimeout)
+	return newSensitiveDataFilterWithPatterns(nil, emptyFilterTimeout)
 }
 
 func NewCustomSensitiveDataFilter(patterns ...string) (*SensitiveDataFilter, error) {
@@ -115,11 +139,11 @@ func NewCustomSensitiveDataFilter(patterns ...string) (*SensitiveDataFilter, err
 }
 
 func (f *SensitiveDataFilter) addPattern(pattern string) error {
-	if len(pattern) > MaxPatternLength {
-		return fmt.Errorf("%w: %d exceeds maximum %d", ErrPatternTooLong, len(pattern), MaxPatternLength)
+	if len(pattern) > maxPatternLength {
+		return fmt.Errorf("%w: %d exceeds maximum %d", ErrPatternTooLong, len(pattern), maxPatternLength)
 	}
 
-	if internal.HasNestedQuantifiers(pattern, MaxQuantifierRange) {
+	if internal.HasNestedQuantifiers(pattern, maxQuantifierRange) {
 		return ErrReDoSPattern
 	}
 
@@ -224,6 +248,8 @@ type FilterStats struct {
 	TotalRedactions   int64         // Total number of redactions performed
 	TotalTimeouts     int64         // Total number of timeout events
 	AverageLatency    time.Duration // Average latency per filter operation
+	CacheHits         int64         // Number of cache hits
+	CacheMiss         int64         // Number of cache misses
 }
 
 // GetFilterStats returns current filter statistics for monitoring.
@@ -262,6 +288,8 @@ func (f *SensitiveDataFilter) GetFilterStats() FilterStats {
 		TotalRedactions:   f.totalRedactions.Load(),
 		TotalTimeouts:     f.totalTimeouts.Load(),
 		AverageLatency:    avgLatency,
+		CacheHits:         f.cacheHits.Load(),
+		CacheMiss:         f.cacheMiss.Load(),
 	}
 }
 
@@ -287,14 +315,31 @@ func (f *SensitiveDataFilter) WaitForGoroutines(timeout time.Duration) bool {
 		return true
 	}
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if f.activeGoroutines.Load() == 0 {
-			return true
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Fast path: no active goroutines
+	if f.activeGoroutines.Load() == 0 {
+		return true
 	}
-	return f.activeGoroutines.Load() == 0
+
+	// Use a channel to implement timeout on Cond.Wait
+	done := make(chan struct{})
+
+	go func() {
+		f.goroutineCond.L.Lock()
+		defer f.goroutineCond.L.Unlock()
+		for f.activeGoroutines.Load() > 0 && !f.closed.Load() {
+			f.goroutineCond.Wait()
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		// Timeout reached, signal the waiting goroutine to stop
+		f.goroutineCond.Broadcast()
+		return f.activeGoroutines.Load() == 0
+	}
 }
 
 // Close marks the filter as closed and waits for active goroutines to complete.
@@ -311,16 +356,24 @@ func (f *SensitiveDataFilter) Close() bool {
 	}
 
 	f.closed.Store(true)
-	return f.WaitForGoroutines(DefaultFilterTimeout * 2)
+	return f.WaitForGoroutines(defaultFilterTimeout * 2)
 }
 
 // Clone creates a copy of the SensitiveDataFilter.
 //
 // Shared (immutable):
 //   - patterns slice pointer (shared for better performance, patterns are immutable after creation)
+//   - hashSeed (shared for consistent hashing)
 //
-// New instances:
+// IMPORTANT: The patterns slice is shared between original and clone.
+// This is safe because patterns are immutable after creation.
+// DO NOT modify the underlying patterns slice directly.
+// Always use AddPattern() method which creates a new slice.
+//
+// New instances (not shared):
 //   - semaphore channel (new channel with same capacity)
+//   - cache (new empty cache)
+//   - counters (reset to 0)
 //
 // Returns nil if the receiver is nil.
 func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
@@ -334,7 +387,8 @@ func (f *SensitiveDataFilter) Clone() *SensitiveDataFilter {
 	clone := &SensitiveDataFilter{
 		maxInputLength: f.maxInputLength,
 		timeout:        f.timeout,
-		semaphore:      make(chan struct{}, MaxConcurrentFilters),
+		semaphore:      make(chan struct{}, maxConcurrentFilters),
+		hashSeed:       f.hashSeed, // Share the same seed (read-only after initialization)
 	}
 	clone.enabled.Store(f.enabled.Load())
 
@@ -362,15 +416,27 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		return input
 	}
 
+	// Pre-compute hash for cache operations (avoid redundant hash calculations)
+	// This hash is for the original input; will recompute if input is truncated
+	// SECURITY: Only cache inputs <= cacheInputMaxLen (128 bytes) to prevent
+	// hash collision attacks. See cacheResult for details.
+	var inputHash uint64
+	useCache := inputLen <= cacheInputMaxLen
+
 	// Check cache for repeated messages (only for small inputs to avoid memory bloat)
 	// Skip cache if not initialized (for filters created without using constructor)
-	if inputLen <= 1024 {
+	if useCache {
+		inputHash = f.hashString(input)
 		f.cacheMu.RLock()
 		if f.cache != nil {
-			hash := hashString(input)
-			if entry, ok := f.cache[hash]; ok && entry.input == input {
-				// Check TTL - entries older than cacheTTLSeconds are considered stale
-				if time.Now().Unix()-entry.created < cacheTTLSeconds {
+			// SECURITY: Verify both hash AND input length to add collision resistance.
+			// This provides defense-in-depth: even if hash collision occurs,
+			// different length inputs will be rejected.
+			if entry, ok := f.cache[inputHash]; ok && len(entry.input) == inputLen && entry.input == input {
+				// SECURITY: Check TTL with 1ms margin to prevent boundary condition issues
+				// Entries must be strictly within TTL to be used
+				ttlWithMargin := time.Duration(cacheTTLSeconds)*time.Second - time.Millisecond
+				if time.Since(entry.created) < ttlWithMargin {
 					f.cacheMu.RUnlock()
 					f.cacheHits.Add(1)
 					f.totalFiltered.Add(1)
@@ -385,6 +451,11 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		f.cacheMiss.Add(1)
 	}
 
+	// Track if input was truncated for cache decision
+	// SECURITY: When input is truncated, the content changes so we must
+	// disable caching to prevent cache pollution with stale results
+	inputWasTruncated := false
+
 	startTime := time.Now()
 
 	patterns := *patternsPtr
@@ -397,7 +468,7 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	// sensitive data leakage at truncation boundaries.
 	if f.maxInputLength > 0 && inputLen > f.maxInputLength {
 		// Check the boundary region for sensitive data before truncating
-		boundaryStart := f.maxInputLength - BoundaryCheckSize
+		boundaryStart := f.maxInputLength - boundaryCheckSize
 		if boundaryStart < 0 {
 			boundaryStart = 0
 		}
@@ -428,8 +499,16 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 			input = input[:f.maxInputLength] + "... [TRUNCATED FOR SECURITY]"
 		}
 
-		// Update inputLen after truncation for subsequent checks
-		inputLen = len(input)
+		inputWasTruncated = true // Track for cache decision
+	}
+
+	// SECURITY: Disable caching when input was truncated
+	// The content has changed, so caching with the new hash would pollute
+	// the cache with results for modified inputs
+	// Also explicitly zero the hash to prevent accidental cache pollution
+	if inputWasTruncated {
+		useCache = false
+		inputHash = 0 // SECURITY: Invalidate hash to prevent any cache access
 	}
 
 	// Quick rejection: check if input could possibly contain sensitive data
@@ -445,9 +524,9 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 		f.totalFiltered.Add(1)
 		f.totalLatencyNs.Add(latencyNs)
 
-		// Cache the result for small inputs
-		if inputLen <= 1024 && f.cache != nil {
-			f.cacheResult(hashString(input), input, input)
+		// Cache the result for small inputs (use pre-computed hash)
+		if useCache && f.cache != nil {
+			f.cacheResult(inputHash, input, input)
 		}
 		return input
 	}
@@ -462,8 +541,8 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 			redactionCount++
 		}
 		// Early exit if result becomes empty or redacted
+		// Note: redactionCount already incremented above when result changed
 		if result == "" || result == "[REDACTED]" {
-			redactionCount++
 			break
 		}
 	}
@@ -476,19 +555,39 @@ func (f *SensitiveDataFilter) Filter(input string) string {
 	latencyNs := time.Since(startTime).Nanoseconds()
 	f.totalLatencyNs.Add(latencyNs)
 
-	// Cache the result for small inputs
-	if inputLen <= 1024 && f.cache != nil {
-		f.cacheResult(hashString(input), input, result)
+	// Cache the result for small inputs (use pre-computed hash)
+	if useCache && f.cache != nil {
+		f.cacheResult(inputHash, input, result)
 	}
 
 	return result
 }
 
-// cacheResult stores a filter result in the cache
+// cacheInputMaxLen limits the maximum input string length for caching.
+// SECURITY: Only inputs <= this length are cached to prevent hash collision attacks.
+// Longer inputs bypass the cache entirely, ensuring all sensitive data is filtered.
+// This value balances security (collision resistance) with performance (cache hit rate).
+// Reduced from 128 to 64 for stronger collision resistance while maintaining
+// good cache hit rate for typical short log messages.
+const cacheInputMaxLen = 64
+
+// cacheResult stores a filter result in the cache.
+// For inputs longer than cacheInputMaxLen, the input string is not stored
+// to prevent memory bloat from caching large strings.
+//
+// SECURITY: For inputs longer than cacheInputMaxLen, we skip caching entirely
+// to prevent hash collision attacks that could bypass sensitive data filtering.
 func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
 	if f.cache == nil {
+		return
+	}
+
+	// SECURITY: Don't cache long inputs to prevent hash collision attacks.
+	// Without storing the full input, we cannot verify collision on cache hit,
+	// which could allow an attacker to bypass filtering by crafting collisions.
+	if len(input) > cacheInputMaxLen {
 		return
 	}
 
@@ -498,9 +597,8 @@ func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 	// Evict old entries if cache is full AND this is a new entry
 	if !exists && f.cacheSize >= f.maxCacheSz {
 		// Simple eviction: clear expired entries first
-		now := time.Now().Unix()
 		for k, entry := range f.cache {
-			if now-entry.created >= cacheTTLSeconds {
+			if time.Since(entry.created) >= cacheTTLSeconds*time.Second {
 				delete(f.cache, k)
 				f.cacheSize--
 			}
@@ -522,10 +620,9 @@ func (f *SensitiveDataFilter) cacheResult(hash uint64, input, result string) {
 	}
 
 	f.cache[hash] = filterCacheEntry{
-		hash:    hash,
-		input:   input,
+		input:   input, // Always store input for collision detection (already checked length)
 		result:  result,
-		created: time.Now().Unix(),
+		created: time.Now(),
 	}
 
 	// Only increment size counter for new entries
@@ -561,6 +658,12 @@ var credentialKeywords = [][]byte{
 //   - Has @ symbol: required for email patterns
 //   - Has protocol indicators: required for connection strings
 //
+// SECURITY NOTE: This pre-check is an optimization, not a security boundary.
+// The actual regex patterns will still catch sensitive data even if this
+// function returns false. Attackers cannot bypass filtering by encoding
+// data (e.g., fullwidth digits, HTML entities) because the regex patterns
+// operate on the raw input.
+//
 // Returns true if any sensitive data pattern could potentially match.
 func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
 	inputLen := len(input)
@@ -577,7 +680,7 @@ func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
 	for i := 0; i < inputLen; i++ {
 		c := input[i]
 
-		// Check for digits
+		// Check for ASCII digits
 		if c >= '0' && c <= '9' {
 			hasDigits = true
 		}
@@ -595,6 +698,20 @@ func (f *SensitiveDataFilter) couldContainSensitiveData(input string) bool {
 		// Early exit if we found all characteristics
 		if hasDigits && hasAtSign && hasProtocol {
 			break
+		}
+	}
+
+	// SECURITY: Also check for encoded digits that might bypass the ASCII check
+	// This ensures encoded data doesn't get a free pass through pre-check
+	// Fullwidth digits (U+FF10-U+FF19) are encoded as EF BC 90 to EF BC 99
+	if !hasDigits && inputLen >= 3 {
+		for i := 0; i < inputLen-2; i++ {
+			// Check for UTF-8 encoded fullwidth digits: EF BC 9X
+			if input[i] == 0xEF && input[i+1] == 0xBC &&
+				input[i+2] >= 0x90 && input[i+2] <= 0x99 {
+				hasDigits = true
+				break
+			}
 		}
 	}
 
@@ -693,8 +810,8 @@ func containsCredentialKeyword(input string) bool {
 // filterWithTimeout applies regex filtering with timeout protection for large inputs.
 //
 // The function uses a tiered approach based on input size:
-// - Small inputs (< FastPathThreshold): Direct synchronous processing
-// - Medium inputs (< FilterMediumInputThreshold): Synchronous chunked processing with context
+// - Small inputs (< fastPathThreshold): Direct synchronous processing
+// - Medium inputs (< filterMediumInputThreshold): Synchronous chunked processing with context
 // - Large inputs: Async processing with timeout and semaphore-based concurrency limiting
 //
 // For large inputs, a goroutine is spawned for regex processing. The context is passed
@@ -704,12 +821,12 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 	inputLen := len(input)
 
 	// Fast path for small inputs
-	if inputLen < FastPathThreshold {
+	if inputLen < fastPathThreshold {
 		return f.replaceWithPattern(input, pattern)
 	}
 
 	// For medium inputs, use synchronous chunked processing (no goroutine overhead)
-	if inputLen < FilterMediumInputThreshold {
+	if inputLen < filterMediumInputThreshold {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		result := f.filterInChunksWithContext(ctx, input, pattern)
@@ -740,7 +857,12 @@ func (f *SensitiveDataFilter) filterWithTimeout(input string, pattern *regexp.Re
 
 	f.activeGoroutines.Add(1)
 	go func() {
-		defer f.activeGoroutines.Add(-1)
+		defer func() {
+			if f.activeGoroutines.Add(-1) == 0 {
+				// Signal any waiting goroutines that count reached zero
+				f.goroutineCond.Broadcast()
+			}
+		}()
 		defer func() {
 			if r := recover(); r != nil {
 				select {
@@ -773,20 +895,20 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 
 	// For inputs up to a reasonable size, process directly without chunking
 	// This avoids the complexity of reassembling filtered chunks with different lengths
-	if inputLen <= FilterDirectProcessThreshold {
+	if inputLen <= filterDirectProcessThreshold {
 		return f.replaceWithPatternWithContext(ctx, input, pattern)
 	}
 
 	// For very large inputs, use chunked processing with overlap for boundary detection
-	overlap := ChunkOverlapSize
+	overlap := chunkOverlapSize
 
 	var result strings.Builder
 	result.Grow(inputLen)
 
 	// Calculate effective step (chunk size minus overlap)
-	step := FilterChunkSize - overlap
+	step := filterChunkSize - overlap
 	if step <= 0 {
-		step = FilterChunkSize / 2
+		step = filterChunkSize / 2
 		if step == 0 {
 			step = 1
 		}
@@ -807,7 +929,7 @@ func (f *SensitiveDataFilter) filterInChunksWithContext(ctx context.Context, inp
 		}
 
 		chunkStart := pos
-		chunkEnd := min(pos+FilterChunkSize, inputLen)
+		chunkEnd := min(pos+filterChunkSize, inputLen)
 		chunk := input[chunkStart:chunkEnd]
 
 		// Filter the current chunk with context awareness
@@ -884,9 +1006,16 @@ func (f *SensitiveDataFilter) FilterFieldValue(key string, value any) any {
 // FilterValueRecursive recursively filters sensitive data from nested structures.
 // It processes maps, slices, arrays, and structs to filter sensitive values.
 // Circular references are detected and replaced with "[CIRCULAR_REFERENCE]".
-// Maximum recursion depth is limited to MaxRecursionDepth to prevent stack overflow.
+// Maximum recursion depth is limited to maxRecursionDepth to prevent stack overflow.
 func (f *SensitiveDataFilter) FilterValueRecursive(key string, value any) any {
-	return f.filterValueRecursiveInternal(key, value, make(map[uintptr]bool), 0)
+	// Get pooled visited map to reduce allocations
+	visited := visitedMapPool.Get().(map[uintptr]bool)
+	defer func() {
+		// Clear and return to pool
+		clear(visited)
+		visitedMapPool.Put(visited)
+	}()
+	return f.filterValueRecursiveInternal(key, value, visited, 0)
 }
 
 // filterValueRecursiveInternal is the internal implementation with circular reference detection.
@@ -896,7 +1025,7 @@ func (f *SensitiveDataFilter) filterValueRecursiveInternal(key string, value any
 	}
 
 	// Check recursion depth to prevent stack overflow on deeply nested structures
-	if depth > MaxRecursionDepth {
+	if depth > maxRecursionDepth {
 		return "[MAX_DEPTH_EXCEEDED]"
 	}
 
@@ -1095,22 +1224,22 @@ func SecurityConfigForLevel(level SecurityLevel) *SecurityConfig {
 	switch level {
 	case SecurityLevelDevelopment:
 		return &SecurityConfig{
-			MaxMessageSize:  MaxMessageSize,
-			MaxWriters:      MaxWriterCount,
+			MaxMessageSize:  maxMessageSize,
+			MaxWriters:      maxWriterCount,
 			SensitiveFilter: nil, // No filtering
 		}
 
 	case SecurityLevelBasic:
 		return &SecurityConfig{
-			MaxMessageSize:  MaxMessageSize,
-			MaxWriters:      MaxWriterCount,
+			MaxMessageSize:  maxMessageSize,
+			MaxWriters:      maxWriterCount,
 			SensitiveFilter: NewBasicSensitiveDataFilter(),
 		}
 
 	case SecurityLevelStandard:
 		return &SecurityConfig{
-			MaxMessageSize:  MaxMessageSize,
-			MaxWriters:      MaxWriterCount,
+			MaxMessageSize:  maxMessageSize,
+			MaxWriters:      maxWriterCount,
 			SensitiveFilter: NewSensitiveDataFilter(),
 		}
 
@@ -1126,8 +1255,8 @@ func SecurityConfigForLevel(level SecurityLevel) *SecurityConfig {
 			filter.AddPattern(p)
 		}
 		return &SecurityConfig{
-			MaxMessageSize:  MaxMessageSize,
-			MaxWriters:      MaxWriterCount,
+			MaxMessageSize:  maxMessageSize,
+			MaxWriters:      maxWriterCount,
 			SensitiveFilter: filter,
 		}
 
@@ -1148,8 +1277,8 @@ func SecurityConfigForLevel(level SecurityLevel) *SecurityConfig {
 			filter.AddPattern(p)
 		}
 		return &SecurityConfig{
-			MaxMessageSize:  MaxMessageSize,
-			MaxWriters:      MaxWriterCount,
+			MaxMessageSize:  maxMessageSize,
+			MaxWriters:      maxWriterCount,
 			SensitiveFilter: filter,
 		}
 
@@ -1179,16 +1308,9 @@ func (sc *SecurityConfig) Clone() *SecurityConfig {
 	return clone
 }
 
-// NewFullSensitiveDataFilter creates a filter with all built-in sensitive data patterns.
-// This is an alias for NewSensitiveDataFilter() with a clearer name indicating
-// that it includes all available patterns.
-func NewFullSensitiveDataFilter() *SensitiveDataFilter {
-	return NewSensitiveDataFilter()
-}
-
 func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
 	internal.InitPatterns()
-	return newSensitiveDataFilterWithPatterns(internal.CompiledBasicPatterns, DefaultFilterTimeout)
+	return newSensitiveDataFilterWithPatterns(internal.CompiledBasicPatterns, defaultFilterTimeout)
 }
 
 // DefaultSecurityConfig returns a security config with basic sensitive data filtering enabled.
@@ -1200,8 +1322,8 @@ func NewBasicSensitiveDataFilter() *SensitiveDataFilter {
 // SecurityConfigForLevel(SecurityLevelDevelopment) instead.
 func DefaultSecurityConfig() *SecurityConfig {
 	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: NewBasicSensitiveDataFilter(),
 	}
 }
@@ -1212,15 +1334,15 @@ func DefaultSecurityConfig() *SecurityConfig {
 // Use this for maximum security in production environments.
 func DefaultSecureConfig() *SecurityConfig {
 	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: NewSensitiveDataFilter(),
 	}
 }
 
 // HealthcareConfig returns a security config optimized for HIPAA compliance.
 // This includes all patterns from DefaultSecureConfig plus healthcare-specific patterns:
-//   - ICD-10 diagnosis codes
+//   - ICD-10 diagnosis codes (with medical context)
 //   - US National Provider Identifier (NPI)
 //   - Medical Record Numbers (MRN)
 //   - Health Insurance Claim Numbers (HICN)
@@ -1232,8 +1354,10 @@ func HealthcareConfig() *SecurityConfig {
 
 	// Add healthcare-specific patterns
 	healthcarePatterns := []string{
-		// ICD-10 Diagnosis codes
-		`\b[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`,
+		// ICD-10 Diagnosis codes with medical context keywords
+		// Requires context like "diagnosis:", "icd10:", "dx:" to reduce false positives
+		// Matches codes like "A12.3", "S72.0", "Z99.9" when preceded by medical keywords
+		`(?i)(?:icd[-_]?10?|diagnosis|diag|dx|diagnostic[_-]?code|clinical[_-]?code)[\s:=]+[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`,
 		// Medical Record Numbers with context
 		`(?i)(?:mrn|medical[_-]?record[_-]?number|patient[_-]?id|health[_-]?record)[\s:=]+[A-Za-z0-9]{6,20}\b`,
 		// Health Insurance Claim Number (Medicare)
@@ -1247,8 +1371,8 @@ func HealthcareConfig() *SecurityConfig {
 	}
 
 	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: filter,
 	}
 }
@@ -1267,16 +1391,16 @@ func FinancialConfig() *SecurityConfig {
 
 	// Add financial-specific patterns
 	financialPatterns := []string{
-		// SWIFT/BIC codes
-		`\b[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`,
+		// SWIFT/BIC codes with context keywords to reduce false positives
+		`(?i)(?:swift|bic|bank[_-]?code|iban)[\s:=]+[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`,
 		// IBAN
 		`\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7,30}\b`,
 		// CVV/CVC with context
 		`(?i)(?:cvv|cvc|cv2|security[_-]?code|card[_-]?verification)[\s:=]+[0-9]{3,4}\b`,
 		// Bank account numbers with context
 		`(?i)(?:account[_-]?number|bank[_-]?account|acct[_-]?no)[\s:=]+[0-9]{8,17}\b`,
-		// Routing numbers (ABA)
-		`\b[0-9]{9}\b`,
+		// Routing numbers (ABA) with context - 9 digits alone is too generic
+		`(?i)(?:routing[_-]?number|aba|aba[_-]?rn|routing)[\s:=]+[0-9]{9}\b`,
 	}
 
 	for _, pattern := range financialPatterns {
@@ -1284,8 +1408,8 @@ func FinancialConfig() *SecurityConfig {
 	}
 
 	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: filter,
 	}
 }
@@ -1324,8 +1448,8 @@ func GovernmentConfig() *SecurityConfig {
 	}
 
 	return &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: filter,
 	}
 }

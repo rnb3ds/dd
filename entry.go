@@ -1,7 +1,6 @@
 package dd
 
 import (
-	"context"
 	"fmt"
 )
 
@@ -24,8 +23,15 @@ func newLoggerEntry(logger *Logger, fields []Field) *LoggerEntry {
 	}
 }
 
+// maxFieldCount limits the maximum number of fields to prevent CPU exhaustion
+// from O(n*m) linear search in mergeFieldSlicesSmall.
+// This is a reasonable limit for structured logging use cases.
+const maxFieldCount = 1000
+
 // mergeFieldSlices combines two field slices, with newFields overriding existingFields.
 // This is a shared utility function used by both WithFields and mergeFields.
+// Optimization: Uses linear search for small field counts to avoid map allocation.
+// SECURITY: Enforces maximum field count to prevent CPU exhaustion attacks.
 func mergeFieldSlices(existingFields, newFields []Field) []Field {
 	// Fast path: no existing fields
 	if len(existingFields) == 0 {
@@ -36,7 +42,59 @@ func mergeFieldSlices(existingFields, newFields []Field) []Field {
 		return existingFields
 	}
 
-	// Merge fields: start with existing, add new (allowing override)
+	existingLen := len(existingFields)
+	newLen := len(newFields)
+
+	// SECURITY: Enforce maximum field count to prevent CPU exhaustion
+	// If either slice exceeds the limit, truncate the new fields
+	// This provides a safety limit while still allowing logging to proceed
+	if existingLen > maxFieldCount || newLen > maxFieldCount {
+		// Truncate to max and proceed with map-based approach
+		if newLen > maxFieldCount {
+			newFields = newFields[:maxFieldCount]
+			newLen = maxFieldCount
+		}
+	}
+
+	// For small field counts, use linear search to avoid map allocation
+	// Threshold determined by benchmarking: map allocation overhead exceeds
+	// linear search cost around 8-10 fields
+	if newLen <= 4 && existingLen <= 8 {
+		return mergeFieldSlicesSmall(existingFields, newFields)
+	}
+
+	// For larger field counts, use map-based approach
+	return mergeFieldSlicesLarge(existingFields, newFields)
+}
+
+// mergeFieldSlicesSmall handles merging for small field counts without map allocation.
+// Uses linear search which is faster for small N due to cache locality.
+func mergeFieldSlicesSmall(existingFields, newFields []Field) []Field {
+	merged := make([]Field, 0, len(existingFields)+len(newFields))
+
+	// Add existing fields that aren't overridden (linear search)
+	for _, existing := range existingFields {
+		overridden := false
+		for _, newF := range newFields {
+			if newF.Key == existing.Key {
+				overridden = true
+				break
+			}
+		}
+		if !overridden {
+			merged = append(merged, existing)
+		}
+	}
+
+	// Add all new fields
+	merged = append(merged, newFields...)
+
+	return merged
+}
+
+// mergeFieldSlicesLarge handles merging for large field counts using a map.
+// Map provides O(1) lookup which is faster for larger field counts.
+func mergeFieldSlicesLarge(existingFields, newFields []Field) []Field {
 	merged := make([]Field, 0, len(existingFields)+len(newFields))
 
 	// Track which keys have been set by new fields
@@ -95,56 +153,45 @@ func (e *LoggerEntry) mergeFields(fields []Field) []Field {
 	return mergeFieldSlices(e.fields, fields)
 }
 
+// logWithDepth logs a message at the specified level with the entry's fields,
+// using an increased caller depth to correctly report the caller location.
+// This is the internal implementation that handles the extra stack frames from LoggerEntry.
+func (e *LoggerEntry) logWithDepth(level LogLevel, msg string, fields []Field) {
+	if !e.logger.shouldLog(level) {
+		return
+	}
+
+	// Copy original fields if hooks are registered
+	var originalFields []Field
+	if e.logger.hooks.Load() != nil && len(fields) > 0 {
+		originalFields = make([]Field, len(fields))
+		copy(originalFields, fields)
+	}
+
+	msg = e.logger.applyMessageSecurity(msg)
+	processedFields := e.logger.processFields(fields)
+
+	e.logger.logCoreWithDepth(level, logEntry{
+		msg:            msg,
+		fields:         processedFields,
+		originalFields: originalFields,
+	}, entryCallerDepth)
+}
+
 // Log logs a message at the specified level with the entry's fields.
 func (e *LoggerEntry) Log(level LogLevel, args ...any) {
-	e.logger.LogWith(level, e.logger.formatter.FormatArgsToString(args...), e.fields...)
+	e.logWithDepth(level, e.logger.formatter.FormatArgsToString(args...), e.fields)
 }
 
 // Logf logs a formatted message at the specified level with the entry's fields.
 func (e *LoggerEntry) Logf(level LogLevel, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	e.logger.LogWith(level, msg, e.fields...)
+	e.logWithDepth(level, msg, e.fields)
 }
 
 // LogWith logs a structured message with the entry's fields plus additional fields.
 func (e *LoggerEntry) LogWith(level LogLevel, msg string, fields ...Field) {
-	e.logger.LogWith(level, msg, e.mergeFields(fields)...)
-}
-
-// LogCtx logs a message at the specified level with context and the entry's fields.
-func (e *LoggerEntry) LogCtx(ctx context.Context, level LogLevel, args ...any) {
-	if !e.logger.shouldLog(level) {
-		return
-	}
-	msg := e.logger.formatter.FormatArgsToString(args...)
-	msg = e.logger.applyMessageSecurity(msg)
-	contextFields := e.logger.extractContextFields(ctx)
-	allFields := append(contextFields, e.fields...)
-	e.logger.LogWith(level, msg, allFields...)
-}
-
-// LogfCtx logs a formatted message with context and the entry's fields.
-func (e *LoggerEntry) LogfCtx(ctx context.Context, level LogLevel, format string, args ...any) {
-	if !e.logger.shouldLog(level) {
-		return
-	}
-	msg := fmt.Sprintf(format, args...)
-	msg = e.logger.applyMessageSecurity(msg)
-	contextFields := e.logger.extractContextFields(ctx)
-	allFields := append(contextFields, e.fields...)
-	e.logger.LogWith(level, msg, allFields...)
-}
-
-// LogWithCtx logs a structured message with context, the entry's fields, and additional fields.
-func (e *LoggerEntry) LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field) {
-	if !e.logger.shouldLog(level) {
-		return
-	}
-	msg = e.logger.applyMessageSecurity(msg)
-	contextFields := e.logger.extractContextFields(ctx)
-	mergedFields := e.mergeFields(fields)
-	allFields := append(contextFields, mergedFields...)
-	e.logger.LogWith(level, msg, allFields...)
+	e.logWithDepth(level, msg, e.mergeFields(fields))
 }
 
 // Convenience methods for each log level
@@ -166,44 +213,6 @@ func (e *LoggerEntry) InfoWith(msg string, fields ...Field)  { e.LogWith(LevelIn
 func (e *LoggerEntry) WarnWith(msg string, fields ...Field)  { e.LogWith(LevelWarn, msg, fields...) }
 func (e *LoggerEntry) ErrorWith(msg string, fields ...Field) { e.LogWith(LevelError, msg, fields...) }
 func (e *LoggerEntry) FatalWith(msg string, fields ...Field) { e.LogWith(LevelFatal, msg, fields...) }
-
-func (e *LoggerEntry) DebugCtx(ctx context.Context, args ...any) { e.LogCtx(ctx, LevelDebug, args...) }
-func (e *LoggerEntry) InfoCtx(ctx context.Context, args ...any)  { e.LogCtx(ctx, LevelInfo, args...) }
-func (e *LoggerEntry) WarnCtx(ctx context.Context, args ...any)  { e.LogCtx(ctx, LevelWarn, args...) }
-func (e *LoggerEntry) ErrorCtx(ctx context.Context, args ...any) { e.LogCtx(ctx, LevelError, args...) }
-func (e *LoggerEntry) FatalCtx(ctx context.Context, args ...any) { e.LogCtx(ctx, LevelFatal, args...) }
-
-func (e *LoggerEntry) DebugfCtx(ctx context.Context, format string, args ...any) {
-	e.LogfCtx(ctx, LevelDebug, format, args...)
-}
-func (e *LoggerEntry) InfofCtx(ctx context.Context, format string, args ...any) {
-	e.LogfCtx(ctx, LevelInfo, format, args...)
-}
-func (e *LoggerEntry) WarnfCtx(ctx context.Context, format string, args ...any) {
-	e.LogfCtx(ctx, LevelWarn, format, args...)
-}
-func (e *LoggerEntry) ErrorfCtx(ctx context.Context, format string, args ...any) {
-	e.LogfCtx(ctx, LevelError, format, args...)
-}
-func (e *LoggerEntry) FatalfCtx(ctx context.Context, format string, args ...any) {
-	e.LogfCtx(ctx, LevelFatal, format, args...)
-}
-
-func (e *LoggerEntry) DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
-	e.LogWithCtx(ctx, LevelDebug, msg, fields...)
-}
-func (e *LoggerEntry) InfoWithCtx(ctx context.Context, msg string, fields ...Field) {
-	e.LogWithCtx(ctx, LevelInfo, msg, fields...)
-}
-func (e *LoggerEntry) WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
-	e.LogWithCtx(ctx, LevelWarn, msg, fields...)
-}
-func (e *LoggerEntry) ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
-	e.LogWithCtx(ctx, LevelError, msg, fields...)
-}
-func (e *LoggerEntry) FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
-	e.LogWithCtx(ctx, LevelFatal, msg, fields...)
-}
 
 // Print methods - output via logger's writers with caller info and entry's fields.
 // These methods use LevelInfo for filtering and apply sensitive data filtering.

@@ -1,14 +1,16 @@
 # DD - High-Performance Go Logging Library
 
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![pkg.go.dev](https://pkg.go.dev/badge/github.com/cybergodev/dd.svg)](https://pkg.go.dev/github.com/cybergodev/dd)
 [![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/security-policy-blue.svg)](SECURITY.md)
 [![Thread Safe](https://img.shields.io/badge/thread%20safe-yes-brightgreen.svg)](https://github.com/cybergodev/dd)
 
-A production-grade high-performance Go logging library with zero external dependencies, designed for modern applications.
+A production-grade high-performance Go logging library with zero external dependencies, designed for modern cloud-native applications.
 
-**[📖 中文文档](README_zh-CN.md)**
+**[📖 中文文档](README_zh-CN.md)** | **[📦 pkg.go.dev](https://pkg.go.dev/github.com/cybergodev/dd)**
+
+---
 
 ## ✨ Key Features
 
@@ -23,11 +25,17 @@ A production-grade high-performance Go logging library with zero external depend
 | 🎯 **Easy to Use** | Get started in 30 seconds with intuitive API |
 | 🌐 **Cloud-Native** | JSON format compatible with ELK/Splunk/CloudWatch |
 
+---
+
 ## 📦 Installation
 
 ```bash
 go get github.com/cybergodev/dd
 ```
+
+**Requirements:** Go 1.25+
+
+---
 
 ## 🚀 Quick Start
 
@@ -60,11 +68,18 @@ func main() {
 ```go
 package main
 
-import "github.com/cybergodev/dd"
+import (
+    "log"
+
+    "github.com/cybergodev/dd"
+)
 
 func main() {
-    // One-line file logging
-    logger := dd.MustToFile("logs/app.log")
+    // One-line file logging with explicit error handling
+    logger, err := dd.ToFile("logs/app.log")
+    if err != nil {
+        log.Fatalf("failed to create logger: %v", err)
+    }
     defer logger.Close()
 
     logger.Info("Application started")
@@ -78,27 +93,32 @@ func main() {
 ### Convenience Constructors
 
 ```go
-// Quick constructors (return error)
-logger, err := dd.ToFile()              // → logs/app.log (text)
+// Quick constructors with explicit error handling
+logger, err := dd.ToFile("logs/app.log")    // → logs/app.log (text)
 if err != nil { /* handle error */ }
 
-logger, err = dd.ToJSONFile()          // → logs/app.log (JSON)
+logger, err = dd.ToJSONFile("logs/app.log") // → logs/app.log (JSON)
 if err != nil { /* handle error */ }
 
-logger, err = dd.ToConsole()           // → stdout only
+logger, err = dd.ToConsole()                // → stdout only
 if err != nil { /* handle error */ }
 
-logger, err = dd.ToAll()               // → console + file
+logger, err = dd.ToAll("logs/app.log")      // → console + file
 if err != nil { /* handle error */ }
 
-// Must* variants (panic on error, return *Logger)
-logger := dd.MustToFile("logs/app.log")
-logger := dd.MustToJSONFile("logs/app.log")
-logger := dd.MustToConsole()
-logger := dd.MustToAll("logs/app.log")
+logger, err = dd.ToAllJSON("logs/app.log")  // → console + file (JSON)
+if err != nil { /* handle error */ }
+
+logger, err = dd.ToWriter(&buf)             // → bytes.Buffer
+if err != nil { /* handle error */ }
+
+logger, err = dd.ToWriters(os.Stdout, fileWriter) // → stdout + file
+if err != nil { /* handle error */ }
 
 defer logger.Close()
 ```
+
+---
 
 ## 📖 Configuration
 
@@ -133,7 +153,41 @@ cfg.File = &dd.FileConfig{
 }
 
 logger, err := dd.New(cfg)
+if err != nil {
+    log.Fatalf("failed to create logger: %v", err)
+}
 defer logger.Close()
+```
+
+### Configure Package-Level Functions
+
+The package-level functions (`dd.Debug()`, `dd.Info()`, etc.) use a default logger. Use `InitDefault()` to customize its behavior:
+
+```go
+package main
+
+import "github.com/cybergodev/dd"
+
+func main() {
+    // Configure the default logger for package-level functions
+    cfg := dd.DefaultConfig()
+    cfg.Level = dd.LevelDebug
+    cfg.DynamicCaller = false  // Disable caller file:line output
+
+    if err := dd.InitDefault(cfg); err != nil {
+        panic(err)
+    }
+
+    // Now these use your configuration
+    dd.Debug("Debug message")      // No caller info
+    dd.Info("Application started") // No caller info
+
+    // Re-enable caller info
+    cfg.DynamicCaller = true
+    dd.InitDefault(cfg)
+
+    dd.Info("With caller info")    // Shows file:line
+}
 ```
 
 ### JSON Customization
@@ -149,7 +203,12 @@ cfg.JSON.FieldNames = &dd.JSONFieldNames{
 cfg.JSON.PrettyPrint = true  // For development
 
 logger, err := dd.New(cfg)
+if err != nil {
+    log.Fatalf("failed to create logger: %v", err)
+}
 ```
+
+---
 
 ## 🛡️ Security Features
 
@@ -160,6 +219,9 @@ cfg := dd.DefaultConfig()
 cfg.Security = dd.DefaultSecurityConfig()  // Enable basic filtering
 
 logger, err := dd.New(cfg)
+if err != nil {
+    log.Fatalf("failed to create logger: %v", err)
+}
 
 // Automatic filtering
 logger.Info("password=secret123")           // → password=[REDACTED]
@@ -168,13 +230,13 @@ logger.Info("credit_card=4532015112830366") // → credit_card=[REDACTED]
 logger.Info("email=user@example.com")       // → email=[REDACTED]
 ```
 
-**Basic Filtering** covers: passwords, API keys, credit cards, phone numbers, database URLs
-
-**Full Filtering** adds: JWTs, AWS keys, IPs, SSNs
-
-```go
-cfg.Security = dd.DefaultSecureConfig()  // Full filtering
-```
+| Security Level | Filter Type | Coverage |
+|----------------|-------------|----------|
+| `DefaultSecurityConfig()` | Basic | Passwords, API keys, credit cards, phone numbers, database URLs |
+| `DefaultSecureConfig()` | Full | Basic + JWTs, AWS keys, IPs, SSNs |
+| `HealthcareConfig()` | HIPAA | Full + PHI patterns |
+| `FinancialConfig()` | PCI-DSS | Full + financial data |
+| `GovernmentConfig()` | Government | Full + classified patterns |
 
 ### Custom Patterns
 
@@ -189,6 +251,10 @@ cfg := dd.DefaultConfig()
 cfg.Security = &dd.SecurityConfig{
     SensitiveFilter: filter,
 }
+logger, err := dd.New(cfg)
+if err != nil {
+    log.Fatalf("failed to create logger: %v", err)
+}
 ```
 
 ### Disable Security (Max Performance)
@@ -197,6 +263,8 @@ cfg.Security = &dd.SecurityConfig{
 cfg := dd.DefaultConfig()
 cfg.Security = dd.SecurityConfigForLevel(dd.SecurityLevelDevelopment)
 ```
+
+---
 
 ## 📊 Structured Logging
 
@@ -212,11 +280,12 @@ logger.InfoWith("All field types",
     dd.Time("created_at", time.Now()),
     dd.Duration("elapsed", 150*time.Millisecond),
     dd.Err(errors.New("connection failed")),
+    dd.ErrWithStack(errors.New("critical error")), // Include stack trace
     dd.Any("tags", []string{"vip", "premium"}),
 )
 ```
 
-### Context Chaining
+### Field Chaining
 
 ```go
 // Create logger with persistent fields
@@ -236,13 +305,16 @@ requestLogger := userLogger.WithFields(
 requestLogger.Info("Processing request")
 ```
 
+---
+
 ## 🔧 Output Management
 
 ### Multiple Outputs
 
 ```go
-// Console + file
-logger := dd.MustToAll("logs/app.log")
+// Console + file with explicit error handling
+logger, err := dd.ToAll("logs/app.log")
+if err != nil { /* handle error */ }
 
 // Or use MultiWriter
 fileWriter, err := dd.NewFileWriter("logs/app.log")
@@ -274,6 +346,7 @@ logger, err := dd.New(cfg)
 
 ```go
 logger, err := dd.New()
+if err != nil { /* handle error */ }
 
 fileWriter, err := dd.NewFileWriter("logs/dynamic.log")
 if err != nil { /* handle error */ }
@@ -283,6 +356,8 @@ logger.RemoveWriter(fileWriter)     // Remove at runtime
 
 fmt.Printf("Writers: %d\n", logger.WriterCount())
 ```
+
+---
 
 ## 🌐 Context & Tracing
 
@@ -294,10 +369,32 @@ ctx = dd.WithTraceID(ctx, "trace-abc123")
 ctx = dd.WithSpanID(ctx, "span-def456")
 ctx = dd.WithRequestID(ctx, "req-789xyz")
 
-// Context-aware logging
-logger.InfoCtx(ctx, "Processing request")
-logger.InfoWithCtx(ctx, "User action", dd.String("action", "login"))
+// Pattern 1: Extract context values and pass to WithFields
+entry := logger.WithFields(
+    dd.String("trace_id", dd.GetTraceID(ctx)),
+    dd.String("span_id", dd.GetSpanID(ctx)),
+)
+entry.InfoWith("Processing request", dd.String("user", "alice"))
+
+// Pattern 2: Use helper function for extraction
+func extractTraceFields(ctx context.Context) []dd.Field {
+    var fields []dd.Field
+    if traceID := dd.GetTraceID(ctx); traceID != "" {
+        fields = append(fields, dd.String("trace_id", traceID))
+    }
+    if spanID := dd.GetSpanID(ctx); spanID != "" {
+        fields = append(fields, dd.String("span_id", spanID))
+    }
+    return fields
+}
+
+traceFields := extractTraceFields(ctx)
+logger.InfoWith("User action", append(traceFields,
+    dd.String("action", "login"),
+)...)
 ```
+
+> **Note:** Always use a valid parent context (e.g., `context.Background()`), never `nil`.
 
 ### Custom Context Extractors
 
@@ -311,31 +408,45 @@ tenantExtractor := func(ctx context.Context) []dd.Field {
 
 cfg := dd.DefaultConfig()
 cfg.ContextExtractors = []dd.ContextExtractor{tenantExtractor}
+logger, err := dd.New(cfg)
 ```
+
+---
 
 ## 🪝 Hooks
 
 ```go
-hooks := dd.NewHookBuilder().
-    BeforeLog(func(ctx context.Context, hctx *dd.HookContext) error {
-        fmt.Printf("Before: %s\n", hctx.Message)
-        return nil
-    }).
-    AfterLog(func(ctx context.Context, hctx *dd.HookContext) error {
-        fmt.Printf("After: %s\n", hctx.Message)
-        return nil
-    }).
-    OnError(func(ctx context.Context, hctx *dd.HookContext) error {
-        fmt.Printf("Error: %v\n", hctx.Error)
-        return nil
-    }).
-    Build()
+hooks := dd.NewHooksFromConfig(dd.HooksConfig{
+    BeforeLog: []dd.Hook{
+        func(ctx context.Context, hctx *dd.HookContext) error {
+            fmt.Printf("Before: %s\n", hctx.Message)
+            return nil
+        },
+    },
+    AfterLog: []dd.Hook{
+        func(ctx context.Context, hctx *dd.HookContext) error {
+            fmt.Printf("After: %s\n", hctx.Message)
+            return nil
+        },
+    },
+    OnError: []dd.Hook{
+        func(ctx context.Context, hctx *dd.HookContext) error {
+            fmt.Printf("Error: %v\n", hctx.Error)
+            return nil
+        },
+    },
+})
 
 cfg := dd.DefaultConfig()
 cfg.Hooks = hooks
+logger, err := dd.New(cfg)
 ```
 
+---
+
 ## 🔐 Audit Logging
+
+### Audit Events
 
 ```go
 // Create audit logger
@@ -351,7 +462,7 @@ auditLogger.LogSecurityViolation("LOG4SHELL", "Pattern detected", map[string]any
 })
 ```
 
-## 📝 Log Integrity
+### Log Integrity
 
 ```go
 // Create signer with secret key
@@ -371,6 +482,8 @@ if result.Valid {
 }
 ```
 
+---
+
 ## 📈 Performance
 
 | Operation | Throughput | Memory/Op | Allocs/Op |
@@ -381,7 +494,24 @@ if result.Valid {
 | Level Check | **2.5B ops/sec** | 0 B | 0 |
 | Concurrent (22 goroutines) | **68M ops/sec** | 200 B | 7 |
 
+**Optimization Tips:**
+- Use `IsLevelEnabled()` before expensive operations: `if logger.IsDebugEnabled() { ... }`
+- Enable buffered writes for high-throughput scenarios
+- Disable security filtering in trusted environments
+
+---
+
 ## 📚 API Reference
+
+### Log Levels
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `dd.LevelDebug` | 1 | Detailed diagnostic info |
+| `dd.LevelInfo` | 2 | General operational messages (default) |
+| `dd.LevelWarn` | 3 | Warning conditions |
+| `dd.LevelError` | 4 | Error conditions |
+| `dd.LevelFatal` | 5 | Severe errors (calls os.Exit(1)) |
 
 ### Package-Level Functions
 
@@ -405,12 +535,8 @@ dd.InfoWith(msg string, fields ...dd.Field)
 dd.ErrorWith(msg string, fields ...dd.Field)
 // ... DebugWith, WarnWith, FatalWith
 
-// Context-aware logging
-dd.InfoCtx(ctx context.Context, args ...any)
-dd.InfoWithCtx(ctx context.Context, msg string, fields ...dd.Field)
-// ... DebugCtx, WarnCtx, ErrorCtx, FatalCtx
-
 // Global logger management
+dd.InitDefault(cfg *Config) error    // Initialize default logger with config
 dd.SetDefault(logger *Logger)
 dd.SetLevel(level LogLevel)
 dd.GetLevel() LogLevel
@@ -426,19 +552,22 @@ logger.Info(args ...any)
 logger.Infof(format string, args ...any)
 logger.InfoWith(msg string, fields ...Field)
 
-// Context-aware
-logger.InfoCtx(ctx context.Context, args ...any)
-logger.InfoWithCtx(ctx context.Context, msg string, fields ...Field)
-
-// Configuration
-logger.SetLevel(level LogLevel)
+// Level management
+logger.SetLevel(level LogLevel) error
 logger.GetLevel() LogLevel
+logger.IsLevelEnabled(level LogLevel) bool
+
+// Writer management
 logger.AddWriter(w io.Writer) error
 logger.RemoveWriter(w io.Writer) error
-logger.Close() error
-logger.Flush()
+logger.WriterCount() int
 
-// Context chaining
+// Lifecycle
+logger.Flush() error
+logger.Close() error
+logger.IsClosed() bool
+
+// Field chaining
 logger.WithFields(fields ...Field) *LoggerEntry
 logger.WithField(key string, value any) *LoggerEntry
 ```
@@ -453,9 +582,9 @@ dd.Float64(key string, value float64)
 dd.Bool(key string, value bool)
 dd.Time(key string, value time.Time)
 dd.Duration(key string, value time.Duration)
-dd.Err(err error)
-dd.ErrWithStack(err error)  // Include stack trace
-dd.Any(key string, value any)
+dd.Err(err error)                    // Error field
+dd.ErrWithStack(err error)           // Error with stack trace
+dd.Any(key string, value any)        // Any type
 ```
 
 ### Context Functions
@@ -471,6 +600,20 @@ dd.GetTraceID(ctx context.Context) string
 dd.GetSpanID(ctx context.Context) string
 dd.GetRequestID(ctx context.Context) string
 ```
+
+### Convenience Constructors
+
+| Constructor | Description |
+|------------|-------------|
+| `ToFile(path)` | File output (text format) |
+| `ToJSONFile(path)` | File output (JSON format) |
+| `ToConsole()` | Stdout only |
+| `ToAll(path)` | Console + file (text format) |
+| `ToAllJSON(path)` | Console + file (JSON format) |
+| `ToWriter(w)` | Single io.Writer |
+| `ToWriters(...w)` | Multiple io.Writer |
+
+---
 
 ## 📁 Examples
 
@@ -489,16 +632,12 @@ See the [examples](examples) directory for complete, runnable examples:
 | [09_advanced.go](examples/09_advanced.go) | Sampling, validation |
 | [10_audit_integrity.go](examples/10_audit_integrity.go) | Audit, integrity |
 
-## 🤝 Contributing
-
-Contributions welcome! Please read the contributing guidelines before submitting PRs.
+---
 
 ## 📄 License
 
-MIT License - See [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Crafted with care for the Go community** ❤️
-
-If this project helps you, please give it a ⭐️ Star!
+If this project helps you, please give it a Star! ⭐

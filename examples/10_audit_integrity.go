@@ -19,7 +19,7 @@ import (
 // 3. Signature verification
 // 4. Integration patterns
 func main() {
-	fmt.Println("=== DD Audit & Integrity ===\n")
+	fmt.Println("=== DD Audit & Integrity ===")
 
 	section1AuditLogging()
 	section2IntegritySigning()
@@ -128,7 +128,7 @@ func section3Verification() {
 
 	// Sign a message
 	message := "Critical audit event: admin access granted"
-	signedEntry := message + " " + signer.Sign(message)
+	signedEntry := message + signer.Sign(message)
 	fmt.Printf("  Signed entry: %s\n", signedEntry[:minInt(60, len(signedEntry))]+"...")
 
 	// Verify the signature

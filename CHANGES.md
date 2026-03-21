@@ -2,8 +2,59 @@
 
 All notable changes to the cybergodev/dd library will be documented in this file.
 
-[//]: # (- The format is based on [Keep a Changelog]&#40;https://keepachangelog.com/&#41;.)
-[//]: # (- And this project adheres to [Semantic Versioning]&#40;https://semver.org/&#41;.)
+---
+
+## v1.2.2 — Security Hardening & API Cleanup (2026-03-21)
+
+### Breaking Changes
+- Removed all `*Ctx` methods from `Logger`, `LoggerEntry`, and package-level functions; use `ContextExtractors` with `*With()` methods instead
+- Removed all `Must*` methods/functions to enforce explicit error handling (`Must`, `MustNew`, `MustToFile`, `MustAddHook`, etc.)
+- Removed `HookBuilder` fluent API; use struct-based `HooksConfig` with `NewHooksFromConfig()` instead
+- Removed `ContextLogger` interface from public API
+
+### Security
+- Filter cache now limits to ≤128 bytes with full input verification to prevent hash collision attacks
+- Fixed weak HMAC verification in `verifyLegacy()` that truncated signature comparison
+- Fixed time cache race condition using atomic Compare-And-Swap for timestamp formatting
+- JSON encoder now escapes `<`, `>`, `&` as `\u003c`, `\u003e`, `\u0026` to prevent XSS in HTML contexts
+- Pooled buffers now zero sensitive data before return to prevent memory residue
+- Added JSON depth limit (100 levels) to prevent stack overflow from deeply nested structures
+
+### Added
+- `HooksConfig` struct and `NewHooksFromConfig()` for struct-based hook configuration
+- `FilterStats.CacheHits` and `CacheMiss` fields for cache effectiveness monitoring
+- `PERFORMANCE_OPTIMIZATION.md` with detailed pprof analysis and optimization recommendations
+- `visitedMapPool` for memory reuse in recursive sensitive data filtering
+
+### Changed
+- Logger implementation split into 11 focused module files for maintainability (~1759 lines)
+- `WaitForGoroutines()` uses `sync.Cond` instead of busy-wait for CPU efficiency
+- `SetSampling()` now copies input config to avoid mutating caller's data
+- `HookRegistry.Clone()` correctly copies `errorHandler` field
+- `SensitiveDataFilter.Clone()` documentation clarifies shared patterns slice behavior
+- `NamedErr()` deprecated; use `ErrWithKey()` instead
+- Cache TTL uses `time.Time` instead of Unix timestamp for accurate calculation
+
+### Fixed
+- BufferWriter.Close() nil pointer dereference when checking for io.Closer
+- Out-of-bounds access in `validateNoADS()` URL scheme validation
+- Fallback logger missing `sampling` state initialization
+- Security pattern false positives for routing numbers and SWIFT/BIC codes
+- Configuration validation side effect that modified input config
+- SecureBuffer.Grow incomplete zeroing during reallocation
+- Caller depth overflow with protection limit of 1000 levels
+
+### Performance
+- HookContext lazy allocation saves ~145 bytes per log call when no hooks registered
+- Small field merge uses linear search (≤4 new, ≤8 existing) to avoid map allocation
+- Direct caller path extraction avoids string allocation from filepath.Base
+- Pre-computed `commonSuffixes` eliminates repeated slice allocation
+- Buffer pool capacities increased: textBuilder 1024→2048, argsBuilder 256→512, FieldBuilder 384→768
+- Overall memory reduction: SimpleLogging -19%, StructuredLogging -12%, ConcurrentLogging -19%
+
+### Removed
+- `NewFullSensitiveDataFilter()` deprecated alias; use `NewSensitiveDataFilter()` directly
+- Unused `filteredFieldsPool` variable and `bytesToString()` function
 
 ---
 

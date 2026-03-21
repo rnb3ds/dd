@@ -75,6 +75,17 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, ContextKeyRequestID, requestID)
 }
 
+// getContextString retrieves a string value from context by key.
+// This is an internal helper to reduce code duplication in getter functions.
+func getContextString(ctx context.Context, key ContextKey) string {
+	if v := ctx.Value(key); v != nil {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 // GetTraceID retrieves the trace ID from the context.
 // Returns an empty string if no trace ID is found.
 //
@@ -85,12 +96,7 @@ func WithRequestID(ctx context.Context, requestID string) context.Context {
 //	    // Trace ID is present
 //	}
 func GetTraceID(ctx context.Context) string {
-	if v := ctx.Value(ContextKeyTraceID); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return getContextString(ctx, ContextKeyTraceID)
 }
 
 // GetSpanID retrieves the span ID from the context.
@@ -103,12 +109,7 @@ func GetTraceID(ctx context.Context) string {
 //	    // Span ID is present
 //	}
 func GetSpanID(ctx context.Context) string {
-	if v := ctx.Value(ContextKeySpanID); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return getContextString(ctx, ContextKeySpanID)
 }
 
 // GetRequestID retrieves the request ID from the context.
@@ -121,12 +122,7 @@ func GetSpanID(ctx context.Context) string {
 //	    // Request ID is present
 //	}
 func GetRequestID(ctx context.Context) string {
-	if v := ctx.Value(ContextKeyRequestID); v != nil {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return getContextString(ctx, ContextKeyRequestID)
 }
 
 // ============================================================================
@@ -303,65 +299,39 @@ func DefaultContextExtractorRegistry() *ContextExtractorRegistry {
 	return defaultRegistry
 }
 
-// defaultTraceIDExtractor extracts trace_id from context.
-// Supports both type-safe ContextKey and string keys for backward compatibility.
-func defaultTraceIDExtractor(ctx context.Context) []Field {
-	if ctx == nil {
+// createDefaultExtractor creates a context extractor for a specific key.
+// This factory function reduces code duplication by extracting the common
+// extraction logic used by trace_id, span_id, and request_id extractors.
+//
+// Parameters:
+//   - key: The type-safe ContextKey to use for extraction
+//   - fieldName: The field name to use in the returned Field (e.g., "trace_id")
+//
+// The extractor supports both type-safe ContextKey and string keys for backward compatibility.
+func createDefaultExtractor(key ContextKey, fieldName string) ContextExtractor {
+	return func(ctx context.Context) []Field {
+		if ctx == nil {
+			return nil
+		}
+		// Try type-safe key first
+		if v := ctx.Value(key); v != nil {
+			return []Field{String(fieldName, stringValue(v))}
+		}
+		// Fall back to string key for backward compatibility
+		if v := ctx.Value(string(key)); v != nil {
+			return []Field{String(fieldName, stringValue(v))}
+		}
 		return nil
 	}
-
-	// Try type-safe key first
-	if traceID := ctx.Value(ContextKeyTraceID); traceID != nil {
-		return []Field{String("trace_id", stringValue(traceID))}
-	}
-
-	// Fall back to string key for backward compatibility
-	if traceID := ctx.Value("trace_id"); traceID != nil {
-		return []Field{String("trace_id", stringValue(traceID))}
-	}
-
-	return nil
 }
 
-// defaultSpanIDExtractor extracts span_id from context.
-// Supports both type-safe ContextKey and string keys for backward compatibility.
-func defaultSpanIDExtractor(ctx context.Context) []Field {
-	if ctx == nil {
-		return nil
-	}
-
-	// Try type-safe key first
-	if spanID := ctx.Value(ContextKeySpanID); spanID != nil {
-		return []Field{String("span_id", stringValue(spanID))}
-	}
-
-	// Fall back to string key for backward compatibility
-	if spanID := ctx.Value("span_id"); spanID != nil {
-		return []Field{String("span_id", stringValue(spanID))}
-	}
-
-	return nil
-}
-
-// defaultRequestIDExtractor extracts request_id from context.
-// Supports both type-safe ContextKey and string keys for backward compatibility.
-func defaultRequestIDExtractor(ctx context.Context) []Field {
-	if ctx == nil {
-		return nil
-	}
-
-	// Try type-safe key first
-	if requestID := ctx.Value(ContextKeyRequestID); requestID != nil {
-		return []Field{String("request_id", stringValue(requestID))}
-	}
-
-	// Fall back to string key for backward compatibility
-	if requestID := ctx.Value("request_id"); requestID != nil {
-		return []Field{String("request_id", stringValue(requestID))}
-	}
-
-	return nil
-}
+// Default extractors created using the factory function.
+// These extract trace_id, span_id, and request_id from context values.
+var (
+	defaultTraceIDExtractor   = createDefaultExtractor(ContextKeyTraceID, "trace_id")
+	defaultSpanIDExtractor    = createDefaultExtractor(ContextKeySpanID, "span_id")
+	defaultRequestIDExtractor = createDefaultExtractor(ContextKeyRequestID, "request_id")
+)
 
 // stringValue converts any value to its string representation.
 func stringValue(v any) string {

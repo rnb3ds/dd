@@ -21,13 +21,13 @@ import (
 // 4. Dynamic writer management
 // 5. Error handling
 func main() {
-	fmt.Println("=== DD Writers Management ===\n")
+	fmt.Println("=== DD Writers Management ===")
 
 	section1FileWriter()
 	section2BufferedWriter()
 	section3MultiWriter()
 	section4DynamicManagement()
-	section5ErrorHandling()
+	section5WriterErrors()
 
 	fmt.Println("\n✅ Writers examples completed!")
 }
@@ -59,7 +59,7 @@ func section1FileWriter() {
 
 	logger.Info("Direct file writer output")
 
-	fmt.Println("✓ File: logs/direct.log\n")
+	fmt.Println("✓ File: logs/direct.log")
 }
 
 // Section 2: BufferedWriter for high throughput
@@ -94,7 +94,7 @@ func section2BufferedWriter() {
 	duration := time.Since(start)
 
 	fmt.Printf("✓ 1000 messages in %v\n", duration)
-	fmt.Println("  Note: Close() flushes the buffer\n")
+	fmt.Println("  Note: Close() flushes the buffer")
 }
 
 // Section 3: MultiWriter for multiple outputs
@@ -148,10 +148,10 @@ func section4DynamicManagement() {
 	fmt.Println()
 }
 
-// Section 5: Error handling
-func section5ErrorHandling() {
-	fmt.Println("5. Error Handling")
-	fmt.Println("------------------")
+// Section 5: Writer error handling
+func section5WriterErrors() {
+	fmt.Println("5. Writer Error Handling")
+	fmt.Println("-------------------------")
 
 	var errorCount int
 	var mu sync.Mutex
@@ -180,5 +180,5 @@ func section5ErrorHandling() {
 	// Flush to ensure all data is written
 	logger.Flush()
 
-	fmt.Println("  Errors captured by handler\n")
+	fmt.Println("  Errors captured by handler")
 }

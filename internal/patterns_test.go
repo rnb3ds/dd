@@ -124,9 +124,9 @@ func TestIsSensitiveKey(t *testing.T) {
 
 func TestHasNestedQuantifiers(t *testing.T) {
 	tests := []struct {
-		name     string
-		pattern  string
-		maxRange int
+		name      string
+		pattern   string
+		maxRange  int
 		dangerous bool
 	}{
 		// Safe patterns

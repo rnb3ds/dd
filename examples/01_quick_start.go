@@ -17,7 +17,7 @@ import (
 // 4. Formatted and structured logging
 // 5. Global logger management
 func main() {
-	fmt.Println("=== DD Logger Quick Start ===\n")
+	fmt.Println("=== DD Logger Quick Start ===")
 
 	section1PackageLevel()
 	section2CreateLogger()
@@ -69,7 +69,7 @@ func section2CreateLogger() {
 	logger2.Debug("JSON format with caller info")
 
 	// Preset configurations
-	devLogger := dd.Must(dd.DevelopmentConfig())
+	devLogger, _ := dd.New(dd.DevelopmentConfig())
 	defer devLogger.Close()
 	devLogger.Debug("Development preset - debug level enabled")
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,16 +66,17 @@ var AllPatterns = []PatternDefinition{
 	// Financial Services (PCI-DSS compliance)
 	// SWIFT/BIC codes (8 or 11 characters: BBBBCCLLbbb)
 	// BBBB = bank code (4 letters), CC = country code (2 letters), LL = location code (2 alphanumeric), bbb = branch code (optional 3 alphanumeric)
-	// Use negative lookahead to avoid matching common words like "REDACTED"
-	{`\b(?!REDACTED|REDACT|REMOVED|FILTERED)[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`, false},
+	// Context-aware pattern to reduce false positives - requires context keywords like "swift", "bic", "bank"
+	{`(?i)(?:swift|bic|bank[_-]?code|iban)[\s:=]+[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`, true},
 	// IBAN (International Bank Account Number) - generic pattern
 	{`\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7,30}\b`, false},
 	// CVV/CVC codes with context
 	{`(?i)(?:cvv|cvc|cv2|security[_-]?code|card[_-]?verification)[\s:=]+[0-9]{3,4}\b`, true},
 
 	// Healthcare (HIPAA compliance)
-	// ICD-10 Diagnosis codes (e.g., A00.0, Z99.9)
-	{`\b[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`, false},
+	// ICD-10 Diagnosis codes with medical context (e.g., "diagnosis: A12.3", "icd10: S72.0")
+	// Requires context keywords to reduce false positives from generic codes
+	{`(?i)(?:icd[-_]?10?|diagnosis|diag|dx|diagnostic[_-]?code|clinical[_-]?code)[\s:=]+[A-Z][0-9]{2}(?:\.[0-9A-Z]{1,4})?\b`, true},
 	// US National Provider Identifier (NPI) - 10 digits starting with 1 or 2
 	// Context-aware pattern to reduce false positives from random 10-digit numbers
 	{`(?i)(?:npi|national[_-]?provider[_-]?identifier|provider[_-]?id)[\s:=]+[12][0-9]{9}\b`, true},
@@ -466,48 +468,9 @@ func initKeywordSlices() {
 	})
 }
 
-// sortStrings sorts a string slice in place using quicksort.
-// This avoids importing sort package and is faster for small slices.
+// sortStrings sorts a string slice in place using the standard library.
 func sortStrings(s []string) {
-	if len(s) < 2 {
-		return
-	}
-	quickSortStrings(s, 0, len(s)-1)
-}
-
-func quickSortStrings(s []string, lo, hi int) {
-	for lo < hi {
-		if hi-lo < 10 {
-			// Use insertion sort for small ranges
-			for i := lo + 1; i <= hi; i++ {
-				for j := i; j > lo && s[j] < s[j-1]; j-- {
-					s[j], s[j-1] = s[j-1], s[j]
-				}
-			}
-			return
-		}
-		pivot := partitionStrings(s, lo, hi)
-		if pivot-lo < hi-pivot {
-			quickSortStrings(s, lo, pivot-1)
-			lo = pivot + 1
-		} else {
-			quickSortStrings(s, pivot+1, hi)
-			hi = pivot - 1
-		}
-	}
-}
-
-func partitionStrings(s []string, lo, hi int) int {
-	pivot := s[hi]
-	i := lo
-	for j := lo; j < hi; j++ {
-		if s[j] < pivot {
-			s[i], s[j] = s[j], s[i]
-			i++
-		}
-	}
-	s[i], s[hi] = s[hi], s[i]
-	return i
+	sort.Strings(s)
 }
 
 // binarySearchString performs binary search on a sorted string slice.

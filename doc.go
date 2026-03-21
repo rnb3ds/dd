@@ -69,10 +69,10 @@
 // Using presets:
 //
 //	// Development preset
-//	logger := dd.Must(dd.DevelopmentConfig())
+//	logger, _ := dd.New(dd.DevelopmentConfig())
 //
 //	// JSON preset
-//	logger := dd.Must(dd.JSONConfig())
+//	logger, _ := dd.New(dd.JSONConfig())
 //
 // # Structured Logging
 //
@@ -93,14 +93,25 @@
 //
 // # Context Integration
 //
-// Use type-safe context keys for tracing:
+// Use ContextExtractors in the Config to automatically extract tracing fields:
+//
+//	traceExtractor := func(ctx context.Context) []dd.Field {
+//	    var fields []dd.Field
+//	    if traceID := dd.GetTraceID(ctx); traceID != "" {
+//	        fields = append(fields, dd.String("trace_id", traceID))
+//	    }
+//	    if spanID := dd.GetSpanID(ctx); spanID != "" {
+//	        fields = append(fields, dd.String("span_id", spanID))
+//	    }
+//	    return fields
+//	}
+//
+//	cfg := dd.DefaultConfig()
+//	cfg.ContextExtractors = []dd.ContextExtractor{traceExtractor}
+//	logger, _ := dd.New(cfg)
 //
 //	ctx := dd.WithTraceID(context.Background(), "trace-123")
-//	ctx = dd.WithSpanID(ctx, "span-456")
-//	ctx = dd.WithRequestID(ctx, "req-789")
-//
-//	logger.InfoCtx(ctx, "Processing request")
-//	// Output will include trace_id, span_id, and request_id fields
+//	logger.InfoWith("Processing request", dd.String("user", "alice"))
 //
 // # Sensitive Data Filtering
 //
@@ -184,7 +195,6 @@
 package dd
 
 import (
-	"context"
 	"io"
 	"time"
 )
@@ -227,38 +237,6 @@ type CoreLogger interface {
 	WithField(key string, value any) *LoggerEntry
 }
 
-// ContextLogger extends CoreLogger with context-aware logging methods.
-// Use this interface when you need to extract context values (trace IDs, etc.)
-// into your log entries.
-type ContextLogger interface {
-	CoreLogger
-
-	// Context-aware methods - Debug level
-	DebugCtx(ctx context.Context, args ...any)
-	DebugfCtx(ctx context.Context, format string, args ...any)
-	DebugWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware methods - Info level
-	InfoCtx(ctx context.Context, args ...any)
-	InfofCtx(ctx context.Context, format string, args ...any)
-	InfoWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware methods - Warn level
-	WarnCtx(ctx context.Context, args ...any)
-	WarnfCtx(ctx context.Context, format string, args ...any)
-	WarnWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware methods - Error level
-	ErrorCtx(ctx context.Context, args ...any)
-	ErrorfCtx(ctx context.Context, format string, args ...any)
-	ErrorWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware methods - Fatal level
-	FatalCtx(ctx context.Context, args ...any)
-	FatalfCtx(ctx context.Context, format string, args ...any)
-	FatalWithCtx(ctx context.Context, msg string, fields ...Field)
-}
-
 // LevelLogger extends CoreLogger with level management methods.
 type LevelLogger interface {
 	CoreLogger
@@ -299,16 +277,12 @@ type ConfigurableLogger interface {
 
 	// Context extractors
 	AddContextExtractor(extractor ContextExtractor) error
-	MustAddContextExtractor(extractor ContextExtractor)
 	SetContextExtractors(extractors ...ContextExtractor) error
-	MustSetContextExtractors(extractors ...ContextExtractor)
 	GetContextExtractors() []ContextExtractor
 
 	// Hooks
 	AddHook(event HookEvent, hook Hook) error
-	MustAddHook(event HookEvent, hook Hook)
 	SetHooks(registry *HookRegistry) error
-	MustSetHooks(registry *HookRegistry)
 	GetHooks() *HookRegistry
 
 	// Sampling
@@ -353,11 +327,6 @@ type LogProvider interface {
 	Logf(level LogLevel, format string, args ...any)
 	LogWith(level LogLevel, msg string, fields ...Field)
 
-	// Context-aware core methods
-	LogCtx(ctx context.Context, level LogLevel, args ...any)
-	LogfCtx(ctx context.Context, level LogLevel, format string, args ...any)
-	LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field)
-
 	// Convenience methods - Debug level
 	Debug(args ...any)
 	Debugf(format string, args ...any)
@@ -383,31 +352,6 @@ type LogProvider interface {
 	Fatalf(format string, args ...any)
 	FatalWith(msg string, fields ...Field)
 
-	// Context-aware convenience methods - Debug level
-	DebugCtx(ctx context.Context, args ...any)
-	DebugfCtx(ctx context.Context, format string, args ...any)
-	DebugWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware convenience methods - Info level
-	InfoCtx(ctx context.Context, args ...any)
-	InfofCtx(ctx context.Context, format string, args ...any)
-	InfoWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware convenience methods - Warn level
-	WarnCtx(ctx context.Context, args ...any)
-	WarnfCtx(ctx context.Context, format string, args ...any)
-	WarnWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware convenience methods - Error level
-	ErrorCtx(ctx context.Context, args ...any)
-	ErrorfCtx(ctx context.Context, format string, args ...any)
-	ErrorWithCtx(ctx context.Context, msg string, fields ...Field)
-
-	// Context-aware convenience methods - Fatal level
-	FatalCtx(ctx context.Context, args ...any)
-	FatalfCtx(ctx context.Context, format string, args ...any)
-	FatalWithCtx(ctx context.Context, msg string, fields ...Field)
-
 	// Field chaining
 	WithFields(fields ...Field) *LoggerEntry
 	WithField(key string, value any) *LoggerEntry
@@ -429,16 +373,12 @@ type LogProvider interface {
 
 	// Context extractors
 	AddContextExtractor(extractor ContextExtractor) error
-	MustAddContextExtractor(extractor ContextExtractor)
 	SetContextExtractors(extractors ...ContextExtractor) error
-	MustSetContextExtractors(extractors ...ContextExtractor)
 	GetContextExtractors() []ContextExtractor
 
 	// Hooks
 	AddHook(event HookEvent, hook Hook) error
-	MustAddHook(event HookEvent, hook Hook)
 	SetHooks(registry *HookRegistry) error
-	MustSetHooks(registry *HookRegistry)
 	GetHooks() *HookRegistry
 
 	// Sampling

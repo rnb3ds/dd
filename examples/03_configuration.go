@@ -18,14 +18,16 @@ import (
 // 3. File output with rotation
 // 4. JSON customization
 // 5. Clone for multiple loggers
+// 6. Configure package-level functions with InitDefault
 func main() {
-	fmt.Println("=== DD Configuration ===\n")
+	fmt.Println("=== DD Configuration ===")
 
 	section1BasicConfig()
 	section2Presets()
 	section3FileRotation()
 	section4JSONCustomization()
 	section5Clone()
+	section6InitDefault()
 
 	fmt.Println("\n✅ Configuration examples completed!")
 	fmt.Println("\nCheck logs/ directory for output files")
@@ -61,12 +63,12 @@ func section2Presets() {
 	fmt.Println("-------------------------")
 
 	// Development: Debug level, text format, caller info
-	devLogger := dd.Must(dd.DevelopmentConfig())
+	devLogger, _ := dd.New(dd.DevelopmentConfig())
 	defer devLogger.Close()
 	devLogger.Debug("Development mode - verbose output")
 
 	// JSON: Debug level, JSON format, structured for production
-	jsonLogger := dd.Must(dd.JSONConfig())
+	jsonLogger, _ := dd.New(dd.JSONConfig())
 	defer jsonLogger.Close()
 	jsonLogger.Info("JSON format ready for log aggregation")
 
@@ -97,7 +99,7 @@ func section3FileRotation() {
 		dd.Bool("compress", true),
 	)
 
-	fmt.Println("✓ Logs written to logs/app.log\n")
+	fmt.Println("✓ Logs written to logs/app.log")
 }
 
 // Section 4: JSON customization
@@ -176,5 +178,36 @@ func section5Clone() {
 		dd.Err(fmt.Errorf("example error")),
 	)
 
-	fmt.Println("✓ Multiple loggers from cloned config\n")
+	fmt.Println("✓ Multiple loggers from cloned config")
+}
+
+// Section 6: Configure package-level functions with InitDefault
+func section6InitDefault() {
+	fmt.Println("6. InitDefault - Configure Package-Level Functions")
+	fmt.Println("----------------------------------------------------")
+
+	// Package-level functions (dd.Debug, dd.Info, etc.) use a default logger.
+	// InitDefault() configures this default logger.
+
+	// Example: Disable caller info for cleaner output
+	cfg := dd.DefaultConfig()
+	cfg.Level = dd.LevelDebug
+	cfg.DynamicCaller = false // Disable file:line output
+
+	if err := dd.InitDefault(cfg); err != nil {
+		fmt.Printf("Failed to init default logger: %v\n", err)
+		return
+	}
+
+	dd.Debug("No caller info - DynamicCaller=false")
+	dd.Info("Package-level function with custom config")
+
+	// Re-enable caller info
+	cfg.DynamicCaller = true
+	dd.InitDefault(cfg)
+
+	dd.Info("With caller info - DynamicCaller=true")
+
+	fmt.Println("✓ Package-level functions configured via InitDefault")
+	fmt.Println()
 }

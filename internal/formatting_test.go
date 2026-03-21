@@ -26,11 +26,11 @@ func TestNewMessageFormatter(t *testing.T) {
 		{
 			name: "json format",
 			config: &FormatterConfig{
-				Format:     LogFormatJSON,
-				TimeFormat: time.RFC3339,
-				IncludeTime: true,
+				Format:       LogFormatJSON,
+				TimeFormat:   time.RFC3339,
+				IncludeTime:  true,
 				IncludeLevel: true,
-				FullPath:   true,
+				FullPath:     true,
 				JSON: &JSONOptions{
 					PrettyPrint: true,
 					Indent:      "  ",
@@ -155,12 +155,12 @@ func TestFormatArgsToStringComplexTypes(t *testing.T) {
 
 func TestFormatWithMessage(t *testing.T) {
 	tests := []struct {
-		name           string
-		config         *FormatterConfig
-		level          LogLevel
-		message        string
-		fields         []Field
-		wantContains   []string
+		name             string
+		config           *FormatterConfig
+		level            LogLevel
+		message          string
+		fields           []Field
+		wantContains     []string
 		dontWantContains []string
 	}{
 		{
@@ -173,9 +173,9 @@ func TestFormatWithMessage(t *testing.T) {
 				FullPath:      false,
 				DynamicCaller: false,
 			},
-			level:    LevelInfo,
-			message:  "test message",
-			fields:   []Field{{Key: "key", Value: "value"}},
+			level:        LevelInfo,
+			message:      "test message",
+			fields:       []Field{{Key: "key", Value: "value"}},
 			wantContains: []string{"INFO", "test message", "key=value"},
 		},
 		{
@@ -187,8 +187,8 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  true,
 				DynamicCaller: false,
 			},
-			level:    LevelDebug,
-			message:  "debug msg",
+			level:        LevelDebug,
+			message:      "debug msg",
 			wantContains: []string{"DEBUG", "debug msg"},
 		},
 		{
@@ -200,8 +200,8 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  false,
 				DynamicCaller: false,
 			},
-			level:    LevelWarn,
-			message:  "warning msg",
+			level:            LevelWarn,
+			message:          "warning msg",
 			dontWantContains: []string{"WARN"},
 		},
 		{
@@ -213,9 +213,9 @@ func TestFormatWithMessage(t *testing.T) {
 				IncludeLevel:  true,
 				DynamicCaller: false,
 			},
-			level:    LevelError,
-			message:  "error message",
-			fields:   []Field{{Key: "error_code", Value: 500}},
+			level:        LevelError,
+			message:      "error message",
+			fields:       []Field{{Key: "error_code", Value: 500}},
 			wantContains: []string{`"level":"ERROR"`, `"message":"error message"`, `"error_code"`},
 		},
 		{
@@ -235,8 +235,8 @@ func TestFormatWithMessage(t *testing.T) {
 					},
 				},
 			},
-			level:    LevelInfo,
-			message:  "custom fields",
+			level:        LevelInfo,
+			message:      "custom fields",
 			wantContains: []string{`"lvl":"INFO"`, `"msg":"custom fields"`},
 		},
 	}
@@ -416,50 +416,67 @@ func TestGetJSONOptions(t *testing.T) {
 	}
 }
 
-func TestTextBuilderPool(t *testing.T) {
-	var buf bytes.Buffer
-
-	// Simulate concurrent usage
-	for i := 0; i < 1000; i++ {
-		sb := textBuilderPool.Get().(*strings.Builder)
-		sb.Reset()
-		sb.WriteString("test")
-		textBuilderPool.Put(sb)
+// TestBufferPools verifies that all sync.Pool instances work correctly
+// without panics under concurrent load. Consolidated from multiple pool tests.
+func TestBufferPools(t *testing.T) {
+	tests := []struct {
+		name     string
+		testFunc func()
+	}{
+		{
+			name: "textBuilderPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					buf := textBuilderPool.Get().(*bytes.Buffer)
+					buf.Reset()
+					buf.WriteString("test")
+					textBuilderPool.Put(buf)
+				}
+			},
+		},
+		{
+			name: "argsBuilderPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					buf := argsBuilderPool.Get().(*bytes.Buffer)
+					buf.Reset()
+					buf.WriteString("test")
+					argsBuilderPool.Put(buf)
+				}
+			},
+		},
+		{
+			name: "jsonEntryMapPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					m := jsonEntryMapPool.Get().(*map[string]any)
+					entry := *m
+					for k := range entry {
+						delete(entry, k)
+					}
+					jsonEntryMapPool.Put(m)
+				}
+			},
+		},
+		{
+			name: "jsonFieldsMapPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					m := jsonFieldsMapPool.Get().(*map[string]any)
+					fields := *m
+					for k := range fields {
+						delete(fields, k)
+					}
+					jsonFieldsMapPool.Put(m)
+				}
+			},
+		},
 	}
 
-	buf.WriteString("pool test complete")
-	if buf.Len() == 0 {
-		t.Error("Buffer should have content")
-	}
-}
-
-func TestArgsBuilderPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		sb := argsBuilderPool.Get().(*strings.Builder)
-		sb.Reset()
-		sb.WriteString("test")
-		argsBuilderPool.Put(sb)
-	}
-}
-
-func TestJSONEntryMapPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		m := jsonEntryMapPool.Get().(*map[string]any)
-		entry := *m
-		for k := range entry {
-			delete(entry, k)
-		}
-		jsonEntryMapPool.Put(m)
-	}
-}
-
-func TestJSONFieldsMapPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		m := jsonFieldsMapPool.Get().(*map[string]any)
-		fields := *m
-		for k := range fields {
-			delete(fields, k)
-		}
-		jsonFieldsMapPool.Put(m)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just verify no panic occurs
+			tt.testFunc()
+		})
 	}
 }

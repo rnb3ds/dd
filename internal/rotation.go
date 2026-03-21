@@ -171,6 +171,8 @@ func cleanupExcessBackups(basePath string, maxBackups int, compress bool) {
 		// Intentionally ignore removal errors - this is a cleanup operation
 		// and failure shouldn't affect the main logging functionality.
 		// The file may have been removed by another process or be locked.
+		// Error is intentionally ignored - this is best-effort cleanup.
+		// Failure is not actionable (file no longer exists, was locked, etc.).
 		_ = os.Remove(filePath)
 	}
 }

@@ -14,18 +14,22 @@ import (
 var jsonEncoderPool = sync.Pool{
 	New: func() any {
 		buf := &bytes.Buffer{}
-		buf.Grow(512)
+		buf.Grow(1024) // optimized for typical JSON entries
 		enc := json.NewEncoder(buf)
-		enc.SetEscapeHTML(false)
+		// SECURITY: Enable HTML escaping to prevent XSS attacks when logs are
+		// rendered in HTML contexts (e.g., log viewers). This must match the
+		// behavior in writeJSONString which also escapes <, >, & characters.
+		enc.SetEscapeHTML(true)
 		return &pooledEncoder{buf: buf, enc: enc}
 	},
 }
 
 // jsonBuilderPool pools bytes.Buffer objects for fast JSON building.
+// Initial capacity of 1024 bytes covers most common JSON log entries.
 var jsonBuilderPool = sync.Pool{
 	New: func() any {
 		buf := &bytes.Buffer{}
-		buf.Grow(512)
+		buf.Grow(1024) // optimized for typical JSON entries
 		return buf
 	},
 }
@@ -118,10 +122,27 @@ func FormatJSON(entry map[string]any, opts *JSONOptions) string {
 
 // formatJSONFast attempts to build JSON without reflection.
 // Returns (json string, true) if successful, or ("", false) if fallback needed.
+// SECURITY: Clears buffer contents before returning to pool to prevent
+// sensitive data from remaining in pooled memory.
 func formatJSONFast(entry map[string]any) (string, bool) {
+	// SECURITY: Handle nil map gracefully
+	if entry == nil {
+		return "{}", true
+	}
+
 	buf := jsonBuilderPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	defer jsonBuilderPool.Put(buf)
+
+	// SECURITY: Clear buffer contents before returning to pool
+	defer func() {
+		// Zero the buffer contents for security before returning to pool
+		bytes := buf.Bytes()
+		for i := range bytes {
+			bytes[i] = 0
+		}
+		buf.Reset()
+		jsonBuilderPool.Put(buf)
+	}()
 
 	buf.WriteByte('{')
 	first := true
@@ -143,23 +164,29 @@ func formatJSONFast(entry map[string]any) (string, bool) {
 	}
 
 	buf.WriteByte('}')
-	// Use bytesToString to avoid allocation in hot path
-	// Note: The returned string shares memory with the buffer, but since
-	// we return it immediately and the buffer is returned to pool after,
-	// this is safe for the caller's immediate use.
-	return bytesToString(buf.Bytes()), true
-}
-
-// bytesToString converts a byte slice to string without allocation.
-// This is safe because the caller immediately uses the result and doesn't
-// retain it beyond the log operation.
-func bytesToString(b []byte) string {
-	return string(b)
+	// Return a copy of the string - the buffer will be cleared in defer
+	return buf.String(), true
 }
 
 // writeJSONValueFast writes a JSON value without reflection for common types.
 // Returns true if successful, false if the type needs standard encoding.
+// SECURITY: Includes depth limit to prevent stack overflow from deeply nested structures.
 func writeJSONValueFast(buf *bytes.Buffer, v any) bool {
+	return writeJSONValueFastWithDepth(buf, v, 0)
+}
+
+// maxJSONDepth limits the maximum nesting depth for JSON structures.
+// SECURITY: Prevents stack overflow from deeply nested or malicious structures.
+const maxJSONDepth = 100
+
+// writeJSONValueFastWithDepth writes a JSON value with depth tracking.
+// SECURITY: Returns false if depth exceeds maxJSONDepth to prevent stack overflow.
+func writeJSONValueFastWithDepth(buf *bytes.Buffer, v any, depth int) bool {
+	// SECURITY: Check depth limit to prevent stack overflow
+	if depth > maxJSONDepth {
+		return false // Fall back to standard encoder which handles this safely
+	}
+
 	switch val := v.(type) {
 	case string:
 		writeJSONString(buf, val)
@@ -217,7 +244,7 @@ func writeJSONValueFast(buf *bytes.Buffer, v any) bool {
 		writeJSONString(buf, val.String())
 		return true
 	case map[string]any:
-		// Nested map - recurse
+		// Nested map - recurse with depth tracking
 		buf.WriteByte('{')
 		first := true
 		for k2, v2 := range val {
@@ -227,11 +254,83 @@ func writeJSONValueFast(buf *bytes.Buffer, v any) bool {
 			first = false
 			writeJSONString(buf, k2)
 			buf.WriteByte(':')
-			if !writeJSONValueFast(buf, v2) {
+			if !writeJSONValueFastWithDepth(buf, v2, depth+1) {
 				return false
 			}
 		}
 		buf.WriteByte('}')
+		return true
+	case []string:
+		// Fast path for string slices
+		buf.WriteByte('[')
+		for i, s := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeJSONString(buf, s)
+		}
+		buf.WriteByte(']')
+		return true
+	case []int:
+		// Fast path for int slices
+		buf.WriteByte('[')
+		for i, n := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(strconv.FormatInt(int64(n), 10))
+		}
+		buf.WriteByte(']')
+		return true
+	case []int64:
+		// Fast path for int64 slices
+		buf.WriteByte('[')
+		for i, n := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(strconv.FormatInt(n, 10))
+		}
+		buf.WriteByte(']')
+		return true
+	case []float64:
+		// Fast path for float64 slices
+		buf.WriteByte('[')
+		for i, f := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			buf.WriteString(strconv.FormatFloat(f, 'g', -1, 64))
+		}
+		buf.WriteByte(']')
+		return true
+	case []bool:
+		// Fast path for bool slices
+		buf.WriteByte('[')
+		for i, b := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if b {
+				buf.WriteString("true")
+			} else {
+				buf.WriteString("false")
+			}
+		}
+		buf.WriteByte(']')
+		return true
+	case []any:
+		// Fast path for generic slices
+		buf.WriteByte('[')
+		for i, elem := range val {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			if !writeJSONValueFastWithDepth(buf, elem, depth+1) {
+				return false
+			}
+		}
+		buf.WriteByte(']')
 		return true
 	default:
 		// Complex type - need standard encoder
@@ -240,6 +339,8 @@ func writeJSONValueFast(buf *bytes.Buffer, v any) bool {
 }
 
 // writeJSONString writes a JSON-escaped string.
+// SECURITY: Also escapes HTML special characters (<, >, &) to prevent
+// XSS attacks when logs are rendered in HTML contexts (e.g., log viewers).
 func writeJSONString(buf *bytes.Buffer, s string) {
 	buf.WriteByte('"')
 	for i := 0; i < len(s); i++ {
@@ -255,6 +356,15 @@ func writeJSONString(buf *bytes.Buffer, s string) {
 			buf.WriteString(`\r`)
 		case '\t':
 			buf.WriteString(`\t`)
+		case '<':
+			// SECURITY: Escape < to prevent XSS in HTML contexts
+			buf.WriteString(`\u003c`)
+		case '>':
+			// SECURITY: Escape > to prevent XSS in HTML contexts
+			buf.WriteString(`\u003e`)
+		case '&':
+			// SECURITY: Escape & to prevent HTML entity injection
+			buf.WriteString(`\u0026`)
 		default:
 			if c < 0x20 {
 				buf.WriteString(`\u00`)
@@ -276,7 +386,16 @@ func formatJSONStandard(entry map[string]any, opts *JSONOptions) string {
 	// Use pooled encoder (includes buffer) for better performance
 	pe := jsonEncoderPool.Get().(*pooledEncoder)
 	pe.buf.Reset()
-	defer jsonEncoderPool.Put(pe)
+
+	// SECURITY: Zero buffer contents before returning to pool
+	defer func() {
+		b := pe.buf.Bytes()
+		for i := range b {
+			b[i] = 0
+		}
+		pe.buf.Reset()
+		jsonEncoderPool.Put(pe)
+	}()
 
 	// Reset encoder settings (escape HTML is already false from pool init)
 	if opts.PrettyPrint {

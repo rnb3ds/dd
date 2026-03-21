@@ -248,7 +248,7 @@ func validateNoADS(path string) error {
 	}
 
 	// Check for URL scheme (http://, https://, etc.)
-	if colonIdx > 0 && colonIdx+1 < len(path) && path[colonIdx+1] == '/' && path[colonIdx+2] == '/' {
+	if colonIdx > 0 && colonIdx+2 < len(path) && path[colonIdx+1] == '/' && path[colonIdx+2] == '/' {
 		return nil // This is a URL scheme, not ADS
 	}
 

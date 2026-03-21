@@ -38,6 +38,7 @@ const (
 	ErrCodeConfigValidation   = "CONFIG_VALIDATION"
 	ErrCodeWriterAdd          = "WRITER_ADD"
 	ErrCodeMultipleConfigs    = "MULTIPLE_CONFIGS"
+	ErrCodeNilMultiWriter     = "NIL_MULTIWRITER"
 )
 
 // LoggerError represents a structured error with additional context.
@@ -107,6 +108,64 @@ var errorCodeToSentinel = map[string]error{
 	ErrCodeConfigValidation:   ErrConfigValidation,
 	ErrCodeWriterAdd:          ErrWriterAdd,
 	ErrCodeMultipleConfigs:    ErrMultipleConfigs,
+	ErrCodeNilMultiWriter:     ErrNilMultiWriter,
+}
+
+// allErrorCodes contains all defined error codes for validation.
+// This is used by ValidateErrorCodeMapping to ensure all codes have sentinel errors.
+var allErrorCodes = []string{
+	ErrCodeNilConfig,
+	ErrCodeNilWriter,
+	ErrCodeNilFilter,
+	ErrCodeNilHook,
+	ErrCodeNilExtractor,
+	ErrCodeLoggerClosed,
+	ErrCodeWriterNotFound,
+	ErrCodeInvalidLevel,
+	ErrCodeInvalidFormat,
+	ErrCodeMaxWritersExceeded,
+	ErrCodeEmptyFilePath,
+	ErrCodePathTooLong,
+	ErrCodePathTraversal,
+	ErrCodeNullByte,
+	ErrCodeInvalidPath,
+	ErrCodeSymlinkNotAllowed,
+	ErrCodeHardlinkNotAllowed,
+	ErrCodeOverlongEncoding,
+	ErrCodeMaxSizeExceeded,
+	ErrCodeMaxBackupsExceeded,
+	ErrCodeBufferSizeTooLarge,
+	ErrCodeInvalidPattern,
+	ErrCodeEmptyPattern,
+	ErrCodePatternTooLong,
+	ErrCodeReDoSPattern,
+	ErrCodePatternFailed,
+	ErrCodeConfigValidation,
+	ErrCodeWriterAdd,
+	ErrCodeMultipleConfigs,
+	ErrCodeNilMultiWriter,
+}
+
+// validateErrorCodeMapping validates that all error codes have a corresponding
+// sentinel error mapping. This is intended for use in tests to catch developer
+// mistakes when adding new error codes without updating the map.
+// Returns a slice of missing error codes, or nil if all codes are mapped.
+func validateErrorCodeMapping() []string {
+	var missing []string
+	for _, code := range allErrorCodes {
+		if _, ok := errorCodeToSentinel[code]; !ok {
+			missing = append(missing, code)
+		}
+	}
+	return missing
+}
+
+func init() {
+	// Validate error code mapping at startup to catch developer mistakes early.
+	// This ensures all error codes have corresponding sentinel errors.
+	if missing := validateErrorCodeMapping(); len(missing) > 0 {
+		panic(fmt.Sprintf("dd: internal error: missing error code mappings: %v", missing))
+	}
 }
 
 // Is enables matching against sentinel errors using errors.Is().
@@ -196,6 +255,7 @@ var (
 	ErrConfigValidation   = errors.New("configuration validation failed")
 	ErrWriterAdd          = errors.New("failed to add writer")
 	ErrMultipleConfigs    = errors.New("multiple configs provided, expected 0 or 1")
+	ErrNilMultiWriter     = errors.New("multiwriter is nil")
 )
 
 // WriterError represents an error from a single writer in a MultiWriter.
@@ -289,45 +349,4 @@ func (e *MultiWriterError) AddError(index int, writer io.Writer, err error) {
 		Writer: writer,
 		Err:    err,
 	})
-}
-
-// ============================================================================
-// Generic Must Helper
-// ============================================================================
-
-// MustVal is a generic helper that panics if err is not nil, otherwise returns val.
-// This is useful for simplifying initialization code where errors should be fatal.
-// For creating loggers, prefer using dd.Must() or dd.MustToFile() instead.
-//
-// Example:
-//
-//	// Instead of:
-//	writer, err := dd.NewBufferedWriter(file)
-//	if err != nil {
-//	    panic(err)
-//	}
-//
-//	// Use:
-//	writer := dd.MustVal(dd.NewBufferedWriter(file))
-//
-//	// Also works with other return-value-and-error functions:
-//	file := dd.MustVal(os.Open("file.txt"))
-func MustVal[T any](val T, err error) T {
-	if err != nil {
-		panic("dd: unexpected error: " + err.Error())
-	}
-	return val
-}
-
-// Must2 is a generic helper for functions returning two values and an error.
-// Panics if err is not nil, otherwise returns both values.
-//
-// Example:
-//
-//	file, writer := dd.Must2(dd.SomeFunctionReturningTwoValues())
-func Must2[T1 any, T2 any](val1 T1, val2 T2, err error) (T1, T2) {
-	if err != nil {
-		panic("dd: unexpected error: " + err.Error())
-	}
-	return val1, val2
 }

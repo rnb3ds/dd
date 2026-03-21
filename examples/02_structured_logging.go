@@ -18,7 +18,7 @@ import (
 // 3. LoggerEntry for contextual logging
 // 4. Best practices for production
 func main() {
-	fmt.Println("=== DD Structured Logging ===\n")
+	fmt.Println("=== DD Structured Logging ===")
 
 	section1FieldTypes()
 	section2WithFields()

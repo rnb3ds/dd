@@ -182,23 +182,23 @@ func TestFormatJSONDataMultipleArgs(t *testing.T) {
 
 func TestOutputTextData(t *testing.T) {
 	tests := []struct {
-		name     string
-		data     []any
-		check    func(string) bool
+		name  string
+		data  []any
+		check func(string) bool
 	}{
 		{
-			name: "empty",
-			data: []any{},
+			name:  "empty",
+			data:  []any{},
 			check: func(s string) bool { return s == "\n" },
 		},
 		{
-			name: "simple string",
-			data: []any{"hello"},
+			name:  "simple string",
+			data:  []any{"hello"},
 			check: func(s string) bool { return strings.Contains(s, "hello") },
 		},
 		{
-			name: "simple int",
-			data: []any{42},
+			name:  "simple int",
+			data:  []any{42},
 			check: func(s string) bool { return strings.Contains(s, "42") },
 		},
 		{
@@ -211,8 +211,8 @@ func TestOutputTextData(t *testing.T) {
 			},
 		},
 		{
-			name: "complex type",
-			data: []any{map[string]int{"a": 1}},
+			name:  "complex type",
+			data:  []any{map[string]int{"a": 1}},
 			check: func(s string) bool { return strings.Contains(s, "{") },
 		},
 	}
@@ -231,10 +231,10 @@ func TestOutputTextData(t *testing.T) {
 
 func TestOutputJSON(t *testing.T) {
 	tests := []struct {
-		name     string
-		caller   string
-		data     []any
-		check    func(string) bool
+		name   string
+		caller string
+		data   []any
+		check  func(string) bool
 	}{
 		{
 			name:   "empty data",
@@ -270,10 +270,10 @@ func TestOutputJSON(t *testing.T) {
 
 func TestOutputText(t *testing.T) {
 	tests := []struct {
-		name     string
-		caller   string
-		data     []any
-		check    func(string) bool
+		name   string
+		caller string
+		data   []any
+		check  func(string) bool
 	}{
 		{
 			name:   "empty data",
@@ -334,7 +334,7 @@ func TestFormatJSONDataWithEncoder(t *testing.T) {
 	// Test complex nested structure
 	data := map[string]any{
 		"nested": map[string]any{
-			"array": []int{1, 2, 3},
+			"array":  []int{1, 2, 3},
 			"string": "value",
 		},
 	}

@@ -20,7 +20,7 @@ import (
 // 4. Custom fatal handler
 // 5. Debug utilities
 func main() {
-	fmt.Println("=== DD Advanced Features ===\n")
+	fmt.Println("=== DD Advanced Features ===")
 
 	section1LogSampling()
 	section2FieldValidation()

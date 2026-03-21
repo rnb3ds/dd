@@ -91,7 +91,9 @@ func FormatJSONData(data ...any) string {
 		converted := ConvertValue(data[0])
 
 		encoder := json.NewEncoder(buf)
-		encoder.SetEscapeHTML(false)
+		// SECURITY: Enable HTML escaping to prevent XSS attacks when debug
+		// output is rendered in HTML contexts. Matches writeJSONString behavior.
+		encoder.SetEscapeHTML(true)
 		if err := encoder.Encode(converted); err != nil {
 			if jsonData, err := json.Marshal(data[0]); err == nil {
 				return string(jsonData)
