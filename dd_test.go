@@ -301,70 +301,9 @@ func TestLoggerLevelManagement(t *testing.T) {
 	}
 }
 
-func TestConvenienceFunctions(t *testing.T) {
-	oldLevel := Default().GetLevel()
-	oldDefault := Default()
-	defer func() {
-		SetDefault(oldDefault)
-		oldDefault.SetLevel(oldLevel)
-	}()
-
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	SetDefault(logger)
-
-	Info("test info")
-	output := buf.String()
-	if !strings.Contains(output, "test info") {
-		t.Error("Global Info function should work")
-	}
-
-	buf.Reset()
-	SetLevel(LevelDebug)
-	Debug("test debug")
-	output = buf.String()
-	if !strings.Contains(output, "test debug") {
-		t.Error("Global Debug function should work after setting level")
-	}
-}
-
-func TestGlobalGetLevel(t *testing.T) {
-	oldLevel := Default().GetLevel()
-	oldDefault := Default()
-	defer func() {
-		SetDefault(oldDefault)
-		oldDefault.SetLevel(oldLevel)
-	}()
-
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelInfo
-	logger, _ := New(cfg)
-	SetDefault(logger)
-
-	// Test initial level
-	if GetLevel() != LevelInfo {
-		t.Errorf("GetLevel() = %v, want %v", GetLevel(), LevelInfo)
-	}
-
-	// Test after setting level
-	SetLevel(LevelDebug)
-	if GetLevel() != LevelDebug {
-		t.Errorf("GetLevel() after SetLevel(Debug) = %v, want %v", GetLevel(), LevelDebug)
-	}
-
-	// Test after setting another level
-	SetLevel(LevelError)
-	if GetLevel() != LevelError {
-		t.Errorf("GetLevel() after SetLevel(Error) = %v, want %v", GetLevel(), LevelError)
-	}
-}
-
-func TestAllGlobalFunctions(t *testing.T) {
+// TestGlobalFunctions consolidates all global function tests into a single
+// table-driven test for better maintainability and reduced boilerplate.
+func TestGlobalFunctions(t *testing.T) {
 	oldDefault := Default()
 	defer SetDefault(oldDefault)
 
@@ -375,89 +314,101 @@ func TestAllGlobalFunctions(t *testing.T) {
 	logger, _ := New(cfg)
 	SetDefault(logger)
 
-	tests := []struct {
-		name   string
-		method func(...any)
-	}{
-		{"Debug", Debug},
-		{"Info", Info},
-		{"Warn", Warn},
-		{"Error", Error},
+	// Ensure level is reset before each subtest
+	resetLevel := func() {
+		SetLevel(LevelDebug)
+		buf.Reset()
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.method("test message")
-			if buf.Len() == 0 {
-				t.Errorf("Global %s should work", tt.name)
-			}
-		})
-	}
-}
+	t.Run("LevelManagement", func(t *testing.T) {
+		tests := []struct {
+			setLevel  LogLevel
+			wantLevel LogLevel
+		}{
+			{LevelInfo, LevelInfo},
+			{LevelDebug, LevelDebug},
+			{LevelError, LevelError},
+		}
+		for _, tt := range tests {
+			t.Run(tt.setLevel.String(), func(t *testing.T) {
+				SetLevel(tt.setLevel)
+				if got := GetLevel(); got != tt.wantLevel {
+					t.Errorf("GetLevel() = %v, want %v", got, tt.wantLevel)
+				}
+			})
+		}
+	})
 
-func TestAllGlobalFormattedFunctions(t *testing.T) {
-	oldDefault := Default()
-	defer SetDefault(oldDefault)
+	t.Run("BasicLogging", func(t *testing.T) {
+		resetLevel()
+		tests := []struct {
+			name    string
+			method  func(...any)
+			message string
+		}{
+			{"Debug", Debug, "debug msg"},
+			{"Info", Info, "info msg"},
+			{"Warn", Warn, "warn msg"},
+			{"Error", Error, "error msg"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf.Reset()
+				tt.method(tt.message)
+				if !strings.Contains(buf.String(), tt.message) {
+					t.Errorf("Global %s should log message", tt.name)
+				}
+			})
+		}
+	})
 
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	SetDefault(logger)
+	t.Run("FormattedLogging", func(t *testing.T) {
+		resetLevel()
+		tests := []struct {
+			name   string
+			method func(string, ...any)
+		}{
+			{"Debugf", Debugf},
+			{"Infof", Infof},
+			{"Warnf", Warnf},
+			{"Errorf", Errorf},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf.Reset()
+				tt.method("test %s", "value")
+				if !strings.Contains(buf.String(), "test value") {
+					t.Errorf("Global %s should format message", tt.name)
+				}
+			})
+		}
+	})
 
-	tests := []struct {
-		name   string
-		method func(string, ...any)
-	}{
-		{"Debugf", Debugf},
-		{"Infof", Infof},
-		{"Warnf", Warnf},
-		{"Errorf", Errorf},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.method("test %s", "value")
-			if buf.Len() == 0 {
-				t.Errorf("Global %s should work", tt.name)
-			}
-		})
-	}
-}
-
-func TestGlobalStructuredLoggingMethods(t *testing.T) {
-	oldDefault := Default()
-	defer SetDefault(oldDefault)
-
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	SetDefault(logger)
-
-	InfoWith("test", String("key", "value"))
-	if buf.Len() == 0 {
-		t.Error("Global InfoWith should work")
-	}
-
-	DebugWith("test", String("key", "value"))
-	if buf.Len() == 0 {
-		t.Error("Global DebugWith should work")
-	}
-
-	WarnWith("test", String("key", "value"))
-	if buf.Len() == 0 {
-		t.Error("Global WarnWith should work")
-	}
-
-	ErrorWith("test", String("key", "value"))
-	if buf.Len() == 0 {
-		t.Error("Global ErrorWith should work")
-	}
+	t.Run("StructuredLogging", func(t *testing.T) {
+		resetLevel()
+		tests := []struct {
+			name   string
+			method func(string, ...Field)
+		}{
+			{"DebugWith", DebugWith},
+			{"InfoWith", InfoWith},
+			{"WarnWith", WarnWith},
+			{"ErrorWith", ErrorWith},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf.Reset()
+				tt.method("structured", String("key", "value"))
+				output := buf.String()
+				if !strings.Contains(output, "structured") {
+					t.Errorf("Global %s should log message", tt.name)
+				}
+				if !strings.Contains(output, "key=value") {
+					t.Errorf("Global %s should include field", tt.name)
+				}
+			})
+		}
+	})
 }
 
 // ============================================================================
@@ -762,7 +713,7 @@ func TestMessageSizeLimit(t *testing.T) {
 
 	output := buf.String()
 	if len(output) > 150 {
-		t.Error("Message should be truncated per MaxMessageSize")
+		t.Error("Message should be truncated per maxMessageSize")
 	}
 }
 
@@ -770,8 +721,8 @@ func TestSensitiveDataFiltering(t *testing.T) {
 	var buf bytes.Buffer
 	filter := NewSensitiveDataFilter()
 	secConfig := &SecurityConfig{
-		MaxMessageSize:  MaxMessageSize,
-		MaxWriters:      MaxWriterCount,
+		MaxMessageSize:  maxMessageSize,
+		MaxWriters:      maxWriterCount,
 		SensitiveFilter: filter,
 	}
 
@@ -946,13 +897,28 @@ func TestFieldConstructors(t *testing.T) {
 		field Field
 		key   string
 	}{
+		// String and basic types
 		{"String", String("k", "v"), "k"},
 		{"Int", Int("k", 42), "k"},
-		{"Int64", Int64("k", 42), "k"},
+		{"Int8", Int8("k", 8), "k"},
+		{"Int16", Int16("k", 16), "k"},
+		{"Int32", Int32("k", 32), "k"},
+		{"Int64", Int64("k", 64), "k"},
+		{"Uint", Uint("k", 42), "k"},
+		{"Uint8", Uint8("k", 8), "k"},
+		{"Uint16", Uint16("k", 16), "k"},
+		{"Uint32", Uint32("k", 32), "k"},
+		{"Uint64", Uint64("k", 64), "k"},
 		{"Bool", Bool("k", true), "k"},
+		{"Float32", Float32("k", 3.14), "k"},
 		{"Float64", Float64("k", 3.14), "k"},
+		// Time types
+		{"Duration", Duration("k", 5*time.Second), "k"},
+		{"Time", Time("k", time.Now()), "k"},
+		// Special types
 		{"Any", Any("k", nil), "k"},
 		{"Err", Err(nil), "error"},
+		{"ErrWithValue", Err(errors.New("test error")), "error"},
 	}
 
 	for _, tt := range tests {
@@ -964,50 +930,66 @@ func TestFieldConstructors(t *testing.T) {
 	}
 }
 
+// TestFieldConstructorsWithLogging verifies that all field types work with actual logging
+func TestFieldConstructorsWithLogging(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := DefaultConfig()
+	cfg.Output = &buf
+	cfg.Format = FormatJSON
+	cfg.Level = LevelDebug
+	logger, _ := New(cfg)
+
+	now := time.Now()
+	tests := []struct {
+		name   string
+		fields []Field
+	}{
+		{"integer_types", []Field{
+			Int("int", 42),
+			Int8("int8", 8),
+			Int16("int16", 16),
+			Int32("int32", 32),
+			Int64("int64", 64),
+		}},
+		{"unsigned_types", []Field{
+			Uint("uint", 42),
+			Uint8("uint8", 8),
+			Uint16("uint16", 16),
+			Uint32("uint32", 32),
+			Uint64("uint64", 64),
+		}},
+		{"float_types", []Field{
+			Float32("float32", 3.14),
+			Float64("float64", 3.14159),
+		}},
+		{"time_types", []Field{
+			Duration("duration", 5*time.Second),
+			Time("time", now),
+		}},
+		{"special_types", []Field{
+			Bool("bool", true),
+			String("string", "value"),
+			Err(errors.New("test")),
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf.Reset()
+			logger.InfoWith("test", tt.fields...)
+			if buf.Len() == 0 {
+				t.Errorf("%s: expected output", tt.name)
+			}
+		})
+	}
+}
+
 // ============================================================================
 // FORMAT TESTS
 // ============================================================================
 
-func TestLogFormatString(t *testing.T) {
-	tests := []struct {
-		format LogFormat
-		want   string
-	}{
-		{FormatText, "text"},
-		{FormatJSON, "json"},
-		{LogFormat(99), "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.format.String(), func(t *testing.T) {
-			if got := tt.format.String(); got != tt.want {
-				t.Errorf("String() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestLogLevelString(t *testing.T) {
-	tests := []struct {
-		level LogLevel
-		want  string
-	}{
-		{LevelDebug, "DEBUG"},
-		{LevelInfo, "INFO"},
-		{LevelWarn, "WARN"},
-		{LevelError, "ERROR"},
-		{LevelFatal, "FATAL"},
-		{LogLevel(99), "UNKNOWN"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.level.String(), func(t *testing.T) {
-			if got := tt.level.String(); got != tt.want {
-				t.Errorf("String() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
+// Note: TestLogFormatString and TestLogLevelString are in internal/types_test.go
+// to avoid duplication and keep type tests with the type definitions.
 
 func TestDefaultJSONOptions(t *testing.T) {
 	opts := DefaultJSONOptions()
@@ -1018,8 +1000,8 @@ func TestDefaultJSONOptions(t *testing.T) {
 	if opts.PrettyPrint {
 		t.Error("Default should not use pretty print")
 	}
-	if opts.Indent != DefaultJSONIndent {
-		t.Errorf("Default indent = %q, want %q", opts.Indent, DefaultJSONIndent)
+	if opts.Indent != defaultJSONIndent {
+		t.Errorf("Default indent = %q, want %q", opts.Indent, defaultJSONIndent)
 	}
 	if opts.FieldNames == nil {
 		t.Error("Default should have field names")
@@ -1492,26 +1474,6 @@ func TestConfigBuild(t *testing.T) {
 		}
 	})
 
-	t.Run("MustBuild", func(t *testing.T) {
-		cfg := DefaultConfig()
-		logger := Must(cfg)
-		if logger == nil {
-			t.Error("Must() should not return nil")
-		}
-	})
-
-	t.Run("MustBuildPanic", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("Must() with invalid config should panic")
-			}
-		}()
-
-		cfg := DefaultConfig()
-		cfg.Level = LogLevel(99) // Invalid level
-		Must(cfg)
-	})
-
 	t.Run("WithMultipleOutputs", func(t *testing.T) {
 		var buf1, buf2 bytes.Buffer
 		cfg := DefaultConfig()
@@ -1781,64 +1743,6 @@ func TestPackageLevelGenericLogFunctions(t *testing.T) {
 	}
 }
 
-func TestPackageLevelGenericLogCtxFunctions(t *testing.T) {
-	oldDefault := Default()
-	defer SetDefault(oldDefault)
-
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	cfg.ContextExtractors = []ContextExtractor{
-		func(ctx context.Context) []Field {
-			if traceID := ctx.Value("trace_id"); traceID != nil {
-				return []Field{String("trace_id", traceID.(string))}
-			}
-			return nil
-		},
-	}
-	logger, _ := New(cfg)
-	SetDefault(logger)
-
-	ctx := context.WithValue(context.Background(), "trace_id", "abc123")
-
-	tests := []struct {
-		name     string
-		fn       func()
-		expected string
-	}{
-		{
-			name:     "LogCtx",
-			fn:       func() { LogCtx(ctx, LevelInfo, "test logctx") },
-			expected: "test logctx",
-		},
-		{
-			name:     "LogfCtx",
-			fn:       func() { LogfCtx(ctx, LevelInfo, "test %s", "logfctx") },
-			expected: "test logfctx",
-		},
-		{
-			name:     "LogWithCtx",
-			fn:       func() { LogWithCtx(ctx, LevelInfo, "test logwithctx", String("key", "value")) },
-			expected: "test logwithctx",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.fn()
-			output := buf.String()
-			if !strings.Contains(output, tt.expected) {
-				t.Errorf("%s() output = %q, want to contain %q", tt.name, output, tt.expected)
-			}
-			if !strings.Contains(output, "trace_id") {
-				t.Errorf("%s() should contain context field trace_id", tt.name)
-			}
-		})
-	}
-}
-
 func TestPackageLevelIsEnabledFunctions(t *testing.T) {
 	oldDefault := Default()
 	defer SetDefault(oldDefault)
@@ -1983,58 +1887,6 @@ func TestPackageLevelFlush(t *testing.T) {
 	err := Flush()
 	if err != nil {
 		t.Errorf("Flush() returned error: %v", err)
-	}
-}
-
-func TestPackageLevelFormattedCtxFunctions(t *testing.T) {
-	oldDefault := Default()
-	defer SetDefault(oldDefault)
-
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	SetDefault(logger)
-
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		fn       func()
-		expected string
-	}{
-		{
-			name:     "DebugfCtx",
-			fn:       func() { DebugfCtx(ctx, "debug %s", "message") },
-			expected: "debug message",
-		},
-		{
-			name:     "InfofCtx",
-			fn:       func() { InfofCtx(ctx, "info %s", "message") },
-			expected: "info message",
-		},
-		{
-			name:     "WarnfCtx",
-			fn:       func() { WarnfCtx(ctx, "warn %s", "message") },
-			expected: "warn message",
-		},
-		{
-			name:     "ErrorfCtx",
-			fn:       func() { ErrorfCtx(ctx, "error %s", "message") },
-			expected: "error message",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.fn()
-			output := buf.String()
-			if !strings.Contains(output, tt.expected) {
-				t.Errorf("%s() output = %q, want to contain %q", tt.name, output, tt.expected)
-			}
-		})
 	}
 }
 

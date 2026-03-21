@@ -2,6 +2,9 @@ package dd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -491,4 +494,152 @@ func TestAuditLogger_ConcurrentMultipleTypes(t *testing.T) {
 	if totalByType != stats.TotalEvents {
 		t.Errorf("Sum of type counts (%d) != TotalEvents (%d)", totalByType, stats.TotalEvents)
 	}
+}
+
+// TestAuditLogger_WriteEventWithOutput tests the writeEvent function through the public API
+// by logging events with actual output, covering JSON and text formats.
+func TestAuditLogger_WriteEventWithOutput(t *testing.T) {
+	t.Run("JSON format with output", func(t *testing.T) {
+		tmpFile := filepath.Join(t.TempDir(), "audit_json.log")
+		f, err := os.Create(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer f.Close()
+
+		config := &AuditConfig{
+			Enabled:          true,
+			Output:           f,
+			BufferSize:       100,
+			IncludeTimestamp: true,
+			JSONFormat:       true,
+			MinimumSeverity:  AuditSeverityInfo,
+		}
+
+		al := NewAuditLogger(config)
+		defer al.Close()
+
+		al.Log(AuditEvent{
+			Type:     AuditEventSecurityViolation,
+			Message:  "test security event",
+			Pattern:  `\b\d{16}\b`,
+			Field:    "password",
+			Severity: AuditSeverityError,
+		})
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read the file content
+		content, err := os.ReadFile(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to read temp file: %v", err)
+		}
+		output := string(content)
+
+		// JSON output uses numeric type values
+		if !strings.Contains(output, `"type":3`) {
+			t.Errorf("Expected JSON type in output, got: %s", output)
+		}
+		if !strings.Contains(output, `"message":"test security event"`) {
+			t.Errorf("Expected JSON message in output, got: %s", output)
+		}
+		if !strings.Contains(output, `"pattern"`) {
+			t.Errorf("Expected JSON pattern field in output, got: %s", output)
+		}
+		if !strings.Contains(output, `"field":"password"`) {
+			t.Errorf("Expected JSON field in output, got: %s", output)
+		}
+	})
+
+	t.Run("Text format with output", func(t *testing.T) {
+		tmpFile := filepath.Join(t.TempDir(), "audit_text.log")
+		f, err := os.Create(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer f.Close()
+
+		config := &AuditConfig{
+			Enabled:          true,
+			Output:           f,
+			BufferSize:       100,
+			IncludeTimestamp: true,
+			JSONFormat:       false,
+			MinimumSeverity:  AuditSeverityInfo,
+		}
+
+		al := NewAuditLogger(config)
+		defer al.Close()
+
+		al.Log(AuditEvent{
+			Type:     AuditEventRateLimitExceeded,
+			Message:  "rate limit test",
+			Pattern:  "test-pattern",
+			Field:    "api_key",
+			Severity: AuditSeverityWarning,
+		})
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read the file content
+		content, err := os.ReadFile(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to read temp file: %v", err)
+		}
+		output := string(content)
+
+		if !strings.Contains(output, "RATE_LIMIT_EXCEEDED") {
+			t.Errorf("Expected type in output, got: %s", output)
+		}
+		if !strings.Contains(output, "rate limit test") {
+			t.Errorf("Expected message in output, got: %s", output)
+		}
+		if !strings.Contains(output, "pattern=test-pattern") {
+			t.Errorf("Expected pattern in output, got: %s", output)
+		}
+		if !strings.Contains(output, "field=api_key") {
+			t.Errorf("Expected field in output, got: %s", output)
+		}
+	})
+
+	t.Run("Text format without timestamp", func(t *testing.T) {
+		tmpFile := filepath.Join(t.TempDir(), "audit_notime.log")
+		f, err := os.Create(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to create temp file: %v", err)
+		}
+		defer f.Close()
+
+		config := &AuditConfig{
+			Enabled:          true,
+			Output:           f,
+			BufferSize:       100,
+			IncludeTimestamp: false,
+			JSONFormat:       false,
+			MinimumSeverity:  AuditSeverityInfo,
+		}
+
+		al := NewAuditLogger(config)
+		defer al.Close()
+
+		al.Log(AuditEvent{
+			Type:     AuditEventPathTraversalAttempt,
+			Message:  "path traversal test",
+			Severity: AuditSeverityWarning,
+		})
+
+		time.Sleep(100 * time.Millisecond)
+
+		// Read the file content
+		content, err := os.ReadFile(tmpFile)
+		if err != nil {
+			t.Fatalf("Failed to read temp file: %v", err)
+		}
+		output := string(content)
+
+		// Should have format: [TYPE] message (no timestamp prefix)
+		if !strings.Contains(output, "[PATH_TRAVERSAL_ATTEMPT] path traversal test") {
+			t.Errorf("Expected text format without timestamp, got: %s", output)
+		}
+	})
 }

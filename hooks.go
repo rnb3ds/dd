@@ -377,55 +377,61 @@ func (r *HookRegistry) ClearFor(event HookEvent) {
 	delete(r.hooks, event)
 }
 
-// HookBuilder provides a fluent interface for building hook registries.
-type HookBuilder struct {
-	registry *HookRegistry
+// HooksConfig provides a struct-based configuration for creating hook registries.
+// This follows the project's design guidelines favoring struct-based configuration
+// over fluent API patterns.
+//
+// Example:
+//
+//	cfg := HooksConfig{
+//	    BeforeLog: []Hook{myBeforeHook},
+//	    AfterLog:  []Hook{myAfterHook},
+//	    ErrorHandler: func(event HookEvent, hookCtx *HookContext, err error) {
+//	        log.Printf("hook error: %v", err)
+//	    },
+//	}
+//	registry := NewHooksFromConfig(cfg)
+type HooksConfig struct {
+	// BeforeLog hooks are called before a log message is written.
+	BeforeLog []Hook
+	// AfterLog hooks are called after a log message is successfully written.
+	AfterLog []Hook
+	// OnFilter hooks are called when sensitive data is filtered.
+	OnFilter []Hook
+	// OnRotate hooks are called when a log file is rotated.
+	OnRotate []Hook
+	// OnClose hooks are called when the logger is closed.
+	OnClose []Hook
+	// OnError hooks are called when a write error occurs.
+	OnError []Hook
+	// ErrorHandler handles errors that occur during hook execution.
+	ErrorHandler HookErrorHandler
 }
 
-// NewHookBuilder creates a new HookBuilder with an empty registry.
-func NewHookBuilder() *HookBuilder {
-	return &HookBuilder{
-		registry: NewHookRegistry(),
+// NewHooksFromConfig creates a HookRegistry from the configuration.
+// This is the recommended way to create a hook registry with multiple hooks.
+func NewHooksFromConfig(cfg HooksConfig) *HookRegistry {
+	registry := NewHookRegistry()
+	if cfg.ErrorHandler != nil {
+		registry.SetErrorHandler(cfg.ErrorHandler)
 	}
-}
-
-// BeforeLog adds a hook for the BeforeLog event.
-func (b *HookBuilder) BeforeLog(hook Hook) *HookBuilder {
-	b.registry.Add(HookBeforeLog, hook)
-	return b
-}
-
-// AfterLog adds a hook for the AfterLog event.
-func (b *HookBuilder) AfterLog(hook Hook) *HookBuilder {
-	b.registry.Add(HookAfterLog, hook)
-	return b
-}
-
-// OnFilter adds a hook for the OnFilter event.
-func (b *HookBuilder) OnFilter(hook Hook) *HookBuilder {
-	b.registry.Add(HookOnFilter, hook)
-	return b
-}
-
-// OnRotate adds a hook for the OnRotate event.
-func (b *HookBuilder) OnRotate(hook Hook) *HookBuilder {
-	b.registry.Add(HookOnRotate, hook)
-	return b
-}
-
-// OnClose adds a hook for the OnClose event.
-func (b *HookBuilder) OnClose(hook Hook) *HookBuilder {
-	b.registry.Add(HookOnClose, hook)
-	return b
-}
-
-// OnError adds a hook for the OnError event.
-func (b *HookBuilder) OnError(hook Hook) *HookBuilder {
-	b.registry.Add(HookOnError, hook)
-	return b
-}
-
-// Build returns the configured HookRegistry.
-func (b *HookBuilder) Build() *HookRegistry {
-	return b.registry
+	for _, hook := range cfg.BeforeLog {
+		registry.Add(HookBeforeLog, hook)
+	}
+	for _, hook := range cfg.AfterLog {
+		registry.Add(HookAfterLog, hook)
+	}
+	for _, hook := range cfg.OnFilter {
+		registry.Add(HookOnFilter, hook)
+	}
+	for _, hook := range cfg.OnRotate {
+		registry.Add(HookOnRotate, hook)
+	}
+	for _, hook := range cfg.OnClose {
+		registry.Add(HookOnClose, hook)
+	}
+	for _, hook := range cfg.OnError {
+		registry.Add(HookOnError, hook)
+	}
+	return registry
 }

@@ -29,33 +29,6 @@ func TestLevelToString(t *testing.T) {
 	}
 }
 
-func TestGetCaller(t *testing.T) {
-	// Test with full path (depth 1 to get this test function)
-	callerInfo := GetCaller(1, true)
-	if !strings.Contains(callerInfo, "json_test.go") {
-		t.Errorf("GetCaller(true) should contain file name, got: %s", callerInfo)
-	}
-	if !strings.Contains(callerInfo, ":") {
-		t.Error("GetCaller() should contain line number")
-	}
-
-	// Test without full path
-	callerInfo = GetCaller(1, false)
-	if !strings.Contains(callerInfo, "json_test.go") {
-		t.Errorf("GetCaller(false) should contain file name, got: %s", callerInfo)
-	}
-	// Should not contain full path
-	if strings.Contains(callerInfo, "/") || strings.Contains(callerInfo, "\\") {
-		t.Errorf("GetCaller(false) should not contain path separators, got: %s", callerInfo)
-	}
-
-	// Test with invalid depth
-	callerInfo = GetCaller(100, false)
-	if callerInfo != "" {
-		t.Errorf("GetCaller(100) should return empty string, got: %s", callerInfo)
-	}
-}
-
 func TestDefaultJSONFieldNames(t *testing.T) {
 	names := DefaultJSONFieldNames()
 

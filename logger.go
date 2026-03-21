@@ -17,7 +17,7 @@ import (
 var (
 	messagePool = sync.Pool{
 		New: func() any {
-			buf := make([]byte, 0, DefaultBufferSize)
+			buf := make([]byte, 0, defaultBufferSize)
 			return &buf
 		},
 	}
@@ -93,6 +93,8 @@ type Logger struct {
 	// contextExtractors stores the ContextExtractorRegistry for extracting
 	// fields from context. If nil, default extractors are used.
 	contextExtractors atomic.Value // stores *ContextExtractorRegistry
+	// contextExtractorsMu protects the Clone-Modify-Store sequence in AddContextExtractor
+	contextExtractorsMu sync.Mutex
 
 	// hooks stores the HookRegistry for lifecycle hooks.
 	hooks atomic.Value // stores *HookRegistry
@@ -153,27 +155,6 @@ func New(cfgs ...*Config) (*Logger, error) {
 	return cfgs[0].build()
 }
 
-// Must creates a new Logger and panics on error.
-// If no configuration is provided, default settings are used.
-//
-// Example:
-//
-//	// Simple usage with defaults
-//	logger := dd.Must()
-//	defer logger.Close()
-//
-//	// With custom configuration
-//	cfg := dd.DefaultConfig()
-//	cfg.Format = dd.FormatJSON
-//	logger := dd.Must(cfg)
-func Must(cfgs ...*Config) *Logger {
-	logger, err := New(cfgs...)
-	if err != nil {
-		panic("dd: failed to create logger: " + err.Error())
-	}
-	return logger
-}
-
 // newFromInternalConfig creates a Logger from the internal configuration.
 func newFromInternalConfig(config *internalConfig) (*Logger, error) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -193,7 +174,7 @@ func newFromInternalConfig(config *internalConfig) (*Logger, error) {
 	}
 
 	l := &Logger{
-		callerDepth:  DefaultCallerDepth,
+		callerDepth:  defaultCallerDepth,
 		fatalHandler: config.fatalHandler,
 		formatter:    internal.NewMessageFormatter(formatterConfig),
 		ctx:          ctx,
@@ -245,6 +226,52 @@ func newFromInternalConfig(config *internalConfig) (*Logger, error) {
 
 	return l, nil
 }
+
+// SetWriteErrorHandler sets a callback for handling write errors (thread-safe).
+// When a write operation fails, the handler is called with the writer and error.
+// If no handler is set, write errors are silently ignored.
+func (l *Logger) SetWriteErrorHandler(handler WriteErrorHandler) {
+	if handler != nil {
+		l.writeErrorHandler.Store(handler)
+	} else {
+		// atomic.Value cannot store nil, store a nil placeholder of the correct type
+		l.writeErrorHandler.Store(WriteErrorHandler(nil))
+	}
+}
+
+// getWriteErrorHandler returns the current write error handler (thread-safe).
+func (l *Logger) getWriteErrorHandler() WriteErrorHandler {
+	if v := l.writeErrorHandler.Load(); v != nil {
+		return v.(WriteErrorHandler)
+	}
+	return nil
+}
+
+// shouldLog checks if a message should be logged based on level and logger state
+func (l *Logger) shouldLog(level LogLevel) bool {
+	// Check dynamic level resolver first
+	if resolver := l.getLevelResolver(); resolver != nil {
+		// Use context.Background() as default to prevent nil pointer panics
+		effectiveLevel := resolver(context.Background())
+		if level < effectiveLevel || level > LevelFatal {
+			return false
+		}
+	} else {
+		// Use static level
+		currentLevel := LogLevel(l.level.Load())
+		if level < currentLevel || level > LevelFatal {
+			return false
+		}
+	}
+	if l.closed.Load() {
+		return false
+	}
+	return l.shouldSample()
+}
+
+// ============================================================================
+// Level Methods
+// ============================================================================
 
 // GetLevel returns the current log level (thread-safe).
 func (l *Logger) GetLevel() LogLevel {
@@ -325,54 +352,20 @@ func (l *Logger) SetLevelResolver(resolver LevelResolver) {
 // GetLevelResolver returns the current level resolver function.
 // Returns nil if no resolver is set.
 func (l *Logger) GetLevelResolver() LevelResolver {
+	return l.getLevelResolver()
+}
+
+// getLevelResolver safely returns the level resolver function.
+func (l *Logger) getLevelResolver() LevelResolver {
 	if ptr := l.levelResolver.Load(); ptr != nil {
 		return *ptr
 	}
 	return nil
 }
 
-// SetWriteErrorHandler sets a callback for handling write errors (thread-safe).
-// When a write operation fails, the handler is called with the writer and error.
-// If no handler is set, write errors are silently ignored.
-func (l *Logger) SetWriteErrorHandler(handler WriteErrorHandler) {
-	if handler != nil {
-		l.writeErrorHandler.Store(handler)
-	} else {
-		l.writeErrorHandler.Store(nil)
-	}
-}
-
-// getWriteErrorHandler returns the current write error handler (thread-safe).
-func (l *Logger) getWriteErrorHandler() WriteErrorHandler {
-	if v := l.writeErrorHandler.Load(); v != nil {
-		return v.(WriteErrorHandler)
-	}
-	return nil
-}
-
-// SetSecurityConfig atomically sets the security configuration (thread-safe).
-func (l *Logger) SetSecurityConfig(config *SecurityConfig) {
-	if config == nil {
-		config = DefaultSecurityConfig()
-	}
-	l.securityConfig.Store(config)
-}
-
-// GetSecurityConfig returns a copy of the current security configuration (thread-safe).
-// Returns DefaultSecurityConfig() if no security config has been set.
-// The returned config is a clone, so modifications do not affect the logger's config.
-// For internal use within the logger, use getSecurityConfig() which returns the original.
-func (l *Logger) GetSecurityConfig() *SecurityConfig {
-	config := l.securityConfig.Load()
-	if config == nil {
-		return DefaultSecurityConfig()
-	}
-	secConfig, ok := config.(*SecurityConfig)
-	if !ok {
-		return DefaultSecurityConfig()
-	}
-	return secConfig.Clone()
-}
+// ============================================================================
+// Context Extractor Methods
+// ============================================================================
 
 // AddContextExtractor adds a context extractor to the logger (thread-safe).
 // Extractors are called in order to extract fields from context during logging.
@@ -385,6 +378,9 @@ func (l *Logger) AddContextExtractor(extractor ContextExtractor) error {
 	if l.closed.Load() {
 		return ErrLoggerClosed
 	}
+
+	l.contextExtractorsMu.Lock()
+	defer l.contextExtractorsMu.Unlock()
 
 	// Load existing registry or create new one
 	var registry *ContextExtractorRegistry
@@ -399,14 +395,6 @@ func (l *Logger) AddContextExtractor(extractor ContextExtractor) error {
 	return nil
 }
 
-// MustAddContextExtractor adds a context extractor and panics on error.
-// This is useful for initialization code where failure should be fatal.
-func (l *Logger) MustAddContextExtractor(extractor ContextExtractor) {
-	if err := l.AddContextExtractor(extractor); err != nil {
-		panic(fmt.Sprintf("dd: failed to add context extractor: %v", err))
-	}
-}
-
 // SetContextExtractors replaces all context extractors with the provided list (thread-safe).
 // Pass no arguments to clear all extractors (which will use default behavior).
 // Returns ErrLoggerClosed if the logger is closed.
@@ -416,7 +404,8 @@ func (l *Logger) SetContextExtractors(extractors ...ContextExtractor) error {
 	}
 
 	if len(extractors) == 0 {
-		l.contextExtractors.Store(nil)
+		// atomic.Value cannot store nil, store an empty registry instead
+		l.contextExtractors.Store(NewContextExtractorRegistry())
 		return nil
 	}
 
@@ -426,14 +415,6 @@ func (l *Logger) SetContextExtractors(extractors ...ContextExtractor) error {
 	}
 	l.contextExtractors.Store(registry)
 	return nil
-}
-
-// MustSetContextExtractors sets context extractors and panics on error.
-// This is useful for initialization code where failure should be fatal.
-func (l *Logger) MustSetContextExtractors(extractors ...ContextExtractor) {
-	if err := l.SetContextExtractors(extractors...); err != nil {
-		panic(fmt.Sprintf("dd: failed to set context extractors: %v", err))
-	}
 }
 
 // GetContextExtractors returns a copy of the current context extractors (thread-safe).
@@ -451,6 +432,10 @@ func (l *Logger) GetContextExtractors() []ContextExtractor {
 	}
 	return nil
 }
+
+// ============================================================================
+// Hook Methods
+// ============================================================================
 
 // AddHook registers a hook for a specific event type (thread-safe).
 // Hooks are called in order during the logging lifecycle.
@@ -479,14 +464,6 @@ func (l *Logger) AddHook(event HookEvent, hook Hook) error {
 	return nil
 }
 
-// MustAddHook registers a hook and panics on error.
-// This is useful for initialization code where failure should be fatal.
-func (l *Logger) MustAddHook(event HookEvent, hook Hook) {
-	if err := l.AddHook(event, hook); err != nil {
-		panic(fmt.Sprintf("dd: failed to add hook: %v", err))
-	}
-}
-
 // SetHooks replaces the hook registry with the provided one (thread-safe).
 // Pass nil to clear all hooks.
 // Returns ErrLoggerClosed if the logger is closed.
@@ -499,20 +476,13 @@ func (l *Logger) SetHooks(registry *HookRegistry) error {
 	defer l.hooksMu.Unlock()
 
 	if registry == nil {
-		l.hooks.Store(nil)
+		// atomic.Value cannot store nil, store an empty registry instead
+		l.hooks.Store(NewHookRegistry())
 		return nil
 	}
 
 	l.hooks.Store(registry.Clone())
 	return nil
-}
-
-// MustSetHooks sets the hook registry and panics on error.
-// This is useful for initialization code where failure should be fatal.
-func (l *Logger) MustSetHooks(registry *HookRegistry) {
-	if err := l.SetHooks(registry); err != nil {
-		panic(fmt.Sprintf("dd: failed to set hooks: %v", err))
-	}
 }
 
 // GetHooks returns a copy of the current hook registry (thread-safe).
@@ -534,247 +504,9 @@ func (l *Logger) triggerHooks(ctx context.Context, hookCtx *HookContext) error {
 	return nil
 }
 
-// AddWriter adds a writer to the logger in a thread-safe manner.
-func (l *Logger) AddWriter(writer io.Writer) error {
-	if writer == nil {
-		return ErrNilWriter
-	}
-
-	if l.closed.Load() {
-		return ErrLoggerClosed
-	}
-
-	l.writersMu.Lock()
-	defer l.writersMu.Unlock()
-
-	// Load current writers slice
-	currentWriters := l.writersPtr.Load()
-	if currentWriters == nil {
-		return ErrLoggerClosed
-	}
-
-	if len(*currentWriters) >= MaxWriterCount {
-		return ErrMaxWritersExceeded
-	}
-
-	// Create new slice with the new writer added
-	newWriters := make([]io.Writer, len(*currentWriters)+1)
-	copy(newWriters, *currentWriters)
-	newWriters[len(*currentWriters)] = writer
-
-	// Atomically swap the pointer
-	l.writersPtr.Store(&newWriters)
-	return nil
-}
-
-// RemoveWriter removes a writer from the logger in a thread-safe manner.
-func (l *Logger) RemoveWriter(writer io.Writer) error {
-	if writer == nil {
-		return ErrNilWriter
-	}
-
-	if l.closed.Load() {
-		return ErrLoggerClosed
-	}
-
-	l.writersMu.Lock()
-	defer l.writersMu.Unlock()
-
-	// Load current writers slice
-	currentWriters := l.writersPtr.Load()
-	if currentWriters == nil {
-		return ErrLoggerClosed
-	}
-
-	writerCount := len(*currentWriters)
-	for i := 0; i < writerCount; i++ {
-		if (*currentWriters)[i] == writer {
-			// Create new slice without the removed writer
-			newWriters := make([]io.Writer, writerCount-1)
-			copy(newWriters, (*currentWriters)[:i])
-			copy(newWriters[i:], (*currentWriters)[i+1:])
-
-			// Atomically swap the pointer
-			l.writersPtr.Store(&newWriters)
-			return nil
-		}
-	}
-
-	return ErrWriterNotFound
-}
-
-// Close closes the logger and all associated resources (thread-safe).
-// If multiple writers fail to close, all errors are collected and returned.
-// Triggers OnClose hooks before closing writers.
-func (l *Logger) Close() error {
-	if !l.closed.CompareAndSwap(false, true) {
-		return nil
-	}
-
-	// Trigger OnClose hook
-	hookCtx := &HookContext{
-		Event:     HookOnClose,
-		Timestamp: time.Now(),
-	}
-	_ = l.triggerHooks(context.Background(), hookCtx)
-
-	l.cancel()
-
-	l.writersMu.Lock()
-	defer l.writersMu.Unlock()
-
-	// Load and clear writers atomically
-	currentWriters := l.writersPtr.Swap(nil)
-	if currentWriters == nil {
-		return nil
-	}
-
-	var errs []error
-	for _, writer := range *currentWriters {
-		if closer, ok := writer.(io.Closer); ok {
-			if writer != os.Stdout && writer != os.Stderr && writer != os.Stdin {
-				if err := closer.Close(); err != nil {
-					errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
-				}
-			}
-		}
-	}
-
-	return errors.Join(errs...)
-}
-
-// Shutdown gracefully closes the logger with a timeout.
-// This is the recommended way to close a logger in production environments.
-//
-// The method performs the following steps:
-//  1. Marks the logger as closed to prevent new log entries
-//  2. Triggers OnClose hooks with the provided context
-//  3. Waits for any in-flight operations to complete
-//  4. Flushes and closes all writers with the specified timeout
-//
-// If the timeout is exceeded, Shutdown returns a context.DeadlineExceeded error
-// along with any other errors that occurred during shutdown.
-//
-// Recommended usage:
-//
-//	logger, _ := dd.New(dd.DefaultConfig())
-//	defer func() {
-//	    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-//	    defer cancel()
-//	    if err := logger.Shutdown(ctx); err != nil {
-//	        fmt.Fprintf(os.Stderr, "Logger shutdown error: %v\n", err)
-//	    }
-//	}()
-func (l *Logger) Shutdown(ctx context.Context) error {
-	if !l.closed.CompareAndSwap(false, true) {
-		return nil // Already closed
-	}
-
-	// Create a done channel to signal completion
-	done := make(chan error, 1)
-
-	go func() {
-		// Trigger OnClose hook
-		hookCtx := &HookContext{
-			Event:     HookOnClose,
-			Timestamp: time.Now(),
-		}
-		_ = l.triggerHooks(ctx, hookCtx)
-
-		l.cancel()
-
-		l.writersMu.Lock()
-		defer l.writersMu.Unlock()
-
-		// Load and clear writers atomically
-		currentWriters := l.writersPtr.Swap(nil)
-		if currentWriters == nil {
-			done <- nil
-			return
-		}
-
-		var errs []error
-		for _, writer := range *currentWriters {
-			// Check context for cancellation
-			select {
-			case <-ctx.Done():
-				done <- ctx.Err()
-				return
-			default:
-			}
-
-			if closer, ok := writer.(io.Closer); ok {
-				if writer != os.Stdout && writer != os.Stderr && writer != os.Stdin {
-					if err := closer.Close(); err != nil {
-						errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
-					}
-				}
-			}
-		}
-
-		done <- errors.Join(errs...)
-	}()
-
-	// Wait for completion or timeout
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// shouldLog checks if a message should be logged based on level and logger state
-func (l *Logger) shouldLog(level LogLevel) bool {
-	// Check dynamic level resolver first
-	if resolver := l.getLevelResolver(); resolver != nil {
-		// Use context.Background() as default to prevent nil pointer panics
-		effectiveLevel := resolver(context.Background())
-		if level < effectiveLevel || level > LevelFatal {
-			return false
-		}
-	} else {
-		// Use static level
-		currentLevel := LogLevel(l.level.Load())
-		if level < currentLevel || level > LevelFatal {
-			return false
-		}
-	}
-	if l.closed.Load() {
-		return false
-	}
-	return l.shouldSample()
-}
-
-// shouldLogCtx checks if a log entry should be logged with context support.
-// If a level resolver is set, it uses the context for dynamic level determination.
-func (l *Logger) shouldLogCtx(ctx context.Context, level LogLevel) bool {
-	// Check dynamic level resolver first
-	if resolver := l.getLevelResolver(); resolver != nil {
-		effectiveLevel := resolver(ctx)
-		if level < effectiveLevel || level > LevelFatal {
-			return false
-		}
-	} else {
-		// Use static level
-		currentLevel := LogLevel(l.level.Load())
-		if level < currentLevel || level > LevelFatal {
-			return false
-		}
-	}
-	if l.closed.Load() {
-		return false
-	}
-	return l.shouldSample()
-}
-
-// getLevelResolver safely returns the level resolver function.
-func (l *Logger) getLevelResolver() LevelResolver {
-	if ptr := l.levelResolver.Load(); ptr != nil {
-		return *ptr
-	}
-	return nil
-}
+// ============================================================================
+// Sampling Methods
+// ============================================================================
 
 // shouldSample determines if a log message should be recorded based on sampling configuration.
 // Returns true if:
@@ -885,6 +617,34 @@ func (l *Logger) GetSampling() *SamplingConfig {
 	return state.config
 }
 
+// ============================================================================
+// Security Methods
+// ============================================================================
+
+// SetSecurityConfig atomically sets the security configuration (thread-safe).
+func (l *Logger) SetSecurityConfig(config *SecurityConfig) {
+	if config == nil {
+		config = DefaultSecurityConfig()
+	}
+	l.securityConfig.Store(config)
+}
+
+// GetSecurityConfig returns a copy of the current security configuration (thread-safe).
+// Returns DefaultSecurityConfig() if no security config has been set.
+// The returned config is a clone, so modifications do not affect the logger's config.
+// For internal use within the logger, use getSecurityConfig() which returns the original.
+func (l *Logger) GetSecurityConfig() *SecurityConfig {
+	config := l.securityConfig.Load()
+	if config == nil {
+		return DefaultSecurityConfig()
+	}
+	secConfig, ok := config.(*SecurityConfig)
+	if !ok {
+		return DefaultSecurityConfig()
+	}
+	return secConfig.Clone()
+}
+
 // getSecurityConfig returns the current security configuration (internal use).
 // This returns the original config pointer, not a clone, for efficiency.
 // For external access, use GetSecurityConfig() which returns a safe clone.
@@ -895,90 +655,6 @@ func (l *Logger) getSecurityConfig() *SecurityConfig {
 		}
 	}
 	return DefaultSecurityConfig()
-}
-
-// logEntry contains the data needed to write a log entry
-type logEntry struct {
-	msg            string
-	fields         []Field
-	originalFields []Field // fields before processing (for hooks)
-}
-
-// logCore is the internal implementation for all log methods.
-// It handles security filtering, hooks, formatting, writing, and fatal handling.
-func (l *Logger) logCore(level LogLevel, entry logEntry) {
-	// Trigger BeforeLog hook
-	hookCtx := &HookContext{
-		Event:          HookBeforeLog,
-		Level:          level,
-		Message:        entry.msg,
-		Fields:         entry.fields,
-		OriginalFields: entry.originalFields,
-		Timestamp:      time.Now(),
-	}
-	if err := l.triggerHooks(context.Background(), hookCtx); err != nil {
-		return // Hook aborted the log
-	}
-
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, entry.msg, toInternalFields(entry.fields))
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(context.Background(), hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
-}
-
-// Log logs a message at the specified level
-func (l *Logger) Log(level LogLevel, args ...any) {
-	if !l.shouldLog(level) {
-		return
-	}
-
-	msg := l.applyMessageSecurity(l.formatter.FormatArgsToString(args...))
-	l.logCore(level, logEntry{msg: msg})
-}
-
-// Logf logs a formatted message at the specified level
-func (l *Logger) Logf(level LogLevel, format string, args ...any) {
-	if !l.shouldLog(level) {
-		return
-	}
-
-	msg := l.applyMessageSecurity(fmt.Sprintf(format, args...))
-	l.logCore(level, logEntry{msg: msg})
-}
-
-// LogWith logs a structured message with fields at the specified level
-func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
-	if !l.shouldLog(level) {
-		return
-	}
-
-	// Only copy original fields if hooks are registered (they may need them)
-	var originalFields []Field
-	if l.hooks.Load() != nil && len(fields) > 0 {
-		originalFields = make([]Field, len(fields))
-		copy(originalFields, fields)
-	}
-
-	msg = l.applyMessageSecurity(msg)
-	processedFields := l.processFields(fields)
-
-	l.logCore(level, logEntry{
-		msg:            msg,
-		fields:         processedFields,
-		originalFields: originalFields,
-	})
-}
-
-// toInternalFields converts dd.Field slice to internal.Field slice.
-// Since Field is a type alias for internal.Field, we can use direct slice conversion.
-func toInternalFields(fields []Field) []internal.Field {
-	return fields
 }
 
 // processFields processes and filters structured fields
@@ -995,32 +671,19 @@ func (l *Logger) processFields(fields []Field) []Field {
 		return fields // Early return - no allocation
 	}
 
-	// Quick check: if no patterns and no sensitive keys, skip processing
-	if secConfig.SensitiveFilter.PatternCount() == 0 {
-		// Still need to check for sensitive keys
-		hasSensitiveKey := false
-		for _, field := range fields {
-			if internal.IsSensitiveKey(field.Key) {
-				hasSensitiveKey = true
-				break
-			}
-		}
-		if !hasSensitiveKey {
-			return fields // No patterns and no sensitive keys - return original
-		}
-	}
-
 	// First pass: check if any field actually needs filtering
 	// This avoids allocation when all values are non-sensitive
 	needsFiltering := false
+	hasPatterns := secConfig.SensitiveFilter.PatternCount() > 0
+
 	for _, field := range fields {
-		// Check if key is sensitive
+		// Check if key is sensitive (requires redaction regardless of patterns)
 		if internal.IsSensitiveKey(field.Key) {
 			needsFiltering = true
 			break
 		}
-		// Check if value is a string that might contain sensitive data
-		if _, ok := field.Value.(string); ok && secConfig.SensitiveFilter.PatternCount() > 0 {
+		// Check if value is a string that might contain sensitive data patterns
+		if _, ok := field.Value.(string); ok && hasPatterns {
 			needsFiltering = true
 			break
 		}
@@ -1129,28 +792,105 @@ func (l *Logger) GetFieldValidation() *FieldValidationConfig {
 	return l.getFieldValidation()
 }
 
-// handleFatal handles fatal log messages with timeout protection.
-// If Close() takes longer than DefaultFatalFlushTimeout, a warning is printed
-// and the program exits anyway to prevent indefinite hanging.
-func (l *Logger) handleFatal() {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = l.Close()
-	}()
+// ============================================================================
+// Writer Methods
+// ============================================================================
 
-	select {
-	case <-done:
-		// Close completed successfully
-	case <-time.After(DefaultFatalFlushTimeout):
-		fmt.Fprintln(os.Stderr, "[dd] Warning: logger close timed out after 5 seconds")
+// AddWriter adds a writer to the logger in a thread-safe manner.
+func (l *Logger) AddWriter(writer io.Writer) error {
+	if writer == nil {
+		return ErrNilWriter
 	}
 
-	if l.fatalHandler != nil {
-		l.fatalHandler()
-	} else {
-		os.Exit(1)
+	if l.closed.Load() {
+		return ErrLoggerClosed
 	}
+
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
+
+	// Load current writers slice
+	currentWriters := l.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrLoggerClosed
+	}
+
+	if len(*currentWriters) >= maxWriterCount {
+		return ErrMaxWritersExceeded
+	}
+
+	// Create new slice with the new writer added
+	newWriters := make([]io.Writer, len(*currentWriters)+1)
+	copy(newWriters, *currentWriters)
+	newWriters[len(*currentWriters)] = writer
+
+	// Atomically swap the pointer
+	l.writersPtr.Store(&newWriters)
+	return nil
+}
+
+// RemoveWriter removes a writer from the logger in a thread-safe manner.
+func (l *Logger) RemoveWriter(writer io.Writer) error {
+	if writer == nil {
+		return ErrNilWriter
+	}
+
+	if l.closed.Load() {
+		return ErrLoggerClosed
+	}
+
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
+
+	// Load current writers slice
+	currentWriters := l.writersPtr.Load()
+	if currentWriters == nil {
+		return ErrLoggerClosed
+	}
+
+	writerCount := len(*currentWriters)
+	for i := 0; i < writerCount; i++ {
+		if (*currentWriters)[i] == writer {
+			// Create new slice without the removed writer
+			newWriters := make([]io.Writer, writerCount-1)
+			copy(newWriters, (*currentWriters)[:i])
+			copy(newWriters[i:], (*currentWriters)[i+1:])
+
+			// Atomically swap the pointer
+			l.writersPtr.Store(&newWriters)
+			return nil
+		}
+	}
+
+	return ErrWriterNotFound
+}
+
+// WriterCount returns the number of registered writers (thread-safe).
+func (l *Logger) WriterCount() int {
+	writersPtr := l.writersPtr.Load()
+	if writersPtr == nil {
+		return 0
+	}
+	return len(*writersPtr)
+}
+
+// Flush flushes all buffered writers (thread-safe).
+// Writers that implement Flusher interface will be flushed.
+func (l *Logger) Flush() error {
+	writersPtr := l.writersPtr.Load()
+	if writersPtr == nil {
+		return nil
+	}
+
+	var firstErr error
+	for _, w := range *writersPtr {
+		if flusher, ok := w.(Flusher); ok {
+			if err := flusher.Flush(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // writeMessage writes a message to all configured writers
@@ -1162,19 +902,19 @@ func (l *Logger) writeMessage(message string) {
 	bufPtr := messagePool.Get().(*[]byte)
 	buf := *bufPtr
 	defer func() {
-		if cap(buf) <= MaxBufferSize {
+		if cap(buf) <= maxBufferSize {
 			*bufPtr = buf[:0]
 		} else {
 			// Reset to default capacity to avoid holding large buffers in the pool
 			// This prevents memory leaks while still returning the pointer to the pool
-			*bufPtr = make([]byte, 0, DefaultBufferSize)
+			*bufPtr = make([]byte, 0, defaultBufferSize)
 		}
 		messagePool.Put(bufPtr)
 	}()
 
 	needed := len(message) + 1
 	if cap(buf) < needed {
-		buf = make([]byte, 0, max(needed, DefaultBufferSize))
+		buf = make([]byte, 0, max(needed, defaultBufferSize))
 	} else {
 		buf = buf[:0]
 	}
@@ -1221,223 +961,153 @@ func (l *Logger) handleWriteError(writer io.Writer, err error) {
 		Writer:    writer,
 		Timestamp: time.Now(),
 	}
-	_ = l.triggerHooks(context.Background(), hookCtx)
+	_ = l.triggerHooks(l.ctx, hookCtx)
 }
 
-func (l *Logger) Debug(args ...any) { l.Log(LevelDebug, args...) }
-func (l *Logger) Info(args ...any)  { l.Log(LevelInfo, args...) }
-func (l *Logger) Warn(args ...any)  { l.Log(LevelWarn, args...) }
-func (l *Logger) Error(args ...any) { l.Log(LevelError, args...) }
+// ============================================================================
+// Lifecycle Methods
+// ============================================================================
 
-// Fatal logs a message at FATAL level and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use Error() with custom logic.
-func (l *Logger) Fatal(args ...any) { l.Log(LevelFatal, args...) }
-
-func (l *Logger) Debugf(format string, args ...any) { l.Logf(LevelDebug, format, args...) }
-func (l *Logger) Infof(format string, args ...any)  { l.Logf(LevelInfo, format, args...) }
-func (l *Logger) Warnf(format string, args ...any)  { l.Logf(LevelWarn, format, args...) }
-func (l *Logger) Errorf(format string, args ...any) { l.Logf(LevelError, format, args...) }
-
-// Fatalf logs a formatted message at FATAL level and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use Errorf() with custom logic.
-func (l *Logger) Fatalf(format string, args ...any) { l.Logf(LevelFatal, format, args...) }
-
-func (l *Logger) DebugWith(msg string, fields ...Field) { l.LogWith(LevelDebug, msg, fields...) }
-func (l *Logger) InfoWith(msg string, fields ...Field)  { l.LogWith(LevelInfo, msg, fields...) }
-func (l *Logger) WarnWith(msg string, fields ...Field)  { l.LogWith(LevelWarn, msg, fields...) }
-func (l *Logger) ErrorWith(msg string, fields ...Field) { l.LogWith(LevelError, msg, fields...) }
-
-// extractContextFields extracts tracing fields from context using registered extractors.
-// If no custom extractors are registered, uses default extractors for trace_id, span_id, request_id.
-func (l *Logger) extractContextFields(ctx context.Context) []Field {
-	if ctx == nil {
+// Close closes the logger and all associated resources (thread-safe).
+// If multiple writers fail to close, all errors are collected and returned.
+// Triggers OnClose hooks before closing writers.
+func (l *Logger) Close() error {
+	if !l.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
-	// Check if custom extractors are registered
-	if v := l.contextExtractors.Load(); v != nil {
-		registry := v.(*ContextExtractorRegistry)
-		return registry.Extract(ctx)
-	}
-
-	// Fall back to default extractors
-	return DefaultContextExtractorRegistry().Extract(ctx)
-}
-
-// LogCtx logs a message at the specified level with context support.
-func (l *Logger) LogCtx(ctx context.Context, level LogLevel, args ...any) {
-	if !l.shouldLogCtx(ctx, level) {
-		return
-	}
-
-	msg := l.formatter.FormatArgsToString(args...)
-	msg = l.applyMessageSecurity(msg)
-	fields := l.extractContextFields(ctx)
-
-	// Trigger BeforeLog hook
+	// Trigger OnClose hook
 	hookCtx := &HookContext{
-		Event:     HookBeforeLog,
-		Level:     level,
-		Message:   msg,
-		Fields:    fields,
+		Event:     HookOnClose,
 		Timestamp: time.Now(),
 	}
-	if err := l.triggerHooks(ctx, hookCtx); err != nil {
-		return // Hook aborted the log
+	_ = l.triggerHooks(context.Background(), hookCtx)
+
+	l.cancel()
+
+	l.writersMu.Lock()
+	defer l.writersMu.Unlock()
+
+	// Load and clear writers atomically
+	currentWriters := l.writersPtr.Swap(nil)
+	if currentWriters == nil {
+		return nil
 	}
 
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(fields))
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(ctx, hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
-}
-
-// LogfCtx logs a formatted message with context support.
-func (l *Logger) LogfCtx(ctx context.Context, level LogLevel, format string, args ...any) {
-	if !l.shouldLogCtx(ctx, level) {
-		return
+	var errs []error
+	for _, writer := range *currentWriters {
+		if err := closeWriter(writer); err != nil {
+			errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
+		}
 	}
 
-	msg := fmt.Sprintf(format, args...)
-	msg = l.applyMessageSecurity(msg)
-	fields := l.extractContextFields(ctx)
-
-	// Trigger BeforeLog hook
-	hookCtx := &HookContext{
-		Event:     HookBeforeLog,
-		Level:     level,
-		Message:   msg,
-		Fields:    fields,
-		Timestamp: time.Now(),
-	}
-	if err := l.triggerHooks(ctx, hookCtx); err != nil {
-		return // Hook aborted the log
-	}
-
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(fields))
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(ctx, hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
+	return errors.Join(errs...)
 }
 
-// LogWithCtx logs a structured message with fields and context support.
-func (l *Logger) LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field) {
-	if !l.shouldLogCtx(ctx, level) {
-		return
+// Shutdown gracefully closes the logger with a timeout.
+// This is the recommended way to close a logger in production environments.
+//
+// The method performs the following steps:
+//  1. Marks the logger as closed to prevent new log entries
+//  2. Triggers OnClose hooks with the provided context
+//  3. Waits for any in-flight operations to complete
+//  4. Flushes and closes all writers with the specified timeout
+//
+// If the timeout is exceeded, Shutdown returns a context.DeadlineExceeded error
+// along with any other errors that occurred during shutdown.
+//
+// Recommended usage:
+//
+//	logger, _ := dd.New(dd.DefaultConfig())
+//	defer func() {
+//	    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+//	    defer cancel()
+//	    if err := logger.Shutdown(ctx); err != nil {
+//	        fmt.Fprintf(os.Stderr, "Logger shutdown error: %v\n", err)
+//	    }
+//	}()
+func (l *Logger) Shutdown(ctx context.Context) error {
+	if !l.closed.CompareAndSwap(false, true) {
+		return nil // Already closed
 	}
 
-	// Save original fields before processing
-	originalFields := make([]Field, len(fields))
-	copy(originalFields, fields)
+	// Create a done channel to signal completion
+	done := make(chan error, 1)
 
-	msg = l.applyMessageSecurity(msg)
-	processedFields := l.processFields(fields)
-	contextFields := l.extractContextFields(ctx)
-	allFields := append(contextFields, processedFields...)
+	go func() {
+		// Trigger OnClose hook
+		hookCtx := &HookContext{
+			Event:     HookOnClose,
+			Timestamp: time.Now(),
+		}
+		_ = l.triggerHooks(ctx, hookCtx)
 
-	// Trigger BeforeLog hook
-	hookCtx := &HookContext{
-		Event:          HookBeforeLog,
-		Level:          level,
-		Message:        msg,
-		Fields:         allFields,
-		OriginalFields: originalFields,
-		Timestamp:      time.Now(),
+		l.cancel()
+
+		l.writersMu.Lock()
+		defer l.writersMu.Unlock()
+
+		// Load and clear writers atomically
+		currentWriters := l.writersPtr.Swap(nil)
+		if currentWriters == nil {
+			done <- nil
+			return
+		}
+
+		var errs []error
+		for _, writer := range *currentWriters {
+			// Check context for cancellation
+			select {
+			case <-ctx.Done():
+				done <- ctx.Err()
+				return
+			default:
+			}
+
+			if err := closeWriter(writer); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close writer: %w", err))
+			}
+		}
+
+		done <- errors.Join(errs...)
+	}()
+
+	// Wait for completion or timeout
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	if err := l.triggerHooks(ctx, hookCtx); err != nil {
-		return // Hook aborted the log
-	}
-
-	message := l.formatter.FormatWithMessage(level, l.callerDepth, msg, toInternalFields(allFields))
-	l.writeMessage(l.applySizeLimit(message))
-
-	// Trigger AfterLog hook
-	hookCtx.Event = HookAfterLog
-	_ = l.triggerHooks(ctx, hookCtx)
-
-	if level == LevelFatal {
-		l.handleFatal()
-	}
 }
-
-// Context-aware convenience methods
-func (l *Logger) DebugCtx(ctx context.Context, args ...any) { l.LogCtx(ctx, LevelDebug, args...) }
-func (l *Logger) InfoCtx(ctx context.Context, args ...any)  { l.LogCtx(ctx, LevelInfo, args...) }
-func (l *Logger) WarnCtx(ctx context.Context, args ...any)  { l.LogCtx(ctx, LevelWarn, args...) }
-func (l *Logger) ErrorCtx(ctx context.Context, args ...any) { l.LogCtx(ctx, LevelError, args...) }
-
-func (l *Logger) DebugfCtx(ctx context.Context, format string, args ...any) {
-	l.LogfCtx(ctx, LevelDebug, format, args...)
-}
-func (l *Logger) InfofCtx(ctx context.Context, format string, args ...any) {
-	l.LogfCtx(ctx, LevelInfo, format, args...)
-}
-func (l *Logger) WarnfCtx(ctx context.Context, format string, args ...any) {
-	l.LogfCtx(ctx, LevelWarn, format, args...)
-}
-func (l *Logger) ErrorfCtx(ctx context.Context, format string, args ...any) {
-	l.LogfCtx(ctx, LevelError, format, args...)
-}
-
-func (l *Logger) DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
-	l.LogWithCtx(ctx, LevelDebug, msg, fields...)
-}
-func (l *Logger) InfoWithCtx(ctx context.Context, msg string, fields ...Field) {
-	l.LogWithCtx(ctx, LevelInfo, msg, fields...)
-}
-func (l *Logger) WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
-	l.LogWithCtx(ctx, LevelWarn, msg, fields...)
-}
-func (l *Logger) ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
-	l.LogWithCtx(ctx, LevelError, msg, fields...)
-}
-
-// FatalCtx logs a message at FATAL level with context and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorCtx() with custom logic.
-func (l *Logger) FatalCtx(ctx context.Context, args ...any) {
-	l.LogCtx(ctx, LevelFatal, args...)
-}
-
-// FatalfCtx logs a formatted message at FATAL level with context and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorfCtx() with custom logic.
-func (l *Logger) FatalfCtx(ctx context.Context, format string, args ...any) {
-	l.LogfCtx(ctx, LevelFatal, format, args...)
-}
-
-// FatalWithCtx logs a structured message at FATAL level with context and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorWithCtx() with custom logic.
-func (l *Logger) FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
-	l.LogWithCtx(ctx, LevelFatal, msg, fields...)
-}
-
-// FatalWith logs a structured message at FATAL level and terminates the program via os.Exit(1).
-// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorWith() with custom logic.
-func (l *Logger) FatalWith(msg string, fields ...Field) { l.LogWith(LevelFatal, msg, fields...) }
 
 // IsClosed returns true if the logger has been closed (thread-safe).
 func (l *Logger) IsClosed() bool {
 	return l.closed.Load()
 }
 
-// WriterCount returns the number of registered writers (thread-safe).
-func (l *Logger) WriterCount() int {
-	writersPtr := l.writersPtr.Load()
-	if writersPtr == nil {
-		return 0
+// handleFatal handles fatal log messages with timeout protection.
+// If Close() takes longer than defaultFatalFlushTimeout, a warning is printed
+// and the program exits anyway to prevent indefinite hanging.
+func (l *Logger) handleFatal() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = l.Close()
+	}()
+
+	select {
+	case <-done:
+		// Close completed successfully
+	case <-time.After(defaultFatalFlushTimeout):
+		fmt.Fprintln(os.Stderr, "[dd] Warning: logger close timed out after 5 seconds")
 	}
-	return len(*writersPtr)
+
+	if l.fatalHandler != nil {
+		l.fatalHandler()
+	} else {
+		os.Exit(1)
+	}
 }
 
 // ActiveFilterGoroutines returns the number of currently active filter goroutines
@@ -1479,24 +1149,129 @@ func (l *Logger) WaitForFilterGoroutines(timeout time.Duration) bool {
 	return secConfig.SensitiveFilter.WaitForGoroutines(timeout)
 }
 
-// Flush flushes all buffered writers (thread-safe).
-// Writers that implement Flusher interface will be flushed.
-func (l *Logger) Flush() error {
-	writersPtr := l.writersPtr.Load()
-	if writersPtr == nil {
-		return nil
-	}
+// ============================================================================
+// Log Methods
+// ============================================================================
 
-	var firstErr error
-	for _, w := range *writersPtr {
-		if flusher, ok := w.(Flusher); ok {
-			if err := flusher.Flush(); err != nil && firstErr == nil {
-				firstErr = err
-			}
+// logEntry contains the data needed to write a log entry
+type logEntry struct {
+	msg            string
+	fields         []Field
+	originalFields []Field // fields before processing (for hooks)
+}
+
+// logCore is the internal implementation for all log methods.
+// It handles security filtering, hooks, formatting, writing, and fatal handling.
+func (l *Logger) logCore(level LogLevel, entry logEntry) {
+	l.logCoreWithDepth(level, entry, 0)
+}
+
+// logCoreWithDepth is like logCore but accepts an additional caller depth offset.
+// This is used by LoggerEntry to skip the extra stack frames introduced by the entry wrapper.
+func (l *Logger) logCoreWithDepth(level LogLevel, entry logEntry, extraDepth int) {
+	// Fast path: check if hooks exist before allocating HookContext
+	hasHooks := l.hooks.Load() != nil
+
+	var hookCtx *HookContext
+	if hasHooks {
+		// Only allocate HookContext and call time.Now() when hooks are registered
+		hookCtx = &HookContext{
+			Event:          HookBeforeLog,
+			Level:          level,
+			Message:        entry.msg,
+			Fields:         entry.fields,
+			OriginalFields: entry.originalFields,
+			Timestamp:      time.Now(),
+		}
+		if err := l.triggerHooks(context.Background(), hookCtx); err != nil {
+			return // Hook aborted the log
 		}
 	}
-	return firstErr
+
+	callerDepth := l.callerDepth + extraDepth
+	message := l.formatter.FormatWithMessage(level, callerDepth, entry.msg, entry.fields)
+	l.writeMessage(l.applySizeLimit(message))
+
+	// Trigger AfterLog hook (only if hooks exist)
+	if hasHooks {
+		hookCtx.Event = HookAfterLog
+		_ = l.triggerHooks(context.Background(), hookCtx)
+	}
+
+	if level == LevelFatal {
+		l.handleFatal()
+	}
 }
+
+// Log logs a message at the specified level
+func (l *Logger) Log(level LogLevel, args ...any) {
+	if !l.shouldLog(level) {
+		return
+	}
+
+	msg := l.applyMessageSecurity(l.formatter.FormatArgsToString(args...))
+	l.logCore(level, logEntry{msg: msg})
+}
+
+// Logf logs a formatted message at the specified level
+func (l *Logger) Logf(level LogLevel, format string, args ...any) {
+	if !l.shouldLog(level) {
+		return
+	}
+
+	msg := l.applyMessageSecurity(fmt.Sprintf(format, args...))
+	l.logCore(level, logEntry{msg: msg})
+}
+
+// LogWith logs a structured message with fields at the specified level
+func (l *Logger) LogWith(level LogLevel, msg string, fields ...Field) {
+	if !l.shouldLog(level) {
+		return
+	}
+
+	// Only copy original fields if hooks are registered (they may need them)
+	var originalFields []Field
+	if l.hooks.Load() != nil && len(fields) > 0 {
+		originalFields = make([]Field, len(fields))
+		copy(originalFields, fields)
+	}
+
+	msg = l.applyMessageSecurity(msg)
+	processedFields := l.processFields(fields)
+
+	l.logCore(level, logEntry{
+		msg:            msg,
+		fields:         processedFields,
+		originalFields: originalFields,
+	})
+}
+
+func (l *Logger) Debug(args ...any) { l.Log(LevelDebug, args...) }
+func (l *Logger) Info(args ...any)  { l.Log(LevelInfo, args...) }
+func (l *Logger) Warn(args ...any)  { l.Log(LevelWarn, args...) }
+func (l *Logger) Error(args ...any) { l.Log(LevelError, args...) }
+
+// Fatal logs a message at FATAL level and terminates the program via os.Exit(1).
+// WARNING: defer statements will NOT execute. For graceful shutdown, use Error() with custom logic.
+func (l *Logger) Fatal(args ...any) { l.Log(LevelFatal, args...) }
+
+func (l *Logger) Debugf(format string, args ...any) { l.Logf(LevelDebug, format, args...) }
+func (l *Logger) Infof(format string, args ...any)  { l.Logf(LevelInfo, format, args...) }
+func (l *Logger) Warnf(format string, args ...any)  { l.Logf(LevelWarn, format, args...) }
+func (l *Logger) Errorf(format string, args ...any) { l.Logf(LevelError, format, args...) }
+
+// Fatalf logs a formatted message at FATAL level and terminates the program via os.Exit(1).
+// WARNING: defer statements will NOT execute. For graceful shutdown, use Errorf() with custom logic.
+func (l *Logger) Fatalf(format string, args ...any) { l.Logf(LevelFatal, format, args...) }
+
+func (l *Logger) DebugWith(msg string, fields ...Field) { l.LogWith(LevelDebug, msg, fields...) }
+func (l *Logger) InfoWith(msg string, fields ...Field)  { l.LogWith(LevelInfo, msg, fields...) }
+func (l *Logger) WarnWith(msg string, fields ...Field)  { l.LogWith(LevelWarn, msg, fields...) }
+func (l *Logger) ErrorWith(msg string, fields ...Field) { l.LogWith(LevelError, msg, fields...) }
+
+// FatalWith logs a structured message at FATAL level and terminates the program via os.Exit(1).
+// WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorWith() with custom logic.
+func (l *Logger) FatalWith(msg string, fields ...Field) { l.LogWith(LevelFatal, msg, fields...) }
 
 // fmt package replacement methods - output via logger's writers with caller info
 //
@@ -1506,18 +1281,25 @@ func (l *Logger) Flush() error {
 //	dd.Print()      -> writes directly to stdout WITHOUT security filtering (debug only)
 //
 // Always use logger.Print/Printf/Println for production logging.
+//
+// DESIGN NOTE: Print() and Println() behave identically in this library.
+// Unlike the standard fmt package where Println adds spaces and newline while Print does not,
+// both methods here produce identical output because the underlying Log() method
+// always adds a trailing newline. This is intentional for consistency with the
+// structured logging pattern where all log entries end with a newline.
 
 // Print writes to configured writers with caller info and newline.
 // Uses LevelInfo for filtering. Arguments are joined with spaces.
 // Applies sensitive data filtering based on SecurityConfig.
-// Note: Both Print() and Println() behave identically because Log() already adds a newline.
 func (l *Logger) Print(args ...any) {
 	l.Log(LevelInfo, args...)
 }
 
-// Println writes to configured writers with caller info, spaces between operands, and a newline.
+// Println writes to configured writers with caller info and newline.
 // Uses LevelInfo for filtering. Applies sensitive data filtering based on SecurityConfig.
-// Note: Behaves identically to Print() because Log() already adds a newline.
+//
+// Note: Behaves identically to Print() because the underlying Log() method
+// always adds a trailing newline. This differs from fmt.Println behavior.
 func (l *Logger) Println(args ...any) {
 	l.Log(LevelInfo, args...)
 }
@@ -1539,28 +1321,45 @@ func (l *Logger) Text(data ...any) {
 	internal.OutputTextData(os.Stdout, data...)
 }
 
+// Textf outputs formatted text to stdout for debugging.
 func (l *Logger) Textf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
 	fmt.Fprintln(os.Stdout, formatted)
 }
 
+// JSON outputs data as JSON to stdout for debugging.
 func (l *Logger) JSON(data ...any) {
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
+	caller := internal.GetCaller(debugVisualizationDepth, false)
 	internal.OutputJSON(os.Stdout, caller, data...)
 }
 
+// JSONF outputs formatted JSON to stdout for debugging.
 func (l *Logger) JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	caller := internal.GetCaller(DebugVisualizationDepth, false)
+	caller := internal.GetCaller(debugVisualizationDepth, false)
 	internal.OutputJSON(os.Stdout, caller, formatted)
 }
 
+// ============================================================================
+// Global Logger State and Functions
+// ============================================================================
+
+// errNoInit is a sentinel error indicating no initialization error occurred.
+// Used because atomic.Value cannot store nil values.
+var errNoInit = errors.New("")
+
+// Global logger state variables
 var (
 	defaultLogger       atomic.Pointer[Logger]
 	defaultOnce         sync.Once
-	defaultInitErr      atomic.Value // stores error from initialization
+	defaultInitErr      atomic.Value // stores error from initialization (errNoInit means no error)
 	defaultUsedFallback atomic.Bool  // true if fallback logger was created
 )
+
+func init() {
+	// Initialize with no-error state (atomic.Value cannot be empty)
+	defaultInitErr.Store(errNoInit)
+}
 
 // DefaultInitError returns the error that occurred during default logger initialization.
 // Returns nil if initialization was successful or hasn't occurred yet.
@@ -1574,7 +1373,11 @@ var (
 //	}
 func DefaultInitError() error {
 	if v := defaultInitErr.Load(); v != nil {
-		return v.(error)
+		err := v.(error)
+		if err == errNoInit {
+			return nil
+		}
+		return err
 	}
 	return nil
 }
@@ -1630,28 +1433,24 @@ func Default() *Logger {
 				fmt.Fprintf(os.Stderr, "[dd] WARNING: Default logger initialization failed: %v\n", err)
 				fmt.Fprintln(os.Stderr, "[dd] WARNING: Using fallback logger with stderr output")
 
-				// Create fallback logger with proper initialization if New() fails
+				// Create fallback logger using standard initialization path
+				// This ensures all future initialization logic is included
 				fallbackCfg := defaultConfig()
-				ctx, cancel := context.WithCancel(context.Background())
-				fallbackWriters := []io.Writer{os.Stderr}
-				formatterConfig := &internal.FormatterConfig{
-					Format:        internal.LogFormat(fallbackCfg.Format),
-					TimeFormat:    fallbackCfg.TimeFormat,
-					IncludeTime:   fallbackCfg.IncludeTime,
-					IncludeLevel:  fallbackCfg.IncludeLevel,
-					FullPath:      fallbackCfg.FullPath,
-					DynamicCaller: fallbackCfg.DynamicCaller,
-					JSON:          fallbackCfg.JSON,
+				fallbackInternalCfg := &internalConfig{
+					level:          fallbackCfg.Level,
+					format:         fallbackCfg.Format,
+					timeFormat:     fallbackCfg.TimeFormat,
+					includeTime:    fallbackCfg.IncludeTime,
+					includeLevel:   fallbackCfg.IncludeLevel,
+					fullPath:       fallbackCfg.FullPath,
+					dynamicCaller:  fallbackCfg.DynamicCaller,
+					writers:        []io.Writer{os.Stderr},
+					json:           fallbackCfg.JSON,
+					securityConfig: fallbackCfg.Security,
+					fatalHandler:   fallbackCfg.FatalHandler,
 				}
-				logger = &Logger{
-					callerDepth: DefaultCallerDepth,
-					formatter:   internal.NewMessageFormatter(formatterConfig),
-					ctx:         ctx,
-					cancel:      cancel,
-				}
-				logger.writersPtr.Store(&fallbackWriters)
-				logger.level.Store(int32(fallbackCfg.Level))
-				logger.securityConfig.Store(fallbackCfg.Security)
+				// newFromInternalConfig always returns nil error, so we can safely ignore it
+				logger, _ = newFromInternalConfig(fallbackInternalCfg)
 			}
 			defaultLogger.Store(logger)
 		}
@@ -1672,7 +1471,7 @@ func SetDefault(logger *Logger) {
 
 	if oldLogger != nil {
 		go func() {
-			time.Sleep(DefaultLoggerCloseDelay)
+			time.Sleep(defaultLoggerCloseDelay)
 			_ = oldLogger.Close()
 		}()
 	}
@@ -1702,29 +1501,21 @@ func InitDefault(cfg *Config) error {
 	oldLogger := defaultLogger.Swap(logger)
 	if oldLogger != nil {
 		go func() {
-			time.Sleep(DefaultLoggerCloseDelay)
+			time.Sleep(defaultLoggerCloseDelay)
 			_ = oldLogger.Close()
 		}()
 	}
 
 	// Clear any previous initialization error
-	defaultInitErr.Store(nil)
+	defaultInitErr.Store(errNoInit)
 	defaultUsedFallback.Store(false)
 
 	return nil
 }
 
-// MustInitDefault initializes the default logger and panics on error.
-// This is useful for initialization code where failure should be fatal.
-//
-// Example:
-//
-//	dd.MustInitDefault(dd.DevelopmentConfig())
-func MustInitDefault(cfg *Config) {
-	if err := InitDefault(cfg); err != nil {
-		panic("dd: failed to initialize default logger: " + err.Error())
-	}
-}
+// ============================================================================
+// Package-level Logging Functions (use default logger)
+// ============================================================================
 
 func Debug(args ...any) { Default().Log(LevelDebug, args...) }
 func Info(args ...any)  { Default().Log(LevelInfo, args...) }
@@ -1745,11 +1536,9 @@ func Errorf(format string, args ...any) { Default().Logf(LevelError, format, arg
 func Fatalf(format string, args ...any) { Default().Logf(LevelFatal, format, args...) }
 
 // SetLevel sets the log level for the default logger.
-func SetLevel(level LogLevel) {
-	if err := Default().SetLevel(level); err != nil {
-		// Fallback to stderr since logger might not be available
-		fmt.Fprintf(os.Stderr, "Failed to set log level: %v\n", err)
-	}
+// Returns ErrInvalidLevel if the level is outside the valid range [LevelDebug, LevelFatal].
+func SetLevel(level LogLevel) error {
+	return Default().SetLevel(level)
 }
 
 // GetLevel returns the current log level of the default logger.
@@ -1772,21 +1561,6 @@ func Logf(level LogLevel, format string, args ...any) {
 // LogWith logs a structured message at the specified level using the default logger.
 func LogWith(level LogLevel, msg string, fields ...Field) {
 	Default().LogWith(level, msg, fields...)
-}
-
-// LogCtx logs a message at the specified level with context using the default logger.
-func LogCtx(ctx context.Context, level LogLevel, args ...any) {
-	Default().LogCtx(ctx, level, args...)
-}
-
-// LogfCtx logs a formatted message at the specified level with context using the default logger.
-func LogfCtx(ctx context.Context, level LogLevel, format string, args ...any) {
-	Default().LogfCtx(ctx, level, format, args...)
-}
-
-// LogWithCtx logs a structured message at the specified level with context using the default logger.
-func LogWithCtx(ctx context.Context, level LogLevel, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, level, msg, fields...)
 }
 
 // ============================================================================

@@ -118,14 +118,20 @@ type IntegritySigner struct {
 }
 
 // NewIntegritySigner creates a new IntegritySigner with the given configuration.
-// If no configuration is provided, DefaultIntegrityConfig() is used.
+// If no configuration is provided, a secure default configuration is generated.
+// Returns an error if the default configuration cannot be generated (extremely rare,
+// indicates system entropy exhaustion).
 func NewIntegritySigner(configs ...*IntegrityConfig) (*IntegritySigner, error) {
 	var config *IntegrityConfig
 	if len(configs) > 0 {
 		config = configs[0]
 	}
 	if config == nil {
-		config = DefaultIntegrityConfig()
+		var err error
+		config, err = DefaultIntegrityConfigSafe()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create default integrity config: %w", err)
+		}
 	}
 
 	if len(config.SecretKey) < 32 {

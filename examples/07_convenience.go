@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"os"
 
 	"github.com/cybergodev/dd"
@@ -17,16 +18,15 @@ import (
 // 2. ToConsole - Console only
 // 3. ToAll/ToAllJSON - Dual output
 // 4. ToWriter/ToWriters - Custom writers
-// 5. Must* variants - Panic on error
-// 6. Must helper functions
+// 5. Proper error handling patterns
 func main() {
-	fmt.Println("=== DD Convenience Constructors ===\n")
+	fmt.Println("=== DD Convenience Constructors ===")
 
 	section1FileOutput()
 	section2ConsoleOutput()
 	section3DualOutput()
 	section4CustomWriters()
-	section5MustVariants()
+	section5ConstructorErrors()
 
 	fmt.Println("\n✅ Convenience examples completed!")
 	fmt.Println("\nCheck logs/ directory for output files")
@@ -55,7 +55,7 @@ func section1FileOutput() {
 		dd.Bool("structured", true),
 	)
 
-	fmt.Println("✓ Files: logs/app.log, logs/custom.log, logs/json.log\n")
+	fmt.Println("✓ Files: logs/app.log, logs/custom.log, logs/json.log")
 }
 
 // Section 2: Console output
@@ -120,47 +120,47 @@ func section4CustomWriters() {
 	fmt.Println()
 }
 
-// Section 5: Must* variants (panic on error)
-func section5MustVariants() {
-	fmt.Println("5. Must* Variants (Panic on Error)")
-	fmt.Println("-----------------------------------")
+// Section 5: Constructor error handling patterns
+func section5ConstructorErrors() {
+	fmt.Println("5. Constructor Error Patterns")
+	fmt.Println("------------------------------")
 
-	// These panic if creation fails - use for initialization
-
-	// MustToFile
-	logger := dd.MustToFile("logs/must.log")
+	// Pattern 1: Explicit error handling with log.Fatal
+	logger, err := dd.New(dd.DevelopmentConfig())
+	if err != nil {
+		log.Fatalf("failed to create logger: %v", err)
+	}
 	defer logger.Close()
-	logger.Info("Created with MustToFile")
+	logger.Debug("Created with explicit error handling")
 
-	// MustToJSONFile
-	logger2 := dd.MustToJSONFile("logs/must-json.log")
+	// Pattern 2: Using ToFile with error handling
+	logger2, err := dd.ToFile("logs/safe.log")
+	if err != nil {
+		log.Printf("warning: could not create file logger: %v", err)
+		// Fall back to console
+		logger2, _ = dd.ToConsole()
+	}
 	defer logger2.Close()
-	logger2.Info("Created with MustToJSONFile")
+	logger2.Info("Created with fallback handling")
 
-	// MustToConsole
-	logger3 := dd.MustToConsole()
+	// Pattern 3: Using ToConsole (rarely fails)
+	logger3, err := dd.ToConsole()
+	if err != nil {
+		// Console creation rarely fails, but handle it anyway
+		fmt.Fprintf(os.Stderr, "failed to create console logger: %v\n", err)
+		return
+	}
 	defer logger3.Close()
-	logger3.Info("Created with MustToConsole")
+	logger3.Info("Created with console fallback")
 
-	// MustToAll
-	logger4 := dd.MustToAll("logs/must-all.log")
+	// Pattern 4: Using ToAll for dual output
+	logger4, err := dd.ToAll("logs/safe-dual.log")
+	if err != nil {
+		log.Printf("warning: could not create dual logger: %v", err)
+		return
+	}
 	defer logger4.Close()
-	logger4.Info("Created with MustToAll")
+	logger4.Info("Created with dual output")
 
-	// Must (generic)
-	logger5 := dd.Must(dd.DevelopmentConfig())
-	defer logger5.Close()
-	logger5.Debug("Created with Must(DevelopmentConfig())")
-
-	// MustNew (alias for Must)
-	logger6 := dd.MustNew(dd.JSONConfig())
-	defer logger6.Close()
-	logger6.Info("Created with MustNew(JSONConfig())")
-
-	// MustVal - generic helper for any function returning (T, error)
-	file := dd.MustVal(os.Create("logs/mustval.log"))
-	defer file.Close()
-	fmt.Printf("  File created: %s\n", file.Name())
-
-	fmt.Println("\n✓ Must* functions panic on error, return logger otherwise")
+	fmt.Println("\n✓ Always handle errors explicitly for robust code")
 }

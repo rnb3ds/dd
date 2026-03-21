@@ -14,17 +14,18 @@ import (
 //
 // Topics covered:
 // 1. Type-safe context keys (trace_id, span_id, request_id)
-// 2. Context-aware logging methods
+// 2. Context extraction via configured extractors
 // 3. Custom context extractors
 // 4. Hook system for lifecycle events
 // 5. OpenTelemetry-style integration
 func main() {
-	fmt.Println("=== DD Context & Hooks ===\n")
+	fmt.Println("=== DD Context & Hooks ===")
 
 	section1ContextKeys()
 	section2ContextLogging()
 	section3CustomExtractors()
 	section4Hooks()
+	section5RequestScopedLogging()
 
 	fmt.Println("\n✅ Context & Hooks examples completed!")
 }
@@ -53,77 +54,96 @@ func section1ContextKeys() {
 	fmt.Println()
 }
 
-// Section 2: Context-aware logging
+// Section 2: Context-aware logging with WithFields pattern
 func section2ContextLogging() {
-	fmt.Println("2. Context-Aware Logging")
-	fmt.Println("-------------------------")
+	fmt.Println("2. Context-Aware Logging (WithFields Pattern)")
+	fmt.Println("-----------------------------------------------")
 
-	// Configure logger with context extraction
-	cfg := dd.DefaultConfig()
-	cfg.Format = dd.FormatJSON
-
-	logger, _ := dd.New(cfg)
+	logger, _ := dd.New()
 	defer logger.Close()
 
 	// Create context with trace info
 	ctx := dd.WithTraceID(context.Background(), "trace-123")
 	ctx = dd.WithSpanID(ctx, "span-456")
 
-	// Context-aware logging automatically extracts trace info
-	logger.InfoCtx(ctx, "Processing request")
-	logger.InfoWithCtx(ctx, "User action",
-		dd.String("action", "login"),
+	// Pattern 1: Extract context fields and pass to WithFields
+	// This is the recommended way to include context data in logs
+	entry := logger.WithFields(
+		dd.String("trace_id", dd.GetTraceID(ctx)),
+		dd.String("span_id", dd.GetSpanID(ctx)),
+	)
+	entry.InfoWith("Processing request",
 		dd.String("user", "alice"),
 	)
 
-	// Printf-style with context
-	logger.InfofCtx(ctx, "Order %d processed", 12345)
+	// Pattern 2: Use helper function for extraction
+	traceFields := extractTraceFields(ctx)
+	logger.InfoWith("User action", append(traceFields,
+		dd.String("action", "login"),
+		dd.String("user", "alice"),
+	)...)
 
-	fmt.Println("✓ Trace IDs automatically included in output\n")
+	fmt.Println("✓ Trace IDs included via WithFields pattern")
 }
 
-// Section 3: Custom context extractors
+// extractTraceFields is a helper to extract trace context as fields
+func extractTraceFields(ctx context.Context) []dd.Field {
+	var fields []dd.Field
+	if traceID := dd.GetTraceID(ctx); traceID != "" {
+		fields = append(fields, dd.String("trace_id", traceID))
+	}
+	if spanID := dd.GetSpanID(ctx); spanID != "" {
+		fields = append(fields, dd.String("span_id", spanID))
+	}
+	if requestID := dd.GetRequestID(ctx); requestID != "" {
+		fields = append(fields, dd.String("request_id", requestID))
+	}
+	return fields
+}
+
+// Section 3: Custom context extraction pattern
 func section3CustomExtractors() {
-	fmt.Println("3. Custom Context Extractors")
-	fmt.Println("------------------------------")
+	fmt.Println("3. Custom Context Extraction Pattern")
+	fmt.Println("---------------------------------------")
 
-	// Custom extractor for tenant ID
-	tenantExtractor := func(ctx context.Context) []dd.Field {
-		if tenantID := ctx.Value("tenant_id"); tenantID != nil {
-			return []dd.Field{dd.String("tenant_id", tenantID.(string))}
-		}
-		return nil
-	}
-
-	// Custom extractor for user ID
-	userExtractor := func(ctx context.Context) []dd.Field {
-		if userID := ctx.Value("user_id"); userID != nil {
-			return []dd.Field{dd.Int("user_id", userID.(int))}
-		}
-		return nil
-	}
-
-	cfg := dd.DefaultConfig()
-	cfg.Format = dd.FormatJSON
-	cfg.ContextExtractors = []dd.ContextExtractor{tenantExtractor, userExtractor}
-
-	logger, _ := dd.New(cfg)
+	logger, _ := dd.New()
 	defer logger.Close()
 
 	// Context with custom values
 	ctx := context.WithValue(context.Background(), "tenant_id", "tenant-abc")
 	ctx = context.WithValue(ctx, "user_id", 12345)
 
-	logger.InfoCtx(ctx, "Custom extractors applied")
+	// Pattern: Create a reusable extractor function for your context
+	tenantFields := extractTenantFields(ctx)
 
-	// Add extractors at runtime
-	logger.AddContextExtractor(func(ctx context.Context) []dd.Field {
-		return []dd.Field{dd.String("service", "my-service")}
-	})
+	// Use extracted fields with logger
+	logger.InfoWith("Custom context extracted", append(tenantFields,
+		dd.String("action", "data_access"),
+	)...)
 
-	logger.InfoCtx(ctx, "Runtime extractor added")
+	// You can also combine multiple extraction functions
+	allFields := append(extractTraceFields(ctx), extractTenantFields(ctx)...)
+	logger.InfoWith("Combined context fields", append(allFields,
+		dd.String("operation", "combined"),
+	)...)
 
 	fmt.Println()
+}
+
+// extractTenantFields extracts tenant-specific context data
+func extractTenantFields(ctx context.Context) []dd.Field {
+	var fields []dd.Field
+	if tenantID := ctx.Value("tenant_id"); tenantID != nil {
+		if s, ok := tenantID.(string); ok {
+			fields = append(fields, dd.String("tenant_id", s))
+		}
+	}
+	if userID := ctx.Value("user_id"); userID != nil {
+		if i, ok := userID.(int); ok {
+			fields = append(fields, dd.Int("user_id", i))
+		}
+	}
+	return fields
 }
 
 // Section 4: Hook system
@@ -131,22 +151,28 @@ func section4Hooks() {
 	fmt.Println("4. Hook System")
 	fmt.Println("---------------")
 
-	// Create hook registry with builder
-	hooks := dd.NewHookBuilder().
-		BeforeLog(func(ctx context.Context, hctx *dd.HookContext) error {
-			fmt.Printf("  [BeforeLog] Level: %s, Msg: %s\n",
-				hctx.Level.String(), hctx.Message)
-			return nil
-		}).
-		AfterLog(func(ctx context.Context, hctx *dd.HookContext) error {
-			fmt.Printf("  [AfterLog] Completed: %s\n", hctx.Message)
-			return nil
-		}).
-		OnError(func(ctx context.Context, hctx *dd.HookContext) error {
-			fmt.Printf("  [OnError] %v\n", hctx.Error)
-			return nil
-		}).
-		Build()
+	// Create hook registry with HooksConfig (struct-based configuration)
+	hooks := dd.NewHooksFromConfig(dd.HooksConfig{
+		BeforeLog: []dd.Hook{
+			func(ctx context.Context, hctx *dd.HookContext) error {
+				fmt.Printf("  [BeforeLog] Level: %s, Msg: %s\n",
+					hctx.Level.String(), hctx.Message)
+				return nil
+			},
+		},
+		AfterLog: []dd.Hook{
+			func(ctx context.Context, hctx *dd.HookContext) error {
+				fmt.Printf("  [AfterLog] Completed: %s\n", hctx.Message)
+				return nil
+			},
+		},
+		OnError: []dd.Hook{
+			func(ctx context.Context, hctx *dd.HookContext) error {
+				fmt.Printf("  [OnError] %v\n", hctx.Error)
+				return nil
+			},
+		},
+	})
 
 	cfg := dd.DefaultConfig()
 	cfg.Format = dd.FormatJSON
@@ -167,38 +193,28 @@ func section4Hooks() {
 	fmt.Println()
 }
 
-// Example: OpenTelemetry-style integration
-func exampleOpenTelemetry() {
-	// This shows how to integrate with OpenTelemetry
-	// (requires opentelemetry-go package)
+// OpenTelemetry Integration Reference (see source code comments)
+// This shows how to integrate with OpenTelemetry (requires opentelemetry-go package):
+//
+//	import "go.opentelemetry.io/otel/trace"
+//
+//	otelExtractor := func(ctx context.Context) []dd.Field {
+//	    span := trace.SpanFromContext(ctx)
+//	    if !span.SpanContext().IsValid() {
+//	        return nil
+//	    }
+//	    return []dd.Field{
+//	        dd.String("trace_id", span.SpanContext().TraceID().String()),
+//	        dd.String("span_id", span.SpanContext().SpanID().String()),
+//	        dd.Bool("sampled", span.SpanContext().IsSampled()),
+//	    }
+//	}
 
-	/*
-		import (
-			"go.opentelemetry.io/otel/trace"
-		)
+// Section 5: Request-scoped logging pattern
+func section5RequestScopedLogging() {
+	fmt.Println("5. Request-Scoped Logging")
+	fmt.Println("---------------------------")
 
-		otelExtractor := func(ctx context.Context) []dd.Field {
-			span := trace.SpanFromContext(ctx)
-			if !span.SpanContext().IsValid() {
-				return nil
-			}
-			return []dd.Field{
-				dd.String("trace_id", span.SpanContext().TraceID().String()),
-				dd.String("span_id", span.SpanContext().SpanID().String()),
-				dd.Bool("sampled", span.SpanContext().IsSampleled()),
-			}
-		}
-
-		cfg := dd.DefaultConfig()
-		cfg.ContextExtractors = []dd.ContextExtractor{otelExtractor}
-		logger, _ := dd.New(cfg)
-	*/
-
-	fmt.Println("OpenTelemetry integration example (see source code)")
-}
-
-// Example: Request-scoped logging
-func exampleRequestScopedLogging() {
 	cfg := dd.DefaultConfig()
 	cfg.Format = dd.FormatJSON
 	cfg.File = &dd.FileConfig{Path: "logs/requests.log"}
@@ -206,22 +222,28 @@ func exampleRequestScopedLogging() {
 	logger, _ := dd.New(cfg)
 	defer logger.Close()
 
-	// Simulated HTTP handler
+	// Simulated HTTP handler with context extraction
 	handler := func(ctx context.Context, path string) {
 		ctx = dd.WithRequestID(ctx, fmt.Sprintf("req-%d", time.Now().UnixNano()))
 		ctx = dd.WithTraceID(ctx, "trace-from-header")
 
-		logger.InfoWithCtx(ctx, "Request started",
+		// Create a request-scoped logger with context fields
+		reqLogger := logger.WithFields(
+			dd.String("trace_id", dd.GetTraceID(ctx)),
+			dd.String("request_id", dd.GetRequestID(ctx)),
 			dd.String("path", path),
 		)
 
+		reqLogger.Info("Request started")
+
 		// Business logic...
 
-		logger.InfoWithCtx(ctx, "Request completed",
+		reqLogger.InfoWith("Request completed",
 			dd.Int("status", 200),
 			dd.Duration("duration", 50*time.Millisecond),
 		)
 	}
 
 	handler(context.Background(), "/api/users")
+	fmt.Println("✓ Request-scoped logging pattern demonstrated")
 }

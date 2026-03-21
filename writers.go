@@ -15,6 +15,23 @@ import (
 	"github.com/cybergodev/dd/internal"
 )
 
+// closeWriter safely closes a writer if it implements io.Closer.
+// Standard streams (os.Stdout, os.Stderr, os.Stdin) are never closed.
+// Returns the error from Close() if one occurs, nil otherwise.
+func closeWriter(w io.Writer) error {
+	if w == nil {
+		return nil
+	}
+	// Never close standard streams
+	if w == os.Stdout || w == os.Stderr || w == os.Stdin {
+		return nil
+	}
+	if closer, ok := w.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
 type FileWriter struct {
 	path       string
 	maxSize    int64
@@ -55,29 +72,33 @@ func NewFileWriter(path string, opts ...FileWriterConfig) (*FileWriter, error) {
 		config = opts[0]
 	}
 
-	securePath, err := internal.ValidateAndSecurePath(path, MaxPathLength, ErrEmptyFilePath, ErrNullByte, ErrPathTooLong, ErrPathTraversal, ErrInvalidPath)
+	securePath, err := internal.ValidateAndSecurePath(path, maxPathLength, ErrEmptyFilePath, ErrNullByte, ErrPathTooLong, ErrPathTraversal, ErrInvalidPath)
 	if err != nil {
 		return nil, err
 	}
 
+	// Validate configuration (does not modify input)
 	if err := validateFileWriterConfig(&config); err != nil {
 		return nil, err
 	}
+
+	// Apply defaults to a local copy (preserves original config)
+	effectiveConfig := applyFileWriterDefaults(config)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	fw := &FileWriter{
 		path:       securePath,
-		maxSize:    int64(config.MaxSizeMB) * 1024 * 1024,
-		maxAge:     config.MaxAge,
-		maxBackups: config.MaxBackups,
-		compress:   config.Compress,
+		maxSize:    int64(effectiveConfig.MaxSizeMB) * 1024 * 1024,
+		maxAge:     effectiveConfig.MaxAge,
+		maxBackups: effectiveConfig.MaxBackups,
+		compress:   effectiveConfig.Compress,
 		ctx:        ctx,
 		cancel:     cancel,
 	}
 
 	dir := filepath.Dir(securePath)
-	if err := os.MkdirAll(dir, DirPermissions); err != nil {
+	if err := os.MkdirAll(dir, dirPermissions); err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to create directory: %w", err)
 	}
@@ -98,7 +119,23 @@ func NewFileWriter(path string, opts ...FileWriterConfig) (*FileWriter, error) {
 	return fw, nil
 }
 
+// validateFileWriterConfig validates the configuration without modifying it.
+// Returns an error if the configuration contains invalid values.
 func validateFileWriterConfig(config *FileWriterConfig) error {
+	// Validate limits (negative values are allowed and will use defaults)
+	if config.MaxSizeMB > maxFileSizeMB {
+		return fmt.Errorf("%w: maximum %dMB", ErrMaxSizeExceeded, maxFileSizeMB)
+	}
+	if config.MaxBackups > maxBackupCount {
+		return fmt.Errorf("%w: maximum %d", ErrMaxBackupsExceeded, maxBackupCount)
+	}
+
+	return nil
+}
+
+// applyFileWriterDefaults applies default values to a copy of the configuration.
+// This ensures the original config is not modified.
+func applyFileWriterDefaults(config FileWriterConfig) FileWriterConfig {
 	// Apply defaults for zero/negative MaxSizeMB
 	if config.MaxSizeMB <= 0 {
 		config.MaxSizeMB = DefaultMaxSizeMB
@@ -112,23 +149,13 @@ func validateFileWriterConfig(config *FileWriterConfig) error {
 	if config.MaxAge == 0 && config.MaxBackups == 0 {
 		config.MaxAge = DefaultMaxAge
 		config.MaxBackups = DefaultMaxBackups
-	} else if config.MaxAge == 0 && config.MaxBackups > 0 {
-		// User set MaxBackups but not MaxAge - disable time-based cleanup
-		config.MaxAge = 0
 	} else if config.MaxAge > 0 && config.MaxBackups == 0 {
 		// User set MaxAge but not MaxBackups - use default MaxBackups
 		config.MaxBackups = DefaultMaxBackups
 	}
+	// When MaxBackups > 0 and MaxAge == 0: count-based cleanup only (no change needed)
 
-	// Validate limits
-	if config.MaxSizeMB > MaxFileSizeMB {
-		return fmt.Errorf("%w: maximum %dMB", ErrMaxSizeExceeded, MaxFileSizeMB)
-	}
-	if config.MaxBackups > MaxBackupCount {
-		return fmt.Errorf("%w: maximum %d", ErrMaxBackupsExceeded, MaxBackupCount)
-	}
-
-	return nil
+	return config
 }
 
 func (fw *FileWriter) Write(p []byte) (int, error) {
@@ -274,7 +301,7 @@ type BufferedWriter struct {
 // NewBufferedWriter creates a new BufferedWriter with the specified buffer size.
 // The writer automatically flushes when the buffer is half full or every 100ms.
 // Remember to call Close() to ensure all buffered data is written to the underlying writer.
-// If bufferSize is not specified or is 0, DefaultBufferSizeKB (4KB) is used.
+// If bufferSize is not specified or is 0, 1KB is used.
 func NewBufferedWriter(w io.Writer, bufferSizes ...int) (*BufferedWriter, error) {
 	if w == nil {
 		return nil, ErrNilWriter
@@ -284,11 +311,11 @@ func NewBufferedWriter(w io.Writer, bufferSizes ...int) (*BufferedWriter, error)
 	if len(bufferSizes) > 0 {
 		bufferSize = bufferSizes[0]
 	}
-	if bufferSize < DefaultBufferSizeKB*1024 {
-		bufferSize = DefaultBufferSizeKB * 1024
+	if bufferSize < defaultBufferSizeKB*1024 {
+		bufferSize = defaultBufferSizeKB * 1024
 	}
-	if bufferSize > MaxBufferSizeKB*1024 {
-		return nil, fmt.Errorf("%w: maximum %dMB", ErrBufferSizeTooLarge, MaxBufferSizeKB/1024)
+	if bufferSize > maxBufferSizeKB*1024 {
+		return nil, fmt.Errorf("%w: maximum %dMB", ErrBufferSizeTooLarge, maxBufferSizeKB/1024)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -296,8 +323,8 @@ func NewBufferedWriter(w io.Writer, bufferSizes ...int) (*BufferedWriter, error)
 	bw := &BufferedWriter{
 		writer:    w,
 		buffer:    bufio.NewWriterSize(w, bufferSize),
-		flushSize: bufferSize / AutoFlushThreshold,
-		flushTime: AutoFlushInterval,
+		flushSize: bufferSize / autoFlushThreshold,
+		flushTime: autoFlushInterval,
 		ctx:       ctx,
 		cancel:    cancel,
 		lastFlush: time.Now(),
@@ -350,26 +377,33 @@ func (bw *BufferedWriter) Close() error {
 		return nil
 	}
 
-	if bw.cancel != nil {
-		bw.cancel()
-	}
-
-	bw.wg.Wait()
-
-	bw.mu.Lock()
-	defer bw.mu.Unlock()
-
 	var errs []error
 
+	// Flush buffer BEFORE canceling context and stopping goroutine
+	// This ensures no data is lost if the goroutine was about to flush
+	bw.mu.Lock()
 	if bw.buffer != nil {
 		if err := bw.buffer.Flush(); err != nil {
 			errs = append(errs, fmt.Errorf("flush: %w", err))
 		}
 	}
+	bw.mu.Unlock()
 
-	if closer, ok := bw.writer.(io.Closer); ok {
-		if err := closer.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("close writer: %w", err))
+	// Now stop the background goroutine
+	if bw.cancel != nil {
+		bw.cancel()
+	}
+	bw.wg.Wait()
+
+	// Close the underlying writer
+	bw.mu.Lock()
+	defer bw.mu.Unlock()
+
+	if bw.writer != nil {
+		if closer, ok := bw.writer.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("close writer: %w", err))
+			}
 		}
 	}
 
@@ -387,11 +421,12 @@ func (bw *BufferedWriter) autoFlushRoutine() {
 		case <-bw.ctx.Done():
 			return
 		case <-ticker.C:
-			// Check if closed before attempting to flush
+			// Check closed flag under lock to prevent race with Close()
+			bw.mu.Lock()
 			if bw.closed.Load() {
+				bw.mu.Unlock()
 				return
 			}
-			bw.mu.Lock()
 			if bw.buffer.Buffered() > 0 && time.Since(bw.lastFlush) >= bw.flushTime {
 				if err := bw.buffer.Flush(); err != nil {
 					fmt.Fprintf(os.Stderr, "dd: autoflush error: %v\n", err)
@@ -476,7 +511,7 @@ func (mw *MultiWriter) Write(p []byte) (int, error) {
 
 func (mw *MultiWriter) AddWriter(w io.Writer) error {
 	if mw == nil {
-		return fmt.Errorf("%w", ErrNilWriter)
+		return ErrNilMultiWriter
 	}
 	if w == nil {
 		return ErrNilWriter
@@ -498,7 +533,7 @@ func (mw *MultiWriter) AddWriter(w io.Writer) error {
 		}
 	}
 
-	if len(*currentWriters) >= MaxWriterCount {
+	if len(*currentWriters) >= maxWriterCount {
 		return ErrMaxWritersExceeded
 	}
 
@@ -514,7 +549,7 @@ func (mw *MultiWriter) AddWriter(w io.Writer) error {
 
 func (mw *MultiWriter) RemoveWriter(w io.Writer) error {
 	if mw == nil {
-		return ErrNilWriter
+		return ErrNilMultiWriter
 	}
 
 	mw.mu.Lock()
@@ -553,13 +588,8 @@ func (mw *MultiWriter) Close() error {
 
 	var errs []error
 	for _, w := range writers {
-		if closer, ok := w.(io.Closer); ok {
-			// Skip standard streams to prevent closing os.Stdout/Stderr/Stdin
-			if w != os.Stdout && w != os.Stderr && w != os.Stdin {
-				if err := closer.Close(); err != nil {
-					errs = append(errs, err)
-				}
-			}
+		if err := closeWriter(w); err != nil {
+			errs = append(errs, err)
 		}
 	}
 

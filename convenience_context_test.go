@@ -96,7 +96,13 @@ func TestContextKeys_WithLogger(t *testing.T) {
 	ctx = WithSpanID(ctx, "span-def")
 	ctx = WithRequestID(ctx, "req-ghi")
 
-	logger.InfoCtx(ctx, "test message with context")
+	// Manually extract context values and pass them as fields
+	logger.InfoWith("test message with context",
+		String("trace_id", GetTraceID(ctx)),
+		String("span_id", GetSpanID(ctx)),
+		String("request_id", GetRequestID(ctx)),
+		String("user", "test"),
+	)
 
 	output := buf.String()
 	if !strings.Contains(output, "trace-abc") {
@@ -253,149 +259,24 @@ func TestToAllJSON(t *testing.T) {
 }
 
 // ============================================================================
-// MUST* CONSTRUCTOR TESTS
-// ============================================================================
-
-func TestMustToConsole(t *testing.T) {
-	logger := MustToConsole()
-	if logger == nil {
-		t.Fatal("MustToConsole() returned nil logger")
-	}
-	logger.Close()
-}
-
-func TestMustToWriter(t *testing.T) {
-	var buf bytes.Buffer
-	logger := MustToWriter(&buf)
-	if logger == nil {
-		t.Fatal("MustToWriter() returned nil logger")
-	}
-
-	logger.Info("test message")
-	if buf.Len() == 0 {
-		t.Error("MustToWriter() should write to buffer")
-	}
-	logger.Close()
-}
-
-func TestMustToWriters(t *testing.T) {
-	var buf1, buf2 bytes.Buffer
-	logger := MustToWriters(&buf1, &buf2)
-	if logger == nil {
-		t.Fatal("MustToWriters() returned nil logger")
-	}
-
-	logger.Info("test message")
-	if buf1.Len() == 0 || buf2.Len() == 0 {
-		t.Error("MustToWriters() should write to all buffers")
-	}
-	logger.Close()
-}
-
-func TestMustToFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "test.log")
-
-	logger := MustToFile(logPath)
-	if logger == nil {
-		t.Fatal("MustToFile() returned nil logger")
-	}
-
-	logger.Info("test message")
-	logger.Close()
-
-	// Verify file was created
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		t.Error("LogFile should be created")
-	}
-}
-
-func TestMustToJSONFile(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "test.json.log")
-
-	logger := MustToJSONFile(logPath)
-	if logger == nil {
-		t.Fatal("MustToJSONFile() returned nil logger")
-	}
-
-	logger.Info("test message")
-	logger.Close()
-
-	// Verify file was created
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		t.Error("LogFile should be created")
-	}
-}
-
-func TestMustToAll(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "test.log")
-
-	logger := MustToAll(logPath)
-	if logger == nil {
-		t.Fatal("MustToAll() returned nil logger")
-	}
-
-	logger.Info("test message")
-	logger.Close()
-
-	// Verify file was created
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		t.Error("LogFile should be created")
-	}
-}
-
-func TestMustToAllJSON(t *testing.T) {
-	tmpDir := t.TempDir()
-	logPath := filepath.Join(tmpDir, "test.json.log")
-
-	logger := MustToAllJSON(logPath)
-	if logger == nil {
-		t.Fatal("MustToAllJSON() returned nil logger")
-	}
-
-	logger.Info("test message")
-	logger.Close()
-
-	// Verify file was created
-	if _, err := os.Stat(logPath); os.IsNotExist(err) {
-		t.Error("LogFile should be created")
-	}
-}
-
-func TestMustNew(t *testing.T) {
-	logger := MustNew()
-	if logger == nil {
-		t.Fatal("MustNew() returned nil logger")
-	}
-	logger.Close()
-
-	logger2 := MustNew(DefaultConfig())
-	if logger2 == nil {
-		t.Fatal("MustNew(DefaultConfig()) returned nil logger")
-	}
-	logger2.Close()
-}
-
-// ============================================================================
 // CONTEXT EXTRACTOR WITH LOGGER TESTS
 // ============================================================================
 
 func TestLoggerWithContextExtractors(t *testing.T) {
 	var buf bytes.Buffer
 
-	extractors := []ContextExtractor{
-		func(ctx context.Context) []Field {
-			return []Field{String("custom_field", "custom_value")}
-		},
+	// Define a context extractor
+	extractor := func(ctx context.Context) []Field {
+		if customField := ctx.Value("custom_field"); customField != nil {
+			return []Field{String("custom_field", customField.(string))}
+		}
+		return nil
 	}
 
 	cfg := DefaultConfig()
 	cfg.Output = &buf
 	cfg.Level = LevelInfo
 	cfg.Format = FormatJSON
-	cfg.ContextExtractors = extractors
 
 	logger, err := New(cfg)
 	if err != nil {
@@ -403,8 +284,14 @@ func TestLoggerWithContextExtractors(t *testing.T) {
 	}
 	defer logger.Close()
 
-	ctx := context.Background()
-	logger.InfoCtx(ctx, "test message")
+	// Create context with custom value
+	ctx := context.WithValue(context.Background(), "custom_field", "custom_value")
+
+	// Manually extract context fields using the extractor
+	contextFields := extractor(ctx)
+
+	// Combine context fields with regular fields
+	logger.InfoWith("test message", append(contextFields, String("context", "test"))...)
 
 	output := buf.String()
 	if !strings.Contains(output, "custom_field") {
@@ -593,106 +480,6 @@ func TestLoggerEntry_LogWithMethods(t *testing.T) {
 	}
 }
 
-func TestLoggerEntry_LogCtxMethods(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("ctx_field", "value")
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		logFunc  func()
-		expected string
-	}{
-		{"DebugCtx", func() { entry.DebugCtx(ctx, "debug ctx") }, "debug ctx"},
-		{"InfoCtx", func() { entry.InfoCtx(ctx, "info ctx") }, "info ctx"},
-		{"WarnCtx", func() { entry.WarnCtx(ctx, "warn ctx") }, "warn ctx"},
-		{"ErrorCtx", func() { entry.ErrorCtx(ctx, "error ctx") }, "error ctx"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.logFunc()
-			if !strings.Contains(buf.String(), tt.expected) {
-				t.Errorf("Entry.%s() should contain %q, got: %s", tt.name, tt.expected, buf.String())
-			}
-		})
-	}
-}
-
-func TestLoggerEntry_LogfCtxMethods(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("entry", "data")
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		logFunc  func()
-		expected string
-	}{
-		{"DebugfCtx", func() { entry.DebugfCtx(ctx, "debug: %s", "ctx") }, "debug: ctx"},
-		{"InfofCtx", func() { entry.InfofCtx(ctx, "info: %d", 123) }, "info: 123"},
-		{"WarnfCtx", func() { entry.WarnfCtx(ctx, "warn: %v", true) }, "warn: true"},
-		{"ErrorfCtx", func() { entry.ErrorfCtx(ctx, "error: %s", "test") }, "error: test"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.logFunc()
-			if !strings.Contains(buf.String(), tt.expected) {
-				t.Errorf("Entry.%s() should contain %q, got: %s", tt.name, tt.expected, buf.String())
-			}
-		})
-	}
-}
-
-func TestLoggerEntry_LogWithCtxMethods(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	cfg.Format = FormatJSON
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("base", "entry")
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		logFunc  func()
-		expected string
-	}{
-		{"DebugWithCtx", func() { entry.DebugWithCtx(ctx, "debug", String("f", "v")) }, "debug"},
-		{"InfoWithCtx", func() { entry.InfoWithCtx(ctx, "info", String("f", "v")) }, "info"},
-		{"WarnWithCtx", func() { entry.WarnWithCtx(ctx, "warn", String("f", "v")) }, "warn"},
-		{"ErrorWithCtx", func() { entry.ErrorWithCtx(ctx, "error", String("f", "v")) }, "error"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			buf.Reset()
-			tt.logFunc()
-			if !strings.Contains(buf.String(), tt.expected) {
-				t.Errorf("Entry.%s() should contain %q, got: %s", tt.name, tt.expected, buf.String())
-			}
-		})
-	}
-}
-
 func TestLoggerEntry_LogLevel(t *testing.T) {
 	var buf bytes.Buffer
 	cfg := DefaultConfig()
@@ -742,62 +529,5 @@ func TestLoggerEntry_LogWithLevel(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "error message") {
 		t.Errorf("Entry.LogWith should contain message, got: %s", output)
-	}
-}
-
-func TestLoggerEntry_LogCtxLevel(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("entry", "field")
-	ctx := context.WithValue(context.Background(), "trace_id", "trace-123")
-
-	buf.Reset()
-	entry.LogCtx(ctx, LevelInfo, "message with context")
-	output := buf.String()
-	if !strings.Contains(output, "message with context") {
-		t.Errorf("Entry.LogCtx should contain message, got: %s", output)
-	}
-}
-
-func TestLoggerEntry_LogfCtxLevel(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("x", "y")
-	ctx := context.Background()
-
-	buf.Reset()
-	entry.LogfCtx(ctx, LevelInfo, "formatted: %s", "value")
-	if !strings.Contains(buf.String(), "formatted: value") {
-		t.Errorf("Entry.LogfCtx should contain formatted message, got: %s", buf.String())
-	}
-}
-
-func TestLoggerEntry_LogWithCtxLevel(t *testing.T) {
-	var buf bytes.Buffer
-	cfg := DefaultConfig()
-	cfg.Output = &buf
-	cfg.Level = LevelDebug
-	cfg.Format = FormatJSON
-	logger, _ := New(cfg)
-	defer logger.Close()
-
-	entry := logger.WithField("base", "field")
-	ctx := context.Background()
-
-	buf.Reset()
-	entry.LogWithCtx(ctx, LevelInfo, "structured message", String("additional", "field"))
-	output := buf.String()
-	if !strings.Contains(output, "structured message") {
-		t.Errorf("Entry.LogWithCtx should contain message, got: %s", output)
 	}
 }

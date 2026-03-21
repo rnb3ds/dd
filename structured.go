@@ -1,7 +1,6 @@
 package dd
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -119,7 +118,10 @@ func ErrWithKey(key string, err error) Field {
 
 // NamedErr creates a field from an error with a custom key name.
 // This is an alias for ErrWithKey, provided for naming consistency
-// with other field constructors like NamedError.
+// with other field constructors.
+//
+// Deprecated: Use ErrWithKey instead. The two functions are identical,
+// but ErrWithKey follows the naming convention of other field constructors.
 func NamedErr(key string, err error) Field {
 	return ErrWithKey(key, err)
 }
@@ -172,70 +174,3 @@ func ErrorWith(msg string, fields ...Field) { Default().LogWith(LevelError, msg,
 // FatalWith logs a structured fatal message with the default logger and exits.
 // WARNING: defer statements will NOT execute. For graceful shutdown, use ErrorWith() with custom logic.
 func FatalWith(msg string, fields ...Field) { Default().LogWith(LevelFatal, msg, fields...) }
-
-// Context-aware package-level functions
-
-// DebugCtx logs a debug message with context support using the default logger.
-func DebugCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelDebug, args...) }
-
-// InfoCtx logs an info message with context support using the default logger.
-func InfoCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelInfo, args...) }
-
-// WarnCtx logs a warning message with context support using the default logger.
-func WarnCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelWarn, args...) }
-
-// ErrorCtx logs an error message with context support using the default logger.
-func ErrorCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelError, args...) }
-
-// DebugfCtx logs a formatted debug message with context support using the default logger.
-func DebugfCtx(ctx context.Context, format string, args ...any) {
-	Default().LogfCtx(ctx, LevelDebug, format, args...)
-}
-
-// InfofCtx logs a formatted info message with context support using the default logger.
-func InfofCtx(ctx context.Context, format string, args ...any) {
-	Default().LogfCtx(ctx, LevelInfo, format, args...)
-}
-
-// WarnfCtx logs a formatted warning message with context support using the default logger.
-func WarnfCtx(ctx context.Context, format string, args ...any) {
-	Default().LogfCtx(ctx, LevelWarn, format, args...)
-}
-
-// ErrorfCtx logs a formatted error message with context support using the default logger.
-func ErrorfCtx(ctx context.Context, format string, args ...any) {
-	Default().LogfCtx(ctx, LevelError, format, args...)
-}
-
-// DebugWithCtx logs a structured debug message with context support using the default logger.
-func DebugWithCtx(ctx context.Context, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, LevelDebug, msg, fields...)
-}
-
-// InfoWithCtx logs a structured info message with context support using the default logger.
-func InfoWithCtx(ctx context.Context, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, LevelInfo, msg, fields...)
-}
-
-// WarnWithCtx logs a structured warning message with context support using the default logger.
-func WarnWithCtx(ctx context.Context, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, LevelWarn, msg, fields...)
-}
-
-// ErrorWithCtx logs a structured error message with context support using the default logger.
-func ErrorWithCtx(ctx context.Context, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, LevelError, msg, fields...)
-}
-
-// FatalCtx logs a fatal message with context support using the default logger.
-func FatalCtx(ctx context.Context, args ...any) { Default().LogCtx(ctx, LevelFatal, args...) }
-
-// FatalfCtx logs a formatted fatal message with context support using the default logger.
-func FatalfCtx(ctx context.Context, format string, args ...any) {
-	Default().LogfCtx(ctx, LevelFatal, format, args...)
-}
-
-// FatalWithCtx logs a structured fatal message with context support using the default logger.
-func FatalWithCtx(ctx context.Context, msg string, fields ...Field) {
-	Default().LogWithCtx(ctx, LevelFatal, msg, fields...)
-}

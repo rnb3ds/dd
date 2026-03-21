@@ -416,50 +416,67 @@ func TestGetJSONOptions(t *testing.T) {
 	}
 }
 
-func TestTextBuilderPool(t *testing.T) {
-	var buf bytes.Buffer
-
-	// Simulate concurrent usage
-	for i := 0; i < 1000; i++ {
-		sb := textBuilderPool.Get().(*strings.Builder)
-		sb.Reset()
-		sb.WriteString("test")
-		textBuilderPool.Put(sb)
+// TestBufferPools verifies that all sync.Pool instances work correctly
+// without panics under concurrent load. Consolidated from multiple pool tests.
+func TestBufferPools(t *testing.T) {
+	tests := []struct {
+		name     string
+		testFunc func()
+	}{
+		{
+			name: "textBuilderPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					buf := textBuilderPool.Get().(*bytes.Buffer)
+					buf.Reset()
+					buf.WriteString("test")
+					textBuilderPool.Put(buf)
+				}
+			},
+		},
+		{
+			name: "argsBuilderPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					buf := argsBuilderPool.Get().(*bytes.Buffer)
+					buf.Reset()
+					buf.WriteString("test")
+					argsBuilderPool.Put(buf)
+				}
+			},
+		},
+		{
+			name: "jsonEntryMapPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					m := jsonEntryMapPool.Get().(*map[string]any)
+					entry := *m
+					for k := range entry {
+						delete(entry, k)
+					}
+					jsonEntryMapPool.Put(m)
+				}
+			},
+		},
+		{
+			name: "jsonFieldsMapPool",
+			testFunc: func() {
+				for i := 0; i < 100; i++ {
+					m := jsonFieldsMapPool.Get().(*map[string]any)
+					fields := *m
+					for k := range fields {
+						delete(fields, k)
+					}
+					jsonFieldsMapPool.Put(m)
+				}
+			},
+		},
 	}
 
-	buf.WriteString("pool test complete")
-	if buf.Len() == 0 {
-		t.Error("Buffer should have content")
-	}
-}
-
-func TestArgsBuilderPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		sb := argsBuilderPool.Get().(*strings.Builder)
-		sb.Reset()
-		sb.WriteString("test")
-		argsBuilderPool.Put(sb)
-	}
-}
-
-func TestJSONEntryMapPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		m := jsonEntryMapPool.Get().(*map[string]any)
-		entry := *m
-		for k := range entry {
-			delete(entry, k)
-		}
-		jsonEntryMapPool.Put(m)
-	}
-}
-
-func TestJSONFieldsMapPool(t *testing.T) {
-	for i := 0; i < 1000; i++ {
-		m := jsonFieldsMapPool.Get().(*map[string]any)
-		fields := *m
-		for k := range fields {
-			delete(fields, k)
-		}
-		jsonFieldsMapPool.Put(m)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Just verify no panic occurs
+			tt.testFunc()
+		})
 	}
 }

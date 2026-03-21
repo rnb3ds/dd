@@ -2,11 +2,21 @@ package internal
 
 import (
 	"strings"
+	"sync"
 )
 
 // HexChars is a package-level constant for hex digit conversion.
 // Avoids allocation in SanitizeControlChars hot path.
 const HexChars = "0123456789abcdef"
+
+// sanitizeBufferPool pools byte slices for sanitization to reduce allocations.
+// Initial capacity of 256 bytes covers most common messages.
+var sanitizeBufferPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, 0, 256)
+		return &buf
+	},
+}
 
 // SanitizeControlChars replaces dangerous control characters with visible escape sequences.
 // This preserves debugging information while preventing log injection attacks.
@@ -87,7 +97,14 @@ func SanitizeControlChars(message string) string {
 		}
 	}
 
-	result := make([]byte, 0, resultSize)
+	// Get buffer from pool for result building
+	resultPtr := sanitizeBufferPool.Get().(*[]byte)
+	result := (*resultPtr)[:0]
+	if cap(*resultPtr) < resultSize {
+		// Pool buffer too small, allocate new one
+		*resultPtr = make([]byte, 0, resultSize)
+		result = (*resultPtr)[:0]
+	}
 
 	// Second pass: build the result
 	for i := 0; i < len(msgBytes); i++ {
@@ -132,7 +149,18 @@ func SanitizeControlChars(message string) string {
 		}
 	}
 
-	return string(result)
+	// Convert to string before returning buffer to pool
+	resultStr := string(result)
+
+	// SECURITY: Zero buffer contents before returning to pool
+	// This prevents sensitive data from remaining in pooled memory
+	for i := range *resultPtr {
+		(*resultPtr)[i] = 0
+	}
+	*resultPtr = (*resultPtr)[:0]
+	sanitizeBufferPool.Put(resultPtr)
+
+	return resultStr
 }
 
 // isUnicodeControlSequence checks if a UTF-8 sequence is a dangerous Unicode control character.
@@ -260,17 +288,23 @@ func isUnicodeControlRune(r rune) bool {
 //   - PM: ESC ^ ... ST (Privacy Message)
 //   - SOS: ESC X ... ST (Start of String)
 //   - Other: ESC followed by a single intermediate/final byte
+//
+// SECURITY: Includes maximum length limit to prevent malformed sequences
+// from causing excessive processing. Max sequence length is 256 bytes.
 func skipAnsiSequence(data []byte, start int) int {
 	if start >= len(data) {
 		return 0
 	}
+
+	// SECURITY: Maximum ANSI sequence length to prevent abuse
+	const maxSequenceLen = 256
 
 	b := data[start]
 
 	// CSI (Control Sequence Introducer): ESC [
 	if b == '[' {
 		skip := 1 // for the '['
-		for i := start + 1; i < len(data); i++ {
+		for i := start + 1; i < len(data) && skip < maxSequenceLen; i++ {
 			c := data[i]
 			// Parameter bytes: 0x30-0x3F
 			// Intermediate bytes: 0x20-0x2F
@@ -280,7 +314,7 @@ func skipAnsiSequence(data []byte, start int) int {
 			}
 			skip++
 		}
-		return skip // reached end of data
+		return skip // reached end of data or max length
 	}
 
 	// OSC (Operating System Command): ESC ]
@@ -291,7 +325,7 @@ func skipAnsiSequence(data []byte, start int) int {
 	// All these use ST (String Terminator) or BEL to terminate
 	if b == ']' || b == 'P' || b == '_' || b == '^' || b == 'X' {
 		skip := 1 // for the initial character
-		for i := start + 1; i < len(data); i++ {
+		for i := start + 1; i < len(data) && skip < maxSequenceLen; i++ {
 			c := data[i]
 			if c == 0x07 { // BEL terminates these sequences
 				return skip + 1
@@ -302,7 +336,7 @@ func skipAnsiSequence(data []byte, start int) int {
 			}
 			skip++
 		}
-		return skip // reached end of data
+		return skip // reached end of data or max length
 	}
 
 	// Other single-character sequences (ESC followed by one char)

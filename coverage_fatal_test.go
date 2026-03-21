@@ -52,60 +52,6 @@ func TestFatalfWithCustomHandler(t *testing.T) {
 	}
 }
 
-func TestFatalCtxWithCustomHandler(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	logger.FatalCtx(ctx, "test message")
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called")
-	}
-}
-
-func TestFatalfCtxWithCustomHandler(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	logger.FatalfCtx(ctx, "test %s", "message")
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called")
-	}
-}
-
-func TestFatalWithCtxCustomHandler(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	logger.FatalWithCtx(ctx, "test message", String("key", "value"))
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called")
-	}
-}
-
 func TestLoggerEntryFatal(t *testing.T) {
 	called := make(chan bool, 1)
 	cfg := DefaultConfig()
@@ -157,63 +103,6 @@ func TestLoggerEntryFatalWith(t *testing.T) {
 		// Success
 	case <-time.After(time.Second):
 		t.Error("FatalHandler not called for LoggerEntry.FatalWith")
-	}
-}
-
-func TestLoggerEntryFatalCtx(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	entry := logger.WithFields(String("service", "test"))
-	entry.FatalCtx(ctx, "entry fatal ctx message")
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called for LoggerEntry.FatalCtx")
-	}
-}
-
-func TestLoggerEntryFatalfCtx(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	entry := logger.WithFields(String("service", "test"))
-	entry.FatalfCtx(ctx, "entry fatalf ctx %s", "message")
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called for LoggerEntry.FatalfCtx")
-	}
-}
-
-func TestLoggerEntryFatalWithCtx(t *testing.T) {
-	called := make(chan bool, 1)
-	cfg := DefaultConfig()
-	cfg.Output = io.Discard
-	cfg.FatalHandler = func() { called <- true }
-	logger, _ := New(cfg)
-
-	ctx := context.Background()
-	entry := logger.WithFields(String("service", "test"))
-	entry.FatalWithCtx(ctx, "fatal with ctx message", String("extra", "field"))
-
-	select {
-	case <-called:
-		// Success
-	case <-time.After(time.Second):
-		t.Error("FatalHandler not called for LoggerEntry.FatalWithCtx")
 	}
 }
 
@@ -672,38 +561,6 @@ func TestMultiWriterErrorAddError(t *testing.T) {
 	if err.ErrorCount() != 2 {
 		t.Errorf("Error count should be 2, got %d", err.ErrorCount())
 	}
-}
-
-func TestMustVal(t *testing.T) {
-	// Test successful case
-	result := MustVal("success", nil)
-	if result != "success" {
-		t.Errorf("MustVal() = %q, want 'success'", result)
-	}
-
-	// Test panic case
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("MustVal should panic on error")
-		}
-	}()
-	MustVal("", errors.New("test error"))
-}
-
-func TestMust2(t *testing.T) {
-	// Test successful case
-	v1, v2 := Must2("val1", "val2", nil)
-	if v1 != "val1" || v2 != "val2" {
-		t.Errorf("Must2() = (%q, %q), want ('val1', 'val2')", v1, v2)
-	}
-
-	// Test panic case
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("Must2 should panic on error")
-		}
-	}()
-	Must2("", "", errors.New("test error"))
 }
 
 // ============================================================================

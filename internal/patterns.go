@@ -66,8 +66,8 @@ var AllPatterns = []PatternDefinition{
 	// Financial Services (PCI-DSS compliance)
 	// SWIFT/BIC codes (8 or 11 characters: BBBBCCLLbbb)
 	// BBBB = bank code (4 letters), CC = country code (2 letters), LL = location code (2 alphanumeric), bbb = branch code (optional 3 alphanumeric)
-	// Use negative lookahead to avoid matching common words like "REDACTED"
-	{`\b(?!REDACTED|REDACT|REMOVED|FILTERED)[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`, false},
+	// Context-aware pattern to reduce false positives - requires context keywords like "swift", "bic", "bank"
+	{`(?i)(?:swift|bic|bank[_-]?code|iban)[\s:=]+[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?\b`, true},
 	// IBAN (International Bank Account Number) - generic pattern
 	{`\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7,30}\b`, false},
 	// CVV/CVC codes with context

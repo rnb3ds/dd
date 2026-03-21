@@ -18,7 +18,7 @@ import (
 // 4. Filter statistics and monitoring
 // 5. Disable filtering when needed
 func main() {
-	fmt.Println("=== DD Security Features ===\n")
+	fmt.Println("=== DD Security Features ===")
 
 	section1BasicFiltering()
 	section2FullFiltering()
@@ -54,7 +54,7 @@ func section1BasicFiltering() {
 		dd.String("token", "bearer-xyz789"), // Filtered by key name
 	)
 
-	fmt.Println("✓ Sensitive data automatically filtered\n")
+	fmt.Println("✓ Sensitive data automatically filtered")
 }
 
 // Section 2: Full filtering (comprehensive protection)
@@ -79,7 +79,7 @@ func section2FullFiltering() {
 	jwt := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature"
 	logger.Infof("Authorization: Bearer %s", jwt)
 
-	fmt.Println("✓ Comprehensive filtering applied\n")
+	fmt.Println("✓ Comprehensive filtering applied")
 }
 
 // Section 3: Custom filtering patterns
@@ -108,7 +108,7 @@ func section3CustomFiltering() {
 	logger.Info("company_secret=confidential") // Filtered
 	logger.Info("public_data=visible")         // Not filtered
 
-	fmt.Println("✓ Custom patterns applied\n")
+	fmt.Println("✓ Custom patterns applied")
 }
 
 // Section 4: Filter statistics and monitoring

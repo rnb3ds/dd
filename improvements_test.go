@@ -123,16 +123,6 @@ func TestErrorHandling(t *testing.T) {
 		}
 	})
 
-	t.Run("MustAddHook panics on error", func(t *testing.T) {
-		logger, _ := New()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("Expected panic for nil hook")
-			}
-		}()
-		logger.MustAddHook(HookBeforeLog, nil)
-	})
-
 	t.Run("AddContextExtractor returns error for nil extractor", func(t *testing.T) {
 		logger, _ := New()
 		err := logger.AddContextExtractor(nil)
@@ -150,16 +140,6 @@ func TestErrorHandling(t *testing.T) {
 		if !errors.Is(err, ErrLoggerClosed) {
 			t.Errorf("Expected ErrLoggerClosed, got: %v", err)
 		}
-	})
-
-	t.Run("MustAddContextExtractor panics on error", func(t *testing.T) {
-		logger, _ := New()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("Expected panic for nil extractor")
-			}
-		}()
-		logger.MustAddContextExtractor(nil)
 	})
 
 	t.Run("SetHooks returns error when logger closed", func(t *testing.T) {
@@ -671,45 +651,6 @@ func TestLevelResolver(t *testing.T) {
 		}
 	})
 
-	t.Run("resolver with context", func(t *testing.T) {
-		var buf bytes.Buffer
-		cfg := DefaultConfig()
-		cfg.Output = &buf
-		cfg.Level = LevelDebug
-		logger, _ := New(cfg)
-
-		// Resolver that uses context to determine level
-		// When no context value is set, defaults to Info level
-		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
-			if level, ok := ctx.Value("log_level").(LogLevel); ok {
-				return level
-			}
-			return LevelInfo // Default when no context value is set
-		})
-
-		// Without context - uses resolver's default (Info)
-		logger.Debug("no context debug") // Should be filtered (resolver returns Info)
-
-		// With context specifying Debug level
-		ctx := context.WithValue(context.Background(), "log_level", LevelDebug)
-		logger.DebugCtx(ctx, "with context debug") // Should appear
-
-		// With context specifying Warn level
-		ctxWarn := context.WithValue(context.Background(), "log_level", LevelWarn)
-		logger.InfoCtx(ctxWarn, "with context info") // Should be filtered
-
-		output := buf.String()
-		if strings.Contains(output, "no context debug") {
-			t.Error("Debug without context should be filtered")
-		}
-		if !strings.Contains(output, "with context debug") {
-			t.Error("Debug with context should appear")
-		}
-		if strings.Contains(output, "with context info") {
-			t.Error("Info with Warn context should be filtered")
-		}
-	})
-
 	t.Run("nil resolver uses static level", func(t *testing.T) {
 		var buf bytes.Buffer
 		cfg := DefaultConfig()
@@ -773,30 +714,6 @@ func TestLevelResolver(t *testing.T) {
 		}
 	})
 
-	t.Run("LogWithCtx uses resolver", func(t *testing.T) {
-		var buf bytes.Buffer
-		cfg := DefaultConfig()
-		cfg.Output = &buf
-		cfg.Level = LevelDebug
-		cfg.Format = FormatJSON
-		logger, _ := New(cfg)
-
-		logger.SetLevelResolver(func(ctx context.Context) LogLevel {
-			return LevelWarn
-		})
-
-		ctx := context.Background()
-		logger.InfoWithCtx(ctx, "info with ctx", String("key", "value")) // Should be filtered
-		logger.WarnWithCtx(ctx, "warn with ctx", String("key", "value")) // Should appear
-
-		output := buf.String()
-		if strings.Contains(output, "info with ctx") {
-			t.Error("Info should be filtered by resolver")
-		}
-		if !strings.Contains(output, "warn with ctx") {
-			t.Error("Warn should appear")
-		}
-	})
 }
 
 // TestFieldValidation tests the field key validation functionality
@@ -1414,4 +1331,386 @@ func TestValidateFieldKey_SecurityValidationDisabled(t *testing.T) {
 	if err != nil {
 		t.Errorf("Normal key should pass: %v", err)
 	}
+}
+
+// ============================================================================
+// LOGGER HOOK MANAGEMENT TESTS
+// ============================================================================
+
+func TestLogger_GetHooks(t *testing.T) {
+	t.Run("returns nil when no hooks", func(t *testing.T) {
+		logger, _ := New()
+		hooks := logger.GetHooks()
+		if hooks != nil {
+			t.Error("Expected nil hooks for new logger")
+		}
+	})
+
+	t.Run("returns copy of hooks", func(t *testing.T) {
+		logger, _ := New()
+		logger.AddHook(HookBeforeLog, func(ctx context.Context, h *HookContext) error {
+			return nil
+		})
+
+		hooks := logger.GetHooks()
+		if hooks == nil {
+			t.Fatal("Expected non-nil hooks")
+		}
+		if hooks.CountFor(HookBeforeLog) != 1 {
+			t.Errorf("Expected 1 BeforeLog hook, got %d", hooks.CountFor(HookBeforeLog))
+		}
+
+		// Verify it's a copy
+		hooks.Add(HookBeforeLog, func(ctx context.Context, h *HookContext) error {
+			return nil
+		})
+		if logger.GetHooks().CountFor(HookBeforeLog) != 1 {
+			t.Error("Modifying returned hooks should not affect logger")
+		}
+	})
+}
+
+// ============================================================================
+// CONTEXT EXTRACTOR TESTS
+// ============================================================================
+
+func TestLogger_GetContextExtractors(t *testing.T) {
+	t.Run("returns nil when no extractors", func(t *testing.T) {
+		logger, _ := New()
+		extractors := logger.GetContextExtractors()
+		if extractors != nil {
+			t.Error("Expected nil extractors for new logger")
+		}
+	})
+
+	t.Run("returns extractors after add", func(t *testing.T) {
+		logger, _ := New()
+		extractor := func(ctx context.Context) []Field {
+			return []Field{String("key", "value")}
+		}
+
+		err := logger.AddContextExtractor(extractor)
+		if err != nil {
+			t.Fatalf("AddContextExtractor failed: %v", err)
+		}
+
+		extractors := logger.GetContextExtractors()
+		if extractors == nil {
+			t.Fatal("Expected non-nil extractors")
+		}
+		if len(extractors) != 1 {
+			t.Errorf("Expected 1 extractor, got %d", len(extractors))
+		}
+	})
+}
+
+func TestLogger_SetContextExtractors(t *testing.T) {
+	t.Run("sets extractors", func(t *testing.T) {
+		logger, _ := New()
+		extractor := func(ctx context.Context) []Field {
+			return []Field{String("key", "value")}
+		}
+
+		err := logger.SetContextExtractors(extractor)
+		if err != nil {
+			t.Fatalf("SetContextExtractors failed: %v", err)
+		}
+
+		if logger.GetContextExtractors() == nil {
+			t.Error("Expected extractors to be set")
+		}
+	})
+
+	t.Run("replaces existing extractors", func(t *testing.T) {
+		logger, _ := New()
+
+		logger.AddContextExtractor(func(ctx context.Context) []Field {
+			return []Field{String("first", "value")}
+		})
+
+		err := logger.SetContextExtractors(func(ctx context.Context) []Field {
+			return []Field{String("second", "value")}
+		})
+		if err != nil {
+			t.Fatalf("SetContextExtractors failed: %v", err)
+		}
+
+		extractors := logger.GetContextExtractors()
+		if len(extractors) != 1 {
+			t.Errorf("Expected 1 extractor after replace, got %d", len(extractors))
+		}
+	})
+
+	t.Run("sets multiple extractors at once", func(t *testing.T) {
+		logger, _ := New()
+
+		err := logger.SetContextExtractors(
+			func(ctx context.Context) []Field { return []Field{String("first", "1")} },
+			func(ctx context.Context) []Field { return []Field{String("second", "2")} },
+		)
+		if err != nil {
+			t.Fatalf("SetContextExtractors failed: %v", err)
+		}
+
+		extractors := logger.GetContextExtractors()
+		if len(extractors) != 2 {
+			t.Errorf("Expected 2 extractors, got %d", len(extractors))
+		}
+	})
+}
+
+// ============================================================================
+// TRIGGER HOOKS INTEGRATION TESTS
+// ============================================================================
+
+func TestLogger_TriggerHooksViaLogging(t *testing.T) {
+	t.Run("hooks are triggered during logging", func(t *testing.T) {
+		var buf bytes.Buffer
+		var hookCalled bool
+
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Hooks = NewHookRegistry()
+		cfg.Hooks.Add(HookBeforeLog, func(ctx context.Context, h *HookContext) error {
+			hookCalled = true
+			return nil
+		})
+
+		logger, _ := New(cfg)
+		logger.Info("test message")
+
+		if !hookCalled {
+			t.Error("Expected hook to be called during logging")
+		}
+	})
+
+	t.Run("hook error stops logging", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Hooks = NewHookRegistry()
+		cfg.Hooks.Add(HookBeforeLog, func(ctx context.Context, h *HookContext) error {
+			return errors.New("hook error")
+		})
+
+		logger, _ := New(cfg)
+		logger.Info("test message")
+
+		// Message should not be logged when hook returns error
+		if buf.Len() > 0 {
+			t.Error("Expected no output when hook returns error")
+		}
+	})
+}
+
+// ============================================================================
+// CONTEXT EXTRACTOR REGISTRY INTEGRATION TESTS
+// ============================================================================
+
+func TestContextExtractor_RegistryIntegration(t *testing.T) {
+	t.Run("extractor is stored and can be extracted", func(t *testing.T) {
+		logger, _ := New()
+
+		logger.AddContextExtractor(func(ctx context.Context) []Field {
+			return []Field{String("extracted", "value")}
+		})
+
+		extractors := logger.GetContextExtractors()
+		if len(extractors) != 1 {
+			t.Fatalf("Expected 1 extractor, got %d", len(extractors))
+		}
+
+		// Extract fields using the extractor
+		fields := extractors[0](context.Background())
+		if len(fields) != 1 || fields[0].Key != "extracted" {
+			t.Errorf("Expected extracted field, got %v", fields)
+		}
+	})
+
+	t.Run("registry can extract from context", func(t *testing.T) {
+		registry := NewContextExtractorRegistry()
+		registry.Add(func(ctx context.Context) []Field {
+			traceID := GetTraceID(ctx)
+			if traceID != "" {
+				return []Field{String("trace_id", traceID)}
+			}
+			return nil
+		})
+
+		ctx := WithTraceID(context.Background(), "trace-123")
+		fields := registry.Extract(ctx)
+
+		if len(fields) != 1 {
+			t.Errorf("Expected 1 field, got %d", len(fields))
+		}
+		if fields[0].Key != "trace_id" || fields[0].Value != "trace-123" {
+			t.Errorf("Expected trace_id=trace-123, got %v", fields)
+		}
+	})
+
+	t.Run("multiple extractors work together", func(t *testing.T) {
+		registry := NewContextExtractorRegistry()
+		registry.Add(func(ctx context.Context) []Field {
+			return []Field{String("first", "1")}
+		})
+		registry.Add(func(ctx context.Context) []Field {
+			return []Field{String("second", "2")}
+		})
+
+		fields := registry.Extract(context.Background())
+		if len(fields) != 2 {
+			t.Errorf("Expected 2 fields, got %d", len(fields))
+		}
+	})
+}
+
+// ============================================================================
+// ERROR FIELD CONSTRUCTORS TESTS
+// ============================================================================
+
+func TestErrorFieldConstructors(t *testing.T) {
+	t.Run("Err with error", func(t *testing.T) {
+		field := Err(errors.New("test error"))
+		if field.Key != "error" {
+			t.Errorf("Expected key 'error', got %q", field.Key)
+		}
+		if field.Value != "test error" {
+			t.Errorf("Expected value 'test error', got %v", field.Value)
+		}
+	})
+
+	t.Run("Err with nil", func(t *testing.T) {
+		field := Err(nil)
+		if field.Key != "error" {
+			t.Errorf("Expected key 'error', got %q", field.Key)
+		}
+		if field.Value != nil {
+			t.Errorf("Expected nil value, got %v", field.Value)
+		}
+	})
+
+	t.Run("ErrWithKey with custom key", func(t *testing.T) {
+		field := ErrWithKey("custom_error", errors.New("test error"))
+		if field.Key != "custom_error" {
+			t.Errorf("Expected key 'custom_error', got %q", field.Key)
+		}
+		if field.Value != "test error" {
+			t.Errorf("Expected value 'test error', got %v", field.Value)
+		}
+	})
+
+	t.Run("ErrWithKey with nil error", func(t *testing.T) {
+		field := ErrWithKey("custom_error", nil)
+		if field.Key != "custom_error" {
+			t.Errorf("Expected key 'custom_error', got %q", field.Key)
+		}
+		if field.Value != nil {
+			t.Errorf("Expected nil value, got %v", field.Value)
+		}
+	})
+
+	t.Run("NamedErr is alias for ErrWithKey", func(t *testing.T) {
+		field := NamedErr("named_error", errors.New("test error"))
+		if field.Key != "named_error" {
+			t.Errorf("Expected key 'named_error', got %q", field.Key)
+		}
+		if field.Value != "test error" {
+			t.Errorf("Expected value 'test error', got %v", field.Value)
+		}
+	})
+
+	t.Run("ErrWithStack captures stack trace", func(t *testing.T) {
+		field := ErrWithStack(errors.New("test error"))
+		if field.Key != "error" {
+			t.Errorf("Expected key 'error', got %q", field.Key)
+		}
+		value, ok := field.Value.(string)
+		if !ok {
+			t.Fatalf("Expected string value, got %T", field.Value)
+		}
+		if !strings.Contains(value, "test error") {
+			t.Errorf("Expected 'test error' in value, got %s", value)
+		}
+		if !strings.Contains(value, "Stack:") {
+			t.Errorf("Expected stack trace in value, got %s", value)
+		}
+	})
+
+	t.Run("ErrWithStack with nil error", func(t *testing.T) {
+		field := ErrWithStack(nil)
+		if field.Key != "error" {
+			t.Errorf("Expected key 'error', got %q", field.Key)
+		}
+		if field.Value != nil {
+			t.Errorf("Expected nil value, got %v", field.Value)
+		}
+	})
+}
+
+// ============================================================================
+// ENTRY PRINT METHODS TESTS
+// ============================================================================
+
+func TestEntry_PrintMethods(t *testing.T) {
+	t.Run("Entry Print", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		logger, _ := New(cfg)
+
+		entry := logger.WithFields(String("key", "value"))
+		entry.Print("test", "print")
+
+		if !strings.Contains(buf.String(), "test print") {
+			t.Errorf("Expected 'test print' in output, got: %s", buf.String())
+		}
+	})
+
+	t.Run("Entry Println", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		logger, _ := New(cfg)
+
+		entry := logger.WithFields(String("key", "value"))
+		entry.Println("test", "println")
+
+		if !strings.Contains(buf.String(), "test println") {
+			t.Errorf("Expected 'test println' in output, got: %s", buf.String())
+		}
+	})
+
+	t.Run("Entry Printf", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Level = LevelInfo
+		logger, _ := New(cfg)
+
+		entry := logger.WithFields(String("key", "value"))
+		entry.Printf("formatted %s", "message")
+
+		if !strings.Contains(buf.String(), "formatted message") {
+			t.Errorf("Expected 'formatted message' in output, got: %s", buf.String())
+		}
+	})
+
+	t.Run("Entry carries fields to print methods", func(t *testing.T) {
+		var buf bytes.Buffer
+		cfg := DefaultConfig()
+		cfg.Output = &buf
+		cfg.Format = FormatJSON
+		cfg.Level = LevelInfo
+		logger, _ := New(cfg)
+
+		entry := logger.WithFields(String("request_id", "abc123"))
+		entry.Print("test message")
+
+		output := buf.String()
+		if !strings.Contains(output, "request_id") || !strings.Contains(output, "abc123") {
+			t.Errorf("Expected field in output, got: %s", output)
+		}
+	})
 }

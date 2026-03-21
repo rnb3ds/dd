@@ -294,17 +294,15 @@ func TestHookContext(t *testing.T) {
 	}
 }
 
-func TestHookBuilder(t *testing.T) {
-	builder := NewHookBuilder()
-
-	registry := builder.
-		BeforeLog(func(ctx context.Context, hc *HookContext) error { return nil }).
-		AfterLog(func(ctx context.Context, hc *HookContext) error { return nil }).
-		OnFilter(func(ctx context.Context, hc *HookContext) error { return nil }).
-		OnRotate(func(ctx context.Context, hc *HookContext) error { return nil }).
-		OnClose(func(ctx context.Context, hc *HookContext) error { return nil }).
-		OnError(func(ctx context.Context, hc *HookContext) error { return nil }).
-		Build()
+func TestHooksConfig(t *testing.T) {
+	registry := NewHooksFromConfig(HooksConfig{
+		BeforeLog: []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+		AfterLog:  []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+		OnFilter:  []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+		OnRotate:  []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+		OnClose:   []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+		OnError:   []Hook{func(ctx context.Context, hc *HookContext) error { return nil }},
+	})
 
 	if registry == nil {
 		t.Fatal("expected non-nil registry")

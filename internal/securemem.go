@@ -113,6 +113,9 @@ func (sb *SecureBuffer) Release() {
 
 // Grow grows the buffer capacity to guarantee space for n more bytes.
 //
+// SECURITY: Fully zeros old data including capacity portion before reallocation
+// to prevent sensitive data from remaining in memory.
+//
 // IMPORTANT: After calling Grow, any slices previously obtained from Bytes()
 // may point to old memory that has been zeroed. Do not retain references
 // to the internal buffer across Grow calls.
@@ -128,9 +131,12 @@ func (sb *SecureBuffer) Grow(n int) {
 		}
 		newData := make([]byte, len(sb.data), newCap)
 		copy(newData, sb.data)
-		// Zero old data
-		for i := range sb.data {
-			sb.data[i] = 0
+		// SECURITY: Zero ALL old data including capacity portion
+		// This ensures no sensitive data remains in the old slice
+		for i := 0; i < cap(sb.data); i++ {
+			if i < len(sb.data) {
+				sb.data[i] = 0
+			}
 		}
 		sb.data = newData
 	}

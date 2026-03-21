@@ -45,13 +45,13 @@ func Printf(format string, args ...any) {
 
 // JSON outputs data as compact JSON to stdout with caller info for debugging.
 func JSON(data ...any) {
-	internal.OutputJSON(os.Stdout, internal.GetCaller(DebugVisualizationDepth, false), data...)
+	internal.OutputJSON(os.Stdout, internal.GetCaller(debugVisualizationDepth, false), data...)
 }
 
 // JSONF outputs formatted data as compact JSON to stdout with caller info for debugging.
 func JSONF(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	internal.OutputJSON(os.Stdout, internal.GetCaller(DebugVisualizationDepth, false), formatted)
+	internal.OutputJSON(os.Stdout, internal.GetCaller(debugVisualizationDepth, false), formatted)
 }
 
 // Text outputs data as pretty-printed format to stdout for debugging.
@@ -67,13 +67,13 @@ func Textf(format string, args ...any) {
 
 // Exit outputs data as pretty-printed JSON to stdout and exits with code 0.
 func Exit(data ...any) {
-	internal.OutputText(os.Stdout, internal.GetCaller(DebugVisualizationDepth, false), data...)
+	internal.OutputText(os.Stdout, internal.GetCaller(debugVisualizationDepth, false), data...)
 	os.Exit(0)
 }
 
 // Exitf outputs formatted data to stdout with caller info and exits with code 0.
 func Exitf(format string, args ...any) {
 	formatted := fmt.Sprintf(format, args...)
-	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(DebugVisualizationDepth, false), formatted)
+	fmt.Fprintf(os.Stdout, "%s %s\n", internal.GetCaller(debugVisualizationDepth, false), formatted)
 	os.Exit(0)
 }

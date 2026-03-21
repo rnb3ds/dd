@@ -1,60 +1,140 @@
 package internal
 
 import (
-	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
+	"sync/atomic"
 )
 
-// callerBuilderPool pools strings.Builder objects for caller formatting
-// to reduce memory allocations during high-frequency logging.
-var callerBuilderPool = sync.Pool{
+// callerCache caches caller information to reduce runtime.Caller calls.
+// Uses sync.Map for thread-safe concurrent access without locking.
+// Key: uintptr (program counter), Value: *callerCacheEntry
+var callerCache sync.Map
+
+// callerCacheEntry stores cached caller information
+type callerCacheEntry struct {
+	file      string
+	line      int
+	formatted string // pre-formatted "file:line" string
+}
+
+// maxCallerCacheSize limits the cache size to prevent unbounded memory growth.
+// Each entry is ~100-200 bytes, so 10000 entries ~= 1-2 MB.
+const maxCallerCacheSize = 10000
+
+// callerCacheCount tracks the number of entries for size limiting
+var callerCacheCount atomic.Int32
+
+// callerPCPool pools []uintptr slices for GetCaller to reduce allocations.
+// Each slice is size 1 since we only need a single PC.
+var callerPCPool = sync.Pool{
 	New: func() any {
-		var sb strings.Builder
-		sb.Grow(64) // typical caller info size: "filename.go:12345"
-		return &sb
+		pcs := make([]uintptr, 1)
+		return &pcs
 	},
 }
 
 // GetCaller retrieves the caller information at the specified depth.
+// Uses a cache to reduce runtime.Caller calls for repeated call sites.
 func GetCaller(callerDepth int, fullPath bool) string {
 	if callerDepth < 0 {
 		callerDepth = 0
 	}
 
-	_, file, line, ok := runtime.Caller(callerDepth)
-	if !ok {
+	// Get pooled []uintptr slice (size 1)
+	pcsPtr := callerPCPool.Get().(*[]uintptr)
+	pcs := *pcsPtr
+	defer callerPCPool.Put(pcsPtr)
+
+	// Use runtime.Callers to get the PC for caching
+	n := runtime.Callers(callerDepth+1, pcs) // +1 to skip GetCaller itself
+	if n == 0 {
 		return ""
 	}
 
-	return formatCaller(file, line, fullPath)
+	pc := pcs[0]
+
+	// Check cache first (fast path - no allocation needed)
+	if cached, ok := callerCache.Load(pc); ok {
+		entry := cached.(*callerCacheEntry)
+		if fullPath {
+			// Return full path (re-format from cached full path)
+			return formatCallerDirect(entry.file, entry.line)
+		}
+		// Return pre-formatted short path
+		return entry.formatted
+	}
+
+	// Cache miss - get caller info
+	frames := runtime.CallersFrames(pcs[:n])
+	frame, _ := frames.Next()
+	if frame.PC == 0 {
+		return ""
+	}
+
+	// Get base name for short path version (always cache short path)
+	baseName := getBaseName(frame.File)
+
+	// Create cache entry with pre-formatted short path
+	formatted := formatCallerDirect(baseName, frame.Line)
+	entry := &callerCacheEntry{
+		file:      frame.File, // Store full path
+		line:      frame.Line,
+		formatted: formatted, // Pre-formatted short path
+	}
+
+	// Store in cache with size limit
+	// SECURITY: Use CAS loop to ensure precise cache size limiting
+	for {
+		current := callerCacheCount.Load()
+		if current >= maxCallerCacheSize {
+			break // Cache full, skip caching
+		}
+		// Try to reserve a slot
+		if callerCacheCount.CompareAndSwap(current, current+1) {
+			// Slot reserved, now try to store
+			if actual, loaded := callerCache.LoadOrStore(pc, entry); loaded {
+				// Another goroutine stored first, release our slot and use their entry
+				callerCacheCount.Add(-1)
+				entry = actual.(*callerCacheEntry)
+			}
+			break // Exit after successful reservation (whether stored or loaded)
+		}
+		// CAS failed, retry
+	}
+
+	// Return based on fullPath setting
+	if fullPath {
+		return formatCallerDirect(frame.File, frame.Line)
+	}
+	return formatted
 }
 
-// formatCaller formats the caller file and line into a string.
-// Uses pooled strings.Builder to reduce allocations.
-func formatCaller(file string, line int, fullPath bool) string {
-	if !fullPath {
-		file = filepath.Base(file)
+// formatCallerDirect formats file and line without using pool.
+// Used for cached results to avoid pool overhead.
+func formatCallerDirect(file string, line int) string {
+	// Direct string concatenation is faster than builder for short strings
+	return file + ":" + FormatInt(line)
+}
+
+// getBaseName extracts the base filename from a path without allocating.
+// This is faster than filepath.Base for the common case.
+func getBaseName(path string) string {
+	// Find the last separator
+	// Handle both forward and back slashes for cross-platform support
+	lastSep := -1
+	for i := len(path) - 1; i >= 0; i-- {
+		c := path[i]
+		if c == '/' || c == '\\' {
+			lastSep = i
+			break
+		}
 	}
-
-	sb := callerBuilderPool.Get().(*strings.Builder)
-	sb.Reset()
-
-	// Grow if needed (file path can vary significantly)
-	estimatedLen := len(file) + 11 // file + ":" + max line number (5 digits) + safety
-	if sb.Cap() < estimatedLen {
-		sb.Grow(estimatedLen - sb.Cap())
+	if lastSep >= 0 {
+		return path[lastSep+1:]
 	}
-
-	sb.WriteString(file)
-	sb.WriteByte(':')
-	sb.WriteString(FormatInt(line))
-
-	result := sb.String()
-	callerBuilderPool.Put(sb)
-	return result
+	return path
 }
 
 // smallInts caches string representations of small integers (0-99)
